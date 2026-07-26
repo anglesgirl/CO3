@@ -9,6 +9,7 @@
 // left untouched, so paragraphs/italics/links survive.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { echFetch } from './echKy';
 
 export const DEFAULT_TRANSLATE_ENDPOINT = 'https://translate.googleapis.com/translate_a/single';
 
@@ -54,7 +55,8 @@ async function translateChunk(text, target, endpoint) {
     `${endpoint}?client=gtx&sl=auto&tl=${encodeURIComponent(target)}` +
     `&dt=t&q=${encodeURIComponent(text)}`;
 
-  const res = await fetch(url, { method: 'GET' });
+  // Routed through the ECH proxy so DNS poisoning can't block the lookup.
+  const res = await echFetch(url, { method: 'GET' });
   if (!res.ok) throw new Error(`translate HTTP ${res.status}`);
   const data = await res.json();
 

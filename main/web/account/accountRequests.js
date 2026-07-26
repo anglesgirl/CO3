@@ -124,25 +124,38 @@ async function getForm(path) {
  */
 export async function requestPasswordReset(login) {
   if (!login || !login.trim()) throw new Error('Enter your username or email.');
-  const { token } = await getForm('/users/password/new');
-  const { res, html } = await postForm(
-    '/users/password',
-    {
-      authenticity_token: token,
-      'user[login]': login.trim(),
-      commit: 'Reset Password',
-    },
-    BASE + '/users/password/new',
-  );
+
+  // Replay AO3's own form (hidden fields included) rather than guessing names.
+  const html0 = await fetchWithWarmup('/users/password/new');
+  const { fields, action } = parseFormFields(html0, 'new_user');
+  if (!fields.authenticity_token) {
+    fields.authenticity_token = extractAuthenticityToken(html0);
+  }
+  const nLogin = findField(fields, 'user[login]', 'user[email]', 'login', 'email');
+  if (!nLogin) {
+    throw new Error('Could not read AO3\'s reset form (the site may have changed).');
+  }
+  const body = { ...fields, [nLogin]: login.trim(), commit: 'Reset Password' };
+
+  const path = action.startsWith('http')
+    ? action.replace(BASE, '')
+    : action || '/users/password';
+  const { res, html } = await postForm(path, body, BASE + '/users/password/new');
 
   const outcome = readOutcome(html);
   if (outcome) {
     if (!outcome.ok) throw new Error(outcome.message);
     return outcome.message;
   }
-  // A redirect away from the form is AO3's usual success signal.
+  // If AO3 handed the form back, the submission did NOT go through — reporting
+  // success here would leave the user waiting for an email that never comes.
+  if (/name="user\[login\]"|id="new_user"/i.test(html)) {
+    throw new Error(
+      'AO3 did not accept the request. Check the username/email and try again.',
+    );
+  }
   if (res.ok || res.redirected) {
-    return 'If that account exists, a reset email is on its way.';
+    return 'If that account exists, a reset email is on its way. Check your spam folder.';
   }
   throw new Error(`Request failed (HTTP ${res.status}).`);
 }
@@ -212,19 +225,51 @@ function findField(fields, ...candidates) {
   return null;
 }
 
-/** Loads the signup form for an invitation token. */
+/**
+ * Loads the signup form for an invitation token. AO3 has used more than one URL
+ * shape for this over the years, so we try each and use whichever responds with
+ * an actual form instead of assuming one and failing with a bare 404.
+ */
 export async function getSignupForm(token) {
-  const path = `/signup/${encodeURIComponent(token)}`;
-  const html = await ky.get(BASE + path, { headers: BROWSER_HEADERS }).text();
+  const tk = encodeURIComponent(token);
+  const candidates = [
+    `/signup/${tk}`,
+    `/users/new?invitation_token=${tk}`,
+    `/invitations/${tk}/signup`,
+    `/invitations/${tk}`,
+  ];
 
-  if (/invitation.{0,40}(invalid|already been used|not found)/i.test(html)) {
-    throw new Error('This invitation link is invalid or has already been used.');
+  let lastStatus = null;
+  for (const path of candidates) {
+    let html;
+    try {
+      html = await ky.get(BASE + path, { headers: BROWSER_HEADERS }).text();
+    } catch (e) {
+      lastStatus = e?.response?.status ?? lastStatus;
+      continue; // 404 on this shape — try the next
+    }
+
+    if (/invitation.{0,60}(invalid|already been used|not found|expired)/i.test(html)) {
+      throw new Error('This invitation link is invalid, expired, or already used.');
+    }
+    const { fields, action } = parseFormFields(html);
+    const hasLogin = !!findField(fields, 'user[login]', 'login');
+    if (!hasLogin) continue; // not the sign-up form — keep looking
+
+    if (!fields.authenticity_token) {
+      fields.authenticity_token = extractAuthenticityToken(html);
+    }
+    return { fields, action, referer: BASE + path };
   }
-  const { fields, action } = parseFormFields(html);
-  if (!fields.authenticity_token) {
-    fields.authenticity_token = extractAuthenticityToken(html);
+
+  if (lastStatus === 404) {
+    throw new Error(
+      'AO3 did not recognise this invitation link (404). Make sure you copied the full link from the invitation email.',
+    );
   }
-  return { fields, action, referer: BASE + path };
+  throw new Error(
+    'Could not open the sign-up form. The invitation may be invalid or AO3 may be blocking the request.',
+  );
 }
 
 /**

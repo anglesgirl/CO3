@@ -160,6 +160,27 @@ export async function echUrl(url) {
   }
 }
 
+// echFetch sends a request for ANY host through the local proxy, so it gets the
+// proxy's DoH resolution (and ECH when the host supports it) instead of the
+// system resolver. Used for services like the translation API, which are
+// unreachable on networks with poisoned DNS. Falls back to a direct fetch when
+// the proxy isn't available.
+export async function echFetch(url, options = {}) {
+  const base = await getEchBase();
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return fetch(url, options);
+  }
+  if (!base) return fetch(url, options);
+
+  return fetch(base + u.pathname + u.search, {
+    ...options,
+    headers: { ...(options.headers || {}), 'X-Ech-Target': u.hostname },
+  });
+}
+
 // Latest native handshake/status line (e.g. "... ECHAccepted=true ...").
 export async function getEchStatus() {
   const mod = NativeModules.EchProxy;

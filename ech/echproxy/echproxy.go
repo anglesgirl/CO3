@@ -54,7 +54,22 @@ var (
 	shakeInfo   string   // last TLS handshake result (ECHAccepted=…)
 	upstreamIPs []string // DoH-resolved upstream addresses, IPv4 first
 	customIPs   []string // user-supplied edge IPs, tried before everything else
+
+	// Per-host state for secondary targets (translation API, mirrors, …) reached
+	// through the same proxy via the X-Ech-Target header.
+	hostsMu    sync.Mutex
+	hostConfs  = map[string]*hostConf{}
+	activeDoH  string
+	activeInse bool
 )
+
+// hostConf caches what we learned about a secondary upstream: its DoH-resolved
+// addresses and its ECH config (absent for servers that don't offer ECH).
+type hostConf struct {
+	ips       []string
+	ech       []byte
+	transport *http.Transport
+}
 
 func setStatus(format string, a ...any) {
 	s := fmt.Sprintf(format, a...)
@@ -162,9 +177,17 @@ func Start(listen, target, echB64, doh, ipList string, insecure bool) error {
 		setDNSInfo("DoH resolved %d addr(s): %s", len(ips), strings.Join(ips, ", "))
 	}
 
+	// Remember the settings so secondary hosts can be resolved the same way.
+	hostsMu.Lock()
+	activeDoH, activeInse = doh, insecure
+	hostConfs = map[string]*hostConf{}
+	hostsMu.Unlock()
+
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
-		Transport: newECHTransport(target, echList, insecure),
+		// Route each request to a transport built for its own host, so the proxy
+		// can also front other services (e.g. a translation API) over DoH+ECH.
+		Transport: &hostRouter{primary: target, primaryTransport: newECHTransport(target, echList, insecure)},
 		Jar:       jar,
 		Timeout:   60 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -223,21 +246,28 @@ var hopByHop = map[string]bool{
 }
 
 func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	outURL := &url.URL{Scheme: "https", Host: h.target, Path: r.URL.Path, RawQuery: r.URL.RawQuery}
+	// X-Ech-Target lets the app route other hosts (e.g. a translation API)
+	// through the same DoH + ECH path instead of the poisoned system resolver.
+	target := h.target
+	if t := strings.TrimSpace(r.Header.Get("X-Ech-Target")); t != "" {
+		target = t
+	}
+
+	outURL := &url.URL{Scheme: "https", Host: target, Path: r.URL.Path, RawQuery: r.URL.RawQuery}
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, outURL.String(), r.Body)
 	if err != nil {
 		http.Error(w, "echproxy: bad request: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 	for k, vv := range r.Header {
-		if hopByHop[k] || k == "Host" {
+		if hopByHop[k] || k == "Host" || k == "X-Ech-Target" {
 			continue
 		}
 		for _, v := range vv {
 			req.Header.Add(k, v)
 		}
 	}
-	req.Host = h.target
+	req.Host = target
 	req.Header.Del("Accept-Encoding")
 
 	resp, err := h.client.Do(req)
@@ -249,7 +279,7 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	if loc := resp.Header.Get("Location"); loc != "" {
-		resp.Header.Set("Location", rewriteLocation(loc, h.target))
+		resp.Header.Set("Location", rewriteLocation(loc, target))
 	}
 	for k, vv := range resp.Header {
 		if hopByHop[k] {
@@ -276,6 +306,127 @@ func rewriteLocation(loc, target string) string {
 		return u.String()
 	}
 	return loc
+}
+
+// --- multi-host routing ---------------------------------------------------
+
+// hostRouter sends each request through a transport built for its own hostname.
+// The primary target keeps the transport built at Start(); any other host gets
+// one created on demand (DoH-resolved addresses, ECH when the server offers it).
+type hostRouter struct {
+	primary          string
+	primaryTransport *http.Transport
+}
+
+func (hr *hostRouter) RoundTrip(req *http.Request) (*http.Response, error) {
+	host := req.URL.Hostname()
+	if host == hr.primary || host == "" {
+		return hr.primaryTransport.RoundTrip(req)
+	}
+	t, err := transportFor(host)
+	if err != nil {
+		return nil, err
+	}
+	return t.RoundTrip(req)
+}
+
+// transportFor lazily builds (and caches) a transport for a secondary host.
+func transportFor(host string) (*http.Transport, error) {
+	hostsMu.Lock()
+	if hc, ok := hostConfs[host]; ok && hc.transport != nil {
+		hostsMu.Unlock()
+		return hc.transport, nil
+	}
+	doh, insecure := activeDoH, activeInse
+	hostsMu.Unlock()
+
+	hc := &hostConf{}
+	if ips, err := resolveViaDoH(host, doh); err == nil {
+		hc.ips = ips
+	} else {
+		log.Printf("echproxy: DoH resolve for %s failed: %v (falling back to system DNS)", host, err)
+	}
+	// ECH is optional here — most non-Cloudflare hosts don't publish it.
+	if b, err := fetchECHViaDoH(host, doh); err == nil && len(b) > 0 {
+		hc.ech = b
+	}
+	hc.transport = &http.Transport{
+		DialTLSContext:        hostDialContext(host, hc, insecure),
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   dialTimeout,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
+	hostsMu.Lock()
+	hostConfs[host] = hc
+	hostsMu.Unlock()
+	log.Printf("echproxy: host %s ready (%d addr(s), ech=%v)", host, len(hc.ips), len(hc.ech) > 0)
+	return hc.transport, nil
+}
+
+// hostDialContext dials a secondary host over its DoH-resolved addresses,
+// enabling ECH only when that host actually publishes a config.
+func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		_, port, err := net.SplitHostPort(addr)
+		if err != nil || port == "" {
+			port = "443"
+		}
+		cands := make([]string, 0, len(hc.ips)+1)
+		for _, ip := range hc.ips {
+			cands = append(cands, net.JoinHostPort(ip, port))
+		}
+		cands = append(cands, addr) // last resort: system DNS
+
+		d := &net.Dialer{Timeout: dialTimeout}
+		var raw net.Conn
+		for _, c := range cands {
+			raw, err = d.DialContext(ctx, "tcp", c)
+			if err == nil {
+				break
+			}
+		}
+		if raw == nil {
+			return nil, fmt.Errorf("dial %s failed: %w", host, err)
+		}
+
+		cfg := &tls.Config{
+			ServerName:         host,
+			MinVersion:         tls.VersionTLS12,
+			NextProtos:         []string{"h2", "http/1.1"},
+			InsecureSkipVerify: insecure,
+		}
+		if len(hc.ech) > 0 {
+			cfg.EncryptedClientHelloConfigList = hc.ech
+			cfg.MinVersion = tls.VersionTLS13
+		}
+		hctx, cancel := context.WithTimeout(ctx, dialTimeout)
+		defer cancel()
+
+		tc := tls.Client(raw, cfg)
+		if err := tc.HandshakeContext(hctx); err != nil {
+			var rej *tls.ECHRejectionError
+			if errors.As(err, &rej) && len(rej.RetryConfigList) > 0 {
+				raw.Close()
+				raw2, derr := d.DialContext(ctx, "tcp", cands[0])
+				if derr != nil {
+					return nil, derr
+				}
+				cfg.EncryptedClientHelloConfigList = rej.RetryConfigList
+				tc = tls.Client(raw2, cfg)
+				if err2 := tc.HandshakeContext(hctx); err2 != nil {
+					raw2.Close()
+					return nil, fmt.Errorf("%s handshake failed: %w", host, err2)
+				}
+				return tc, nil
+			}
+			raw.Close()
+			return nil, fmt.Errorf("%s handshake failed: %w", host, err)
+		}
+		return tc, nil
+	}
 }
 
 // --- ECH transport --------------------------------------------------------
