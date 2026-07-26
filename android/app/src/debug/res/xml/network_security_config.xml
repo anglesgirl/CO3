@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-build override: permit cleartext everywhere so the Metro dev server
+  (http://<LAN-IP>:8081) keeps working. Release builds use the restrictive
+  config in src/main/res/xml that only allows loopback.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

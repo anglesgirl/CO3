@@ -48,6 +48,8 @@ var (
 	mu         sync.Mutex
 	server     *http.Server
 	lastStatus = "not started"
+	configInfo string // where the ECH config came from (DoH / fallback / flag)
+	shakeInfo  string // last TLS handshake result (ECHAccepted=…)
 )
 
 // setStatus records a human-readable status string for LastStatus().
@@ -59,12 +61,38 @@ func setStatus(format string, a ...any) {
 	log.Printf("echproxy: %s", s)
 }
 
-// LastStatus returns the most recent status line (handshake result, errors, …).
-// Useful for surfacing ECHAccepted=true/false to the app UI.
+func setConfigInfo(format string, a ...any) {
+	s := fmt.Sprintf(format, a...)
+	mu.Lock()
+	configInfo = s
+	mu.Unlock()
+	log.Printf("echproxy: %s", s)
+}
+
+func setShakeInfo(format string, a ...any) {
+	s := fmt.Sprintf(format, a...)
+	mu.Lock()
+	shakeInfo = s
+	mu.Unlock()
+	log.Printf("echproxy: %s", s)
+}
+
+// LastStatus returns a multi-line summary: ECH config source, last handshake
+// result (look for ECHAccepted=true), and the most recent status/error line.
 func LastStatus() string {
 	mu.Lock()
 	defer mu.Unlock()
-	return lastStatus
+	out := ""
+	if configInfo != "" {
+		out += "config: " + configInfo + "\n"
+	}
+	if shakeInfo != "" {
+		out += "handshake: " + shakeInfo + "\n"
+	} else {
+		out += "handshake: (none yet)\n"
+	}
+	out += "last: " + lastStatus
+	return out
 }
 
 // Start binds a reverse proxy on `listen` (e.g. "127.0.0.1:8080") that forwards
@@ -91,7 +119,7 @@ func Start(listen, target, echB64, doh string, insecure bool) error {
 	if err != nil || len(echList) == 0 {
 		return fmt.Errorf("could not obtain ECH config for %s: %v", target, err)
 	}
-	setStatus("ECH config loaded for %s (%d bytes, source: %s)", target, len(echList), src)
+	setConfigInfo("%d bytes for %s, source: %s", len(echList), target, src)
 
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
@@ -287,14 +315,17 @@ func echDialContext(sni string, echList []byte, insecure bool) func(ctx context.
 		if err != nil {
 			raw.Close()
 			if errors.As(err, &rej) {
-				return nil, fmt.Errorf("ECH handshake failed: server rejected ECH, %d bytes retry_configs "+
+				setShakeInfo("FAILED: server rejected ECH, %d bytes retry_configs "+
 					"(if 0, endpoint likely isn't a real ECH server)", len(rej.RetryConfigList))
+				return nil, fmt.Errorf("ECH handshake failed: server rejected ECH, %d bytes retry_configs",
+					len(rej.RetryConfigList))
 			}
+			setShakeInfo("FAILED: %v", err)
 			return nil, fmt.Errorf("ECH handshake failed: %w", err)
 		}
 		st := tc.ConnectionState()
 		logged.Do(func() {
-			setStatus("upstream handshake ok ECHAccepted=%v TLS=%s ALPN=%q",
+			setShakeInfo("ok ECHAccepted=%v TLS=%s ALPN=%q",
 				st.ECHAccepted, tlsVersionName(st.Version), st.NegotiatedProtocol)
 		})
 		return tc, nil
