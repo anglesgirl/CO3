@@ -51,7 +51,7 @@ jobs:
           # NOTE: do not `go mod tidy` afterwards — it would strip this unused-by-source require.
           go get golang.org/x/mobile/bind@latest
           mkdir -p ../android/app/libs
-          gomobile bind -v -target=android -androidapi 24 \
+          gomobile bind -v -target=android/arm64 -androidapi 24 \
             -o ../android/app/libs/echproxy.aar ./echproxy
           ls -la ../android/app/libs
 
@@ -69,18 +69,23 @@ jobs:
           cd android
           ./gradlew generateCodegenArtifactsFromSchema
 
-      - name: Build Release APK
+      - name: Build Release APK (arm64-v8a only)
         run: |
           cd android
-          ./gradlew assembleRelease
+          ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
+        env:
+          BUILD_ABI: arm64-v8a
 
-      - name: Rename artifacts
+      - name: Rename artifact
         run: |
           APK_DIR=android/app/build/outputs/apk/release
-          mv "$APK_DIR/app-arm64-v8a-release.apk"   CO3-ECH-arm64-v8a.apk   || true
-          mv "$APK_DIR/app-armeabi-v7a-release.apk" CO3-ECH-armeabi-v7a.apk || true
-          mv "$APK_DIR/app-x86-release.apk"          CO3-ECH-x86.apk         || true
-          mv "$APK_DIR/app-x86_64-release.apk"       CO3-ECH-x86_64.apk      || true
+          ls -la "$APK_DIR"
+          # Only arm64-v8a is built; accept either the split or universal name.
+          if [ -f "$APK_DIR/app-arm64-v8a-release.apk" ]; then
+            mv "$APK_DIR/app-arm64-v8a-release.apk" CO3-ECH-arm64-v8a.apk
+          else
+            mv "$APK_DIR/app-release.apk" CO3-ECH-arm64-v8a.apk
+          fi
           ls -la CO3-ECH-*.apk
 
       - name: Upload APK artifacts
