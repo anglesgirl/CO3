@@ -8,16 +8,25 @@ import {
 import { useEffect, useState } from 'react';
 import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { echSelfTest, getDoh, setDoh, DEFAULT_DOH } from '../../web/echKy';
+import {
+  echSelfTest,
+  getDoh,
+  setDoh,
+  getCustomIPs,
+  setCustomIPs,
+  DEFAULT_DOH,
+} from '../../web/echKy';
 
 export default function DebugScreen({ route }) {
   const {db, setScreens} = route.params;
   const [sqlCmd, setSqlCmd] = useState('');
   const [logs, setLogs] = useState([]);
   const [doh, setDohInput] = useState('');
+  const [ips, setIpsInput] = useState('');
 
   useEffect(() => {
     getDoh().then(setDohInput);
+    getCustomIPs().then(setIpsInput);
   }, []);
 
   const addLog = (type, message) => {
@@ -78,6 +87,51 @@ export default function DebugScreen({ route }) {
             onPress={() => setDohInput(DEFAULT_DOH)}
           >
             <Text style={{ color: '#fff' }}>Reset default</Text>
+          </TouchableOpacity>
+        </View>
+
+        <Text style={{ marginTop: 16 }}>
+          Preferred edge IP(s) — optional, comma-separated. Only changes the
+          route; SNI/ECH stay encrypted. Empty = use DNS.
+        </Text>
+        <TextInput
+          style={{ borderColor: '#000', borderWidth: 1, padding: 6, marginTop: 4 }}
+          placeholder="e.g. 104.16.1.1, 104.17.2.2"
+          autoCapitalize="none"
+          autoCorrect={false}
+          onChangeText={setIpsInput}
+          value={ips}
+        />
+        <View style={{ flexDirection: 'row', marginTop: 6, gap: 8 }}>
+          <TouchableOpacity
+            style={{
+              backgroundColor: '#111',
+              borderRadius: 6,
+              paddingVertical: 10,
+              paddingHorizontal: 12,
+            }}
+            onPress={async () => {
+              addLog('cmd', `> set edge IP = ${ips || '(use DNS)'} and restart proxy...`);
+              try {
+                await setCustomIPs(ips);
+                addLog('success', 'Proxy restarted. Run "Test ECH status".');
+              } catch (e) {
+                addLog('error', e?.message ?? String(e));
+              }
+            }}
+          >
+            <Text style={{ color: '#fff' }}>Save IP & restart</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={{
+              backgroundColor: '#555',
+              borderRadius: 6,
+              paddingVertical: 10,
+              paddingHorizontal: 12,
+            }}
+            onPress={() => setIpsInput('')}
+          >
+            <Text style={{ color: '#fff' }}>Clear IP</Text>
           </TouchableOpacity>
         </View>
 

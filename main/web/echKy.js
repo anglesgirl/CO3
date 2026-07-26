@@ -17,6 +17,7 @@ const AO3_HOSTS = new Set(['archiveofourown.org', 'www.archiveofourown.org']);
 // which is why the default is a Cloudflare Gateway endpoint. User-overridable.
 export const DEFAULT_DOH = 'https://0kbpekmcr1.cloudflare-gateway.com/dns-query';
 const DOH_KEY = 'ech_doh';
+const IP_KEY = 'ech_ip';
 
 let echBasePromise = null; // Promise<string|null> — memoised
 
@@ -31,6 +32,16 @@ export async function getDoh() {
   }
 }
 
+// Optional comma-separated list of preferred Cloudflare edge IPs. Empty = use DNS.
+// Custom IPs only change which edge we connect to; SNI/ECH stay the same.
+export async function getCustomIPs() {
+  try {
+    return (await AsyncStorage.getItem(IP_KEY)) ?? '';
+  } catch {
+    return '';
+  }
+}
+
 function startProxy() {
   echBasePromise = (async () => {
     if (Platform.OS !== 'android') return null; // iOS: not wired yet
@@ -38,9 +49,10 @@ function startProxy() {
     if (!mod || typeof mod.start !== 'function') return null;
     try {
       const doh = await getDoh();
-      const port = await mod.start(0, doh); // 0 = auto-pick a free port
+      const ips = await getCustomIPs();
+      const port = await mod.start(0, doh, ips); // 0 = auto-pick a free port
       const base = `http://127.0.0.1:${port}`;
-      console.log(`[ECH] proxy started on ${base} (doh=${doh || '(none)'})`);
+      console.log(`[ECH] proxy started on ${base} (doh=${doh || '(none)'}, ip=${ips || '(dns)'})`);
       return base;
     } catch (e) {
       console.warn('[ECH] proxy failed to start, using direct requests:', e?.message ?? e);
@@ -70,15 +82,26 @@ export async function getEchStatus() {
   }
 }
 
-// Change the DoH endpoint and restart the proxy with it. Pass '' to disable DoH.
-export async function setDoh(doh) {
-  await AsyncStorage.setItem(DOH_KEY, doh ?? '');
+// Restart the proxy so new settings take effect.
+async function restartProxy() {
   const mod = NativeModules.EchProxy;
   try {
     if (mod?.stop) await mod.stop();
   } catch {}
   echBasePromise = null;
   return startProxy();
+}
+
+// Change the DoH endpoint and restart the proxy with it. Pass '' to disable DoH.
+export async function setDoh(doh) {
+  await AsyncStorage.setItem(DOH_KEY, doh ?? '');
+  return restartProxy();
+}
+
+// Set preferred edge IPs (comma-separated) and restart. Pass '' to use DNS.
+export async function setCustomIPs(ips) {
+  await AsyncStorage.setItem(IP_KEY, ips ?? '');
+  return restartProxy();
 }
 
 const echKy = ky.create({
@@ -111,13 +134,16 @@ export async function echSelfTest() {
   if (!base) {
     return `ECH proxy unavailable (non-Android or failed to start).`;
   }
+  const t0 = Date.now();
   try {
     const res = await echKy.get('https://archiveofourown.org/', { timeout: 30000 });
+    const ms = Date.now() - t0;
     const status = await getEchStatus();
-    return `OK — HTTP ${res.status} via ${base}\nDoH: ${doh || '(none)'}\n${status}`;
+    return `OK — HTTP ${res.status} in ${ms}ms via ${base}\nDoH: ${doh || '(none)'}\n${status}`;
   } catch (e) {
+    const ms = Date.now() - t0;
     const status = await getEchStatus();
-    return `Request failed: ${e?.message ?? e}\nDoH: ${doh || '(none)'}\nStatus: ${status}`;
+    return `Request failed after ${ms}ms: ${e?.message ?? e}\nDoH: ${doh || '(none)'}\nStatus: ${status}`;
   }
 }
 

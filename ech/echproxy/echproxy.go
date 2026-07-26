@@ -6,10 +6,12 @@
 // handshake whose SNI is hidden with ECH, so the React Native HTTP client (ky)
 // can point at the plain-HTTP loopback endpoint without doing any TLS itself.
 //
-// Requires Go 1.24+ (crypto/tls client-side ECH:
-// Config.EncryptedClientHelloConfigList and ConnectionState.ECHAccepted).
+// Two censorship problems are handled:
+//   - SNI inspection  -> ECH (Config.EncryptedClientHelloConfigList, Go 1.24+)
+//   - DNS poisoning   -> addresses are resolved over DoH and dialled directly,
+//     bypassing the (poisoned) system resolver. IPv4 is preferred.
 //
-// gomobile-exported surface (kept to basic types so it binds cleanly to Java):
+// gomobile-exported surface (basic types only, so it binds cleanly to Java):
 //
 //	Start(listen, target, echB64, doh string, insecure bool) error
 //	Stop() error
@@ -39,20 +41,21 @@ const dialTimeout = 20 * time.Second
 
 // Last-resort baked-in ECHConfigList for archiveofourown.org (public_name
 // cloudflare-ech.com). Cloudflare ROTATES these, so it WILL go stale — it only
-// exists so the proxy still starts when DoH is blocked (common behind the GFW).
-// The retry_configs self-heal path below fixes a stale value automatically as
-// long as the ECH handshake itself is allowed through.
+// exists so the proxy still starts when DoH is blocked. The retry_configs
+// self-heal path fixes a stale value automatically when the handshake is allowed.
 const fallbackECH = "AEX+DQBBEgAgACCCqb/I3qllxRj0GsvaltwQOKEVxT3s7r9QsejF510DIgAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA="
 
 var (
-	mu         sync.Mutex
-	server     *http.Server
-	lastStatus = "not started"
-	configInfo string // where the ECH config came from (DoH / fallback / flag)
-	shakeInfo  string // last TLS handshake result (ECHAccepted=…)
+	mu          sync.Mutex
+	server      *http.Server
+	lastStatus  = "not started"
+	configInfo  string   // where the ECH config came from
+	dnsInfo     string   // how the upstream IPs were resolved
+	shakeInfo   string   // last TLS handshake result (ECHAccepted=…)
+	upstreamIPs []string // DoH-resolved upstream addresses, IPv4 first
+	customIPs   []string // user-supplied edge IPs, tried before everything else
 )
 
-// setStatus records a human-readable status string for LastStatus().
 func setStatus(format string, a ...any) {
 	s := fmt.Sprintf(format, a...)
 	mu.Lock()
@@ -66,7 +69,15 @@ func setConfigInfo(format string, a ...any) {
 	mu.Lock()
 	configInfo = s
 	mu.Unlock()
-	log.Printf("echproxy: %s", s)
+	log.Printf("echproxy: config %s", s)
+}
+
+func setDNSInfo(format string, a ...any) {
+	s := fmt.Sprintf(format, a...)
+	mu.Lock()
+	dnsInfo = s
+	mu.Unlock()
+	log.Printf("echproxy: dns %s", s)
 }
 
 func setShakeInfo(format string, a ...any) {
@@ -74,18 +85,16 @@ func setShakeInfo(format string, a ...any) {
 	mu.Lock()
 	shakeInfo = s
 	mu.Unlock()
-	log.Printf("echproxy: %s", s)
+	log.Printf("echproxy: handshake %s", s)
 }
 
-// LastStatus returns a multi-line summary: ECH config source, last handshake
-// result (look for ECHAccepted=true), and the most recent status/error line.
+// LastStatus returns a multi-line summary: ECH config source, DNS resolution,
+// last handshake result (look for ECHAccepted=true), and the latest status line.
 func LastStatus() string {
 	mu.Lock()
 	defer mu.Unlock()
-	out := ""
-	if configInfo != "" {
-		out += "config: " + configInfo + "\n"
-	}
+	out := "config: " + orNone(configInfo) + "\n"
+	out += "dns: " + orNone(dnsInfo) + "\n"
 	if shakeInfo != "" {
 		out += "handshake: " + shakeInfo + "\n"
 	} else {
@@ -95,15 +104,21 @@ func LastStatus() string {
 	return out
 }
 
-// Start binds a reverse proxy on `listen` (e.g. "127.0.0.1:8080") that forwards
-// to https://`target` (e.g. "archiveofourown.org") over ECH, then serves in a
-// background goroutine. It returns once the listener is bound (nil), or an error
-// if the bind fails or an ECH config cannot be obtained.
+func orNone(s string) string {
+	if s == "" {
+		return "(none)"
+	}
+	return s
+}
+
+// Start binds a reverse proxy on `listen` that forwards to https://`target`
+// over ECH, then serves in a background goroutine.
 //
-//   - echB64:  optional base64 ECHConfigList; overrides DoH/fallback when set.
-//   - doh:     DoH JSON endpoint (e.g. "https://dns.google/resolve"); may be "".
-//   - insecure: skip upstream cert verification (debug only).
-func Start(listen, target, echB64, doh string, insecure bool) error {
+// ipList is an optional comma-separated list of upstream edge IPs to use
+// instead of DNS (e.g. hand-picked fast Cloudflare IPs). Because Cloudflare is
+// anycast, any edge IP serves the site — the SNI and the ECH config are
+// unaffected, so a custom IP changes only the route, never the encryption.
+func Start(listen, target, echB64, doh, ipList string, insecure bool) error {
 	mu.Lock()
 	if server != nil {
 		mu.Unlock()
@@ -115,32 +130,54 @@ func Start(listen, target, echB64, doh string, insecure bool) error {
 		target = "archiveofourown.org"
 	}
 
+	// 1. ECH config (flag > DoH HTTPS record > baked-in fallback).
 	echList, src, err := loadECHConfig(target, echB64, doh)
 	if err != nil || len(echList) == 0 {
 		return fmt.Errorf("could not obtain ECH config for %s: %v", target, err)
 	}
 	setConfigInfo("%d bytes for %s, source: %s", len(echList), target, src)
 
+	// 2. User-supplied edge IPs take priority over any DNS result.
+	custom := parseIPList(ipList)
+	mu.Lock()
+	customIPs = custom
+	mu.Unlock()
+
+	// 3. Resolve upstream IPs over DoH, bypassing the (possibly poisoned)
+	//    system resolver. Failure is non-fatal: we fall back to system DNS.
+	ips, derr := resolveViaDoH(target, doh)
+	mu.Lock()
+	upstreamIPs = ips
+	mu.Unlock()
+
+	switch {
+	case len(custom) > 0 && len(ips) > 0:
+		setDNSInfo("custom IP(s): %s | DoH also resolved: %s",
+			strings.Join(custom, ", "), strings.Join(ips, ", "))
+	case len(custom) > 0:
+		setDNSInfo("custom IP(s): %s (DoH unused/failed: %v)", strings.Join(custom, ", "), derr)
+	case derr != nil || len(ips) == 0:
+		setDNSInfo("DoH resolve failed (%v) — falling back to system DNS (may be poisoned)", derr)
+	default:
+		setDNSInfo("DoH resolved %d addr(s): %s", len(ips), strings.Join(ips, ", "))
+	}
+
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
 		Transport: newECHTransport(target, echList, insecure),
 		Jar:       jar,
 		Timeout:   60 * time.Second,
-		// Don't follow redirects here — hand them back so ky follows them and
-		// re-enters the proxy via the URL rewrite (keeps one cookie jar).
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
-
-	handler := &proxyHandler{target: target, client: client}
 
 	ln, err := net.Listen("tcp", listen)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", listen, err)
 	}
 
-	srv := &http.Server{Handler: handler}
+	srv := &http.Server{Handler: &proxyHandler{target: target, client: client}}
 	mu.Lock()
 	server = srv
 	mu.Unlock()
@@ -179,32 +216,19 @@ type proxyHandler struct {
 	client *http.Client
 }
 
-// hopByHop headers must not be forwarded (RFC 7230 §6.1).
 var hopByHop = map[string]bool{
-	"Connection":          true,
-	"Proxy-Connection":    true,
-	"Keep-Alive":          true,
-	"Proxy-Authenticate":  true,
-	"Proxy-Authorization": true,
-	"Te":                  true,
-	"Trailer":             true,
-	"Transfer-Encoding":   true,
-	"Upgrade":             true,
+	"Connection": true, "Proxy-Connection": true, "Keep-Alive": true,
+	"Proxy-Authenticate": true, "Proxy-Authorization": true, "Te": true,
+	"Trailer": true, "Transfer-Encoding": true, "Upgrade": true,
 }
 
 func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	outURL := &url.URL{
-		Scheme:   "https",
-		Host:     h.target,
-		Path:     r.URL.Path,
-		RawQuery: r.URL.RawQuery,
-	}
+	outURL := &url.URL{Scheme: "https", Host: h.target, Path: r.URL.Path, RawQuery: r.URL.RawQuery}
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, outURL.String(), r.Body)
 	if err != nil {
 		http.Error(w, "echproxy: bad request: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	// Copy request headers except hop-by-hop and Host.
 	for k, vv := range r.Header {
 		if hopByHop[k] || k == "Host" {
 			continue
@@ -214,7 +238,6 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	req.Host = h.target
-	// Let Go negotiate/decompress; avoid a stale Accept-Encoding from the app.
 	req.Header.Del("Accept-Encoding")
 
 	resp, err := h.client.Do(req)
@@ -225,16 +248,13 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Rewrite absolute redirect targets so ky re-enters the proxy.
 	if loc := resp.Header.Get("Location"); loc != "" {
 		resp.Header.Set("Location", rewriteLocation(loc, h.target))
 	}
-
 	for k, vv := range resp.Header {
 		if hopByHop[k] {
 			continue
 		}
-		// Body has been transparently decompressed by the Go transport.
 		if resp.Uncompressed && (k == "Content-Encoding" || k == "Content-Length") {
 			continue
 		}
@@ -246,16 +266,13 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
-// rewriteLocation turns an absolute https://<target>/… redirect into a relative
-// path so ky (pointed at the loopback proxy) follows it back through us.
 func rewriteLocation(loc, target string) string {
 	u, err := url.Parse(loc)
 	if err != nil {
 		return loc
 	}
 	if u.Host == target || u.Host == "www."+target {
-		u.Scheme = ""
-		u.Host = ""
+		u.Scheme, u.Host = "", ""
 		return u.String()
 	}
 	return loc
@@ -274,15 +291,64 @@ func newECHTransport(sni string, echList []byte, insecure bool) *http.Transport 
 	}
 }
 
-// echDialContext dials host:443 and performs a TLS 1.3 handshake with ECH.
+// parseIPList splits a comma/space separated list into valid IP literals.
+func parseIPList(s string) []string {
+	var out []string
+	for _, f := range strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\n' || r == '\t' || r == ';'
+	}) {
+		f = strings.TrimSpace(f)
+		if net.ParseIP(f) != nil {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// dialCandidates returns the addresses to try, in order:
+// user-supplied IPs, then DoH-resolved (IPv4 first), then system DNS.
+func dialCandidates(addr string) []string {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		port = "443"
+	}
+	mu.Lock()
+	custom := append([]string(nil), customIPs...)
+	ips := append([]string(nil), upstreamIPs...)
+	mu.Unlock()
+
+	out := make([]string, 0, len(custom)+len(ips)+1)
+	for _, ip := range custom {
+		out = append(out, net.JoinHostPort(ip, port))
+	}
+	for _, ip := range ips {
+		out = append(out, net.JoinHostPort(ip, port))
+	}
+	return append(out, addr) // last resort: system DNS
+}
+
+// echDialContext dials the upstream and performs a TLS 1.3 handshake with ECH.
 func echDialContext(sni string, echList []byte, insecure bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	var logged sync.Once
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		d := &net.Dialer{Timeout: dialTimeout}
-		raw, err := d.DialContext(ctx, "tcp", addr)
-		if err != nil {
-			return nil, err
+
+		var raw net.Conn
+		var err error
+		var dialed string
+		for _, cand := range dialCandidates(addr) {
+			raw, err = d.DialContext(ctx, "tcp", cand)
+			if err == nil {
+				dialed = cand
+				break
+			}
+			log.Printf("echproxy: dial %s failed: %v", cand, err)
 		}
+		if raw == nil {
+			setShakeInfo("FAILED: could not connect to any upstream address: %v", err)
+			return nil, fmt.Errorf("dial failed: %w", err)
+		}
+
 		cfg := &tls.Config{
 			ServerName:                     sni,
 			MinVersion:                     tls.VersionTLS13, // ECH requires TLS 1.3
@@ -297,13 +363,13 @@ func echDialContext(sni string, echList []byte, insecure bool) func(ctx context.
 		err = tc.HandshakeContext(hctx)
 
 		// If the server rejected our (stale/GREASE) ECH config, it returns a fresh
-		// ECHConfigList in retry_configs. Redial once with it — this self-heals
-		// against config rotation and a blocked DoH lookup.
+		// ECHConfigList in retry_configs. Redial once with it — self-heals against
+		// config rotation and a blocked DoH lookup.
 		var rej *tls.ECHRejectionError
 		if errors.As(err, &rej) && len(rej.RetryConfigList) > 0 {
 			raw.Close()
 			setStatus("ECH rejected; retrying with server retry_configs (%d bytes)", len(rej.RetryConfigList))
-			raw2, derr := d.DialContext(ctx, "tcp", addr)
+			raw2, derr := d.DialContext(ctx, "tcp", dialed)
 			if derr != nil {
 				return nil, derr
 			}
@@ -315,46 +381,23 @@ func echDialContext(sni string, echList []byte, insecure bool) func(ctx context.
 		if err != nil {
 			raw.Close()
 			if errors.As(err, &rej) {
-				setShakeInfo("FAILED: server rejected ECH, %d bytes retry_configs "+
-					"(if 0, endpoint likely isn't a real ECH server)", len(rej.RetryConfigList))
-				return nil, fmt.Errorf("ECH handshake failed: server rejected ECH, %d bytes retry_configs",
-					len(rej.RetryConfigList))
+				setShakeInfo("FAILED via %s: server rejected ECH, %d bytes retry_configs "+
+					"(if 0, endpoint likely isn't a real ECH server)", dialed, len(rej.RetryConfigList))
+				return nil, fmt.Errorf("ECH handshake failed: rejected, %d bytes retry_configs", len(rej.RetryConfigList))
 			}
-			setShakeInfo("FAILED: %v", err)
+			setShakeInfo("FAILED via %s: %v", dialed, err)
 			return nil, fmt.Errorf("ECH handshake failed: %w", err)
 		}
 		st := tc.ConnectionState()
 		logged.Do(func() {
-			setShakeInfo("ok ECHAccepted=%v TLS=%s ALPN=%q",
-				st.ECHAccepted, tlsVersionName(st.Version), st.NegotiatedProtocol)
+			setShakeInfo("ok via %s ECHAccepted=%v TLS=%s ALPN=%q",
+				dialed, st.ECHAccepted, tlsVersionName(st.Version), st.NegotiatedProtocol)
 		})
 		return tc, nil
 	}
 }
 
-// --- ECH config resolution ------------------------------------------------
-
-func loadECHConfig(host, echB64, doh string) ([]byte, string, error) {
-	if strings.TrimSpace(echB64) != "" {
-		b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(echB64))
-		if err != nil {
-			return nil, "", fmt.Errorf("ech base64: %w", err)
-		}
-		return b, "flag", nil
-	}
-	if doh != "" {
-		if b, err := fetchECHViaDoH(host, doh); err == nil && len(b) > 0 {
-			return b, "DoH:" + doh, nil
-		} else if err != nil {
-			log.Printf("echproxy: DoH lookup failed (%v); using baked-in fallback", err)
-		}
-	}
-	b, err := base64.StdEncoding.DecodeString(fallbackECH)
-	if err != nil {
-		return nil, "", err
-	}
-	return b, "baked-in-fallback", nil
-}
+// --- DoH ------------------------------------------------------------------
 
 type dohResp struct {
 	Answer []struct {
@@ -363,12 +406,19 @@ type dohResp struct {
 	} `json:"Answer"`
 }
 
-var echParamRe = regexp.MustCompile(`ech="?([A-Za-z0-9+/=]+)"?`)
-
-// fetchECHViaDoH queries the HTTPS (type 65) record and pulls the ech= SvcParam.
-func fetchECHViaDoH(host, endpoint string) ([]byte, error) {
-	q := endpoint + "?name=" + url.QueryEscape(host) + "&type=HTTPS"
-	req, _ := http.NewRequest("GET", q, nil)
+// dohQuery performs a DoH JSON query and returns the answer records.
+func dohQuery(endpoint, name, qtype string) (*dohResp, error) {
+	q := endpoint
+	if strings.Contains(q, "?") {
+		q += "&"
+	} else {
+		q += "?"
+	}
+	q += "name=" + url.QueryEscape(name) + "&type=" + qtype
+	req, err := http.NewRequest("GET", q, nil)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("accept", "application/dns-json")
 	resp, err := (&http.Client{Timeout: dialTimeout}).Do(req)
 	if err != nil {
@@ -380,6 +430,56 @@ func fetchECHViaDoH(host, endpoint string) ([]byte, error) {
 	}
 	var dr dohResp
 	if err := json.NewDecoder(resp.Body).Decode(&dr); err != nil {
+		return nil, err
+	}
+	return &dr, nil
+}
+
+// resolveViaDoH returns the upstream IPs (IPv4 first) for host, using DoH so the
+// poisoned system resolver is bypassed entirely.
+func resolveViaDoH(host, endpoint string) ([]string, error) {
+	if strings.TrimSpace(endpoint) == "" {
+		return nil, errors.New("no DoH endpoint configured")
+	}
+	var v4, v6 []string
+	var firstErr error
+
+	if dr, err := dohQuery(endpoint, host, "A"); err == nil {
+		for _, a := range dr.Answer {
+			if a.Type == 1 && net.ParseIP(a.Data) != nil {
+				v4 = append(v4, a.Data)
+			}
+		}
+	} else {
+		firstErr = err
+	}
+
+	if dr, err := dohQuery(endpoint, host, "AAAA"); err == nil {
+		for _, a := range dr.Answer {
+			if a.Type == 28 && net.ParseIP(a.Data) != nil {
+				v6 = append(v6, a.Data)
+			}
+		}
+	} else if firstErr == nil {
+		firstErr = err
+	}
+
+	out := append(v4, v6...) // IPv4 first — broken/poisoned IPv6 is common
+	if len(out) == 0 {
+		if firstErr == nil {
+			firstErr = errors.New("no A/AAAA records returned")
+		}
+		return nil, firstErr
+	}
+	return out, nil
+}
+
+var echParamRe = regexp.MustCompile(`ech="?([A-Za-z0-9+/=]+)"?`)
+
+// fetchECHViaDoH queries the HTTPS (type 65) record and pulls the ech= SvcParam.
+func fetchECHViaDoH(host, endpoint string) ([]byte, error) {
+	dr, err := dohQuery(endpoint, host, "HTTPS")
+	if err != nil {
 		return nil, err
 	}
 	for _, a := range dr.Answer {
@@ -394,7 +494,34 @@ func fetchECHViaDoH(host, endpoint string) ([]byte, error) {
 			return b, nil
 		}
 	}
-	return nil, fmt.Errorf("no ech= parameter in HTTPS record")
+	return nil, errors.New("no ech= parameter in HTTPS record")
+}
+
+func loadECHConfig(host, echB64, doh string) ([]byte, string, error) {
+	if strings.TrimSpace(echB64) != "" {
+		b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(echB64))
+		if err != nil {
+			return nil, "", fmt.Errorf("ech base64: %w", err)
+		}
+		return b, "flag", nil
+	}
+	if strings.TrimSpace(doh) != "" {
+		if b, err := fetchECHViaDoH(host, doh); err == nil && len(b) > 0 {
+			return b, "DoH", nil
+		} else if err != nil {
+			// Surface the reason — this is the usual cause of a stale config.
+			b2, e2 := base64.StdEncoding.DecodeString(fallbackECH)
+			if e2 != nil {
+				return nil, "", e2
+			}
+			return b2, fmt.Sprintf("baked-in-fallback (DoH failed: %v)", err), nil
+		}
+	}
+	b, err := base64.StdEncoding.DecodeString(fallbackECH)
+	if err != nil {
+		return nil, "", err
+	}
+	return b, "baked-in-fallback", nil
 }
 
 func tlsVersionName(v uint16) string {
