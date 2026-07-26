@@ -11,10 +11,7 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import login, { validateCookie } from '../../web/account/login';
-import {
-  requestInvitation,
-  requestPasswordReset,
-} from '../../web/account/accountRequests';
+import AccountSetupModal from '../../components/Account/AccountSetupModal';
 import {
   deleteCredsPasswd,
   deleteCredsToken,
@@ -42,15 +39,8 @@ const LoginScreen = ({ route }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [validating, setValidating] = useState(true);
-  // In-app "forgot password" / "get invited" prompt.
-  const [requestModal, setRequestModal] = useState({
-    visible: false,
-    kind: null, // 'password' | 'invite'
-    title: '',
-    label: '',
-    value: '',
-    busy: false,
-  });
+  // In-app account flows (password reset / invitation + registration).
+  const [setupModal, setSetupModal] = useState({ visible: false, mode: 'password' });
 
   const [alert, setAlert] = useState({
     visible: false,
@@ -206,46 +196,11 @@ const LoginScreen = ({ route }) => {
     );
   };
 
-  // Both flows are handled in-app: we fetch AO3's form, take its CSRF token and
-  // POST it back through the ECH proxy. Opening a browser would fail entirely on
-  // networks where AO3 is blocked.
-  const openForgotPassword = () => {
-    setRequestModal({
-      visible: true,
-      kind: 'password',
-      title: t('screen_account_forgot_password'),
-      label: t('account_request_login_label'),
-      value: username || '',
-      busy: false,
-    });
-  };
-
-  const openGetInvited = () => {
-    setRequestModal({
-      visible: true,
-      kind: 'invite',
-      title: t('screen_account_get_invited'),
-      label: t('account_request_email_label'),
-      value: '',
-      busy: false,
-    });
-  };
-
-  const submitRequest = async () => {
-    const { kind, value } = requestModal;
-    setRequestModal(m => ({ ...m, busy: true }));
-    try {
-      const message =
-        kind === 'password'
-          ? await requestPasswordReset(value)
-          : await requestInvitation(value);
-      setRequestModal(m => ({ ...m, visible: false, busy: false }));
-      showAlert(t('general_success'), message);
-    } catch (e) {
-      setRequestModal(m => ({ ...m, busy: false }));
-      showAlert(t('general_error'), e?.message ?? String(e));
-    }
-  };
+  // Both flows are handled in-app by AccountSetupModal: it fetches AO3's own
+  // forms and posts them back through the ECH proxy. Opening a browser would
+  // fail entirely on networks where AO3 is blocked.
+  const openForgotPassword = () => setSetupModal({ visible: true, mode: 'password' });
+  const openGetInvited = () => setSetupModal({ visible: true, mode: 'invite' });
 
   if (validating) {
     return (
@@ -566,89 +521,178 @@ const LoginScreen = ({ route }) => {
         </View>
       </ScrollView>
 
-      <Modal
-        visible={requestModal.visible}
-        transparent
-        animationType="fade"
-        onRequestClose={() =>
-          setRequestModal(m => ({ ...m, visible: false }))
-        }
-      >
-        <View style={styles.requestOverlay}>
-          <View
-            style={[
-              styles.requestBox,
-              { backgroundColor: currentTheme.cardBackground },
-            ]}
-          >
-            <Text
-              style={[styles.requestTitle, { color: currentTheme.textColor }]}
-            >
-              {requestModal.title}
-            </Text>
-            <Text
-              style={[
-                styles.requestLabel,
-                { color: currentTheme.secondaryTextColor },
-              ]}
-            >
-              {requestModal.label}
-            </Text>
-            <TextInput
-              style={[
-                styles.requestInput,
-                {
-                  color: currentTheme.textColor,
-                  borderColor: currentTheme.borderColor,
-                  backgroundColor: currentTheme.inputBackground,
-                },
-              ]}
-              value={requestModal.value}
-              onChangeText={v => setRequestModal(m => ({ ...m, value: v }))}
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType={
-                requestModal.kind === 'invite' ? 'email-address' : 'default'
-              }
-              editable={!requestModal.busy}
-            />
-            <View style={styles.requestActions}>
+      <AccountSetupModal
+        visible={setupModal.visible}
+        mode={setupModal.mode}
+        theme={currentTheme}
+        onClose={() => setSetupModal(m => ({ ...m, visible: false }))}
+      />
+
+      <CustomAlert
+          visible={alert.visible}
+          title={alert.title}
+          message={alert.message}
+          onClose={hideAlert}
+          theme={currentTheme}
+        />
+      </SafeAreaView>
+    );
+  }
+
+  function onBack() {
+    navigation.goBack();
+  }
+
+  return (
+    <SafeAreaView
+      style={[
+        styles.container,
+        { backgroundColor: currentTheme.backgroundColor },
+      ]}
+    >
+      <View style={styles.header}>
+        <TouchableOpacity onPress={onBack}>
+          <Icon name="arrow-back" size={24} color={currentTheme.textColor} />
+        </TouchableOpacity>
+        <Text style={[styles.title_top, { color: currentTheme.textColor }]}>
+          {t('screen_account_title')}
+        </Text>
+      </View>
+      <ScrollView contentContainerStyle={styles.scrollContainer}>
+        <View style={styles.content}>
+          <Text style={[styles.title, { color: currentTheme.textColor }]}>
+            {t('screen_account_text')}
+          </Text>
+
+          <View style={styles.formContainer}>
+            <View style={styles.inputGroup}>
+              <Text style={[styles.label, { color: currentTheme.textColor }]}>
+                {t('screen_account_username')}
+              </Text>
+              <TextInput
+                style={[
+                  styles.input,
+                  {
+                    backgroundColor: currentTheme.inputBackground,
+                    borderColor: currentTheme.borderColor,
+                    color: currentTheme.textColor,
+                  },
+                ]}
+                value={username}
+                onChangeText={setUsername}
+                autoCapitalize="none"
+                autoCorrect={false}
+                textContentType="username"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={[styles.label, { color: currentTheme.textColor }]}>
+                {t('screen_account_password')}
+              </Text>
+              <TextInput
+                style={[
+                  styles.input,
+                  {
+                    backgroundColor: currentTheme.inputBackground,
+                    borderColor: currentTheme.borderColor,
+                    color: currentTheme.textColor,
+                  },
+                ]}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry
+                textContentType="password"
+              />
+            </View>
+
+            <View style={styles.rememberContainer}>
               <TouchableOpacity
-                style={styles.requestAction}
-                onPress={() =>
-                  setRequestModal(m => ({ ...m, visible: false }))
-                }
-                disabled={requestModal.busy}
+                style={styles.rememberButton}
+                onPress={() => setRememberPassword(!rememberPassword)}
               >
-                <Text style={{ color: currentTheme.secondaryTextColor }}>
-                  {t('general_cancel')}
+                <Icon
+                  name={
+                    rememberPassword ? 'check-box' : 'check-box-outline-blank'
+                  }
+                  size={24}
+                  color={currentTheme.primaryColor}
+                />
+                <Text
+                  style={[
+                    styles.rememberText,
+                    { color: currentTheme.textColor },
+                  ]}
+                >
+                  {t('screen_account_remember_password')}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.requestAction}
-                onPress={submitRequest}
-                disabled={requestModal.busy}
+                onPress={showRememberPasswordInfo}
+                style={styles.infoButton}
               >
-                {requestModal.busy ? (
-                  <ActivityIndicator
-                    size="small"
-                    color={currentTheme.primaryColor}
-                  />
-                ) : (
-                  <Text
-                    style={{
-                      color: currentTheme.primaryColor,
-                      fontWeight: '600',
-                    }}
-                  >
-                    {t('account_request_submit')}
-                  </Text>
-                )}
+                <Icon
+                  name="info-outline"
+                  size={20}
+                  color={currentTheme.placeholderColor}
+                />
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={[
+                styles.loginButton,
+                { backgroundColor: currentTheme.primaryColor },
+              ]}
+              onPress={handleLogin}
+              disabled={isLoading}
+            >
+              <Text style={styles.loginButtonText}>
+                {isLoading
+                  ? t('screen_account_login_loading')
+                  : t('screen_account_login')}
+              </Text>
+            </TouchableOpacity>
+
+            <View style={styles.footerButtons}>
+              <TouchableOpacity
+                onPress={openForgotPassword}
+                style={styles.footerButton}
+              >
+                <Text
+                  style={[
+                    styles.footerButtonText,
+                    { color: currentTheme.primaryColor },
+                  ]}
+                >
+                  {t('screen_account_forgot_password')}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={openGetInvited}
+                style={styles.footerButton}
+              >
+                <Text
+                  style={[
+                    styles.footerButtonText,
+                    { color: currentTheme.primaryColor },
+                  ]}
+                >
+                  {t('screen_account_get_invited')}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
-      </Modal>
+      </ScrollView>
+
+      <AccountSetupModal
+        visible={setupModal.visible}
+        mode={setupModal.mode}
+        theme={currentTheme}
+        onClose={() => setSetupModal(m => ({ ...m, visible: false }))}
+      />
 
       <CustomAlert
         visible={alert.visible}

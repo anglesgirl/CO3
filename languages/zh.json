@@ -505,5 +505,21 @@
   "component_update_bookcard_deletion_failed": "删除出错",
   "account_request_login_label": "输入你的用户名或邮箱，AO3 会给你发送重置链接。",
   "account_request_email_label": "输入你的邮箱地址，加入邀请队列。",
-  "account_request_submit": "提交"
+  "account_request_submit": "提交",
+  "account_reset_hint": "AO3 会给你发送一封重置邮件。用下面的方法复制邮件里的链接，在浏览器打开即可设置新密码。",
+  "account_step_request": "申请",
+  "account_step_paste": "粘贴链接",
+  "account_step_register": "注册",
+  "account_step_activate": "激活",
+  "account_invite_intro": "AO3 需要邀请才能注册。填写邮箱后你会被加入排队，邀请通常几天内通过邮件发送。",
+  "account_have_invite_already": "我已经有邀请链接了",
+  "account_paste_invite_hint": "打开 AO3 发来的邀请邮件，找到里面的注册链接，把它粘贴到下方。",
+  "account_invite_link_ok": "邀请链接有效，现在可以创建账号了。",
+  "account_register_hint": "设置你的 AO3 用户名和密码。用户名之后无法更改。",
+  "account_password_confirm": "确认密码",
+  "account_tos_notice": "创建账号即表示你已年满 13 岁并接受 AO3 的服务条款。",
+  "account_create_account": "创建账号",
+  "account_activate_hint": "AO3 已给你发送激活邮件。用同样的方法复制里面的激活链接并粘贴到下方，即可完成激活；也可以直接在邮箱里点击它。",
+  "account_activate_button": "激活账号",
+  "account_copy_link_tip": "提示：国内邮箱通常无法直接点开链接。请长按链接，选择「复制链接地址」；如果无法长按，点击后在页面里找到「复制链接」按钮。"
 }

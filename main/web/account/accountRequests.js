@@ -114,6 +114,170 @@ export async function requestPasswordReset(login) {
   throw new Error(`Request failed (HTTP ${res.status}).`);
 }
 
+// --- registration (invitation -> signup -> activation) --------------------
+
+/**
+ * Accepts either a full invitation URL from AO3's email or a bare token, and
+ * returns the token. Handles both /signup/TOKEN and ?invitation_token=TOKEN.
+ */
+export function extractInvitationToken(input) {
+  const s = String(input || '').trim();
+  if (!s) throw new Error('Paste the invitation link from your email.');
+  const q = s.match(/invitation_token=([A-Za-z0-9_-]+)/i);
+  if (q) return q[1];
+  const p = s.match(/\/signup\/([A-Za-z0-9_-]+)/i);
+  if (p) return p[1];
+  const inv = s.match(/\/invitations\/([A-Za-z0-9_-]+)/i);
+  if (inv) return inv[1];
+  if (/^[A-Za-z0-9_-]+$/.test(s)) return s; // already a bare token
+  throw new Error('That does not look like an AO3 invitation link.');
+}
+
+/**
+ * Reads every <input> of the signup form so we can replay AO3's own hidden
+ * fields instead of guessing them. Returns { fields, action }.
+ */
+function parseFormFields(html, formHint = 'new_user') {
+  // Narrow to the signup form when we can find it.
+  let scope = html;
+  const formRe = new RegExp(
+    `<form[^>]*(?:id="${formHint}"|action="[^"]*\\/users")[^>]*>([\\s\\S]*?)<\\/form>`,
+    'i',
+  );
+  const fm = html.match(formRe);
+  if (fm) scope = fm[0];
+
+  const action = (scope.match(/<form[^>]*action="([^"]+)"/i) || [])[1] || '/users';
+
+  const fields = {};
+  const inputRe = /<input\b[^>]*>/gi;
+  let m;
+  while ((m = inputRe.exec(scope)) !== null) {
+    const tag = m[0];
+    const name = (tag.match(/\bname="([^"]+)"/i) || [])[1];
+    if (!name) continue;
+    const type = ((tag.match(/\btype="([^"]+)"/i) || [])[1] || 'text').toLowerCase();
+    const value = decodeHtml((tag.match(/\bvalue="([^"]*)"/i) || [])[1] ?? '');
+    // Keep hidden values verbatim; remember other fields so we can fill them.
+    if (type === 'hidden' || value) fields[name] = value;
+    else if (!(name in fields)) fields[name] = '';
+  }
+  return { fields, action: decodeHtml(action) };
+}
+
+// Finds the real field name for a logical one (AO3 uses user[login] etc.).
+function findField(fields, ...candidates) {
+  const names = Object.keys(fields);
+  for (const c of candidates) {
+    const exact = names.find(n => n.toLowerCase() === c.toLowerCase());
+    if (exact) return exact;
+  }
+  for (const c of candidates) {
+    const loose = names.find(n => n.toLowerCase().includes(c.toLowerCase()));
+    if (loose) return loose;
+  }
+  return null;
+}
+
+/** Loads the signup form for an invitation token. */
+export async function getSignupForm(token) {
+  const path = `/signup/${encodeURIComponent(token)}`;
+  const html = await ky.get(BASE + path, { headers: BROWSER_HEADERS }).text();
+
+  if (/invitation.{0,40}(invalid|already been used|not found)/i.test(html)) {
+    throw new Error('This invitation link is invalid or has already been used.');
+  }
+  const { fields, action } = parseFormFields(html);
+  if (!fields.authenticity_token) {
+    fields.authenticity_token = extractAuthenticityToken(html);
+  }
+  return { fields, action, referer: BASE + path };
+}
+
+/**
+ * Creates the AO3 account. Returns a message for the user (AO3 then emails an
+ * activation link, which activateAccount() can finish).
+ */
+export async function registerAccount({
+  token,
+  username,
+  email,
+  password,
+  passwordConfirm,
+}) {
+  if (!username?.trim()) throw new Error('Choose a username.');
+  if (!email?.trim()) throw new Error('Enter your email address.');
+  if (!password) throw new Error('Choose a password.');
+  if (password !== passwordConfirm) throw new Error('The passwords do not match.');
+
+  const { fields, action, referer } = await getSignupForm(token);
+
+  const nLogin = findField(fields, 'user[login]', 'login');
+  const nEmail = findField(fields, 'user[email]', 'email');
+  const nPass = findField(fields, 'user[password]', 'password');
+  const nConfirm = findField(fields, 'user[password_confirmation]', 'password_confirmation');
+  const nAge = findField(fields, 'user[age_over_13]', 'age_over_13');
+  const nTos = findField(fields, 'user[terms_of_service]', 'terms_of_service');
+
+  const body = { ...fields };
+  if (nLogin) body[nLogin] = username.trim();
+  if (nEmail) body[nEmail] = email.trim();
+  if (nPass) body[nPass] = password;
+  if (nConfirm) body[nConfirm] = passwordConfirm;
+  if (nAge) body[nAge] = '1';
+  if (nTos) body[nTos] = '1';
+  if (!body.invitation_token) body.invitation_token = token;
+  body.commit = 'Create Account';
+
+  const path = action.startsWith('http')
+    ? action.replace(BASE, '')
+    : action || '/users';
+  const { res, html } = await postForm(path, body, referer);
+
+  const outcome = readOutcome(html);
+  if (outcome) {
+    if (!outcome.ok) throw new Error(outcome.message);
+    return outcome.message;
+  }
+  // Rails renders the form again (with an error list) when validation fails.
+  const errList = html.match(
+    /<(?:div|ul)[^>]*(?:id|class)="[^"]*error[^"]*"[^>]*>([\s\S]*?)<\/(?:div|ul)>/i,
+  );
+  if (errList) {
+    const msg = stripTags(errList[1]);
+    if (msg) throw new Error(msg);
+  }
+  if (res.ok || res.redirected) {
+    return 'Account created. Check your email for the activation link.';
+  }
+  throw new Error(`Sign-up failed (HTTP ${res.status}).`);
+}
+
+/**
+ * Finishes registration by following the activation link from AO3's email.
+ * Accepts the full URL (or just its path).
+ */
+export async function activateAccount(input) {
+  const s = String(input || '').trim();
+  if (!s) throw new Error('Paste the activation link from your email.');
+
+  let path;
+  try {
+    path = s.startsWith('http') ? new URL(s).pathname + new URL(s).search : s;
+  } catch {
+    throw new Error('That does not look like an activation link.');
+  }
+  if (!path.startsWith('/')) path = '/' + path;
+
+  const html = await ky.get(BASE + path, { headers: BROWSER_HEADERS }).text();
+  const outcome = readOutcome(html);
+  if (outcome) {
+    if (!outcome.ok) throw new Error(outcome.message);
+    return outcome.message;
+  }
+  return 'Activation link opened. Try logging in now.';
+}
+
 /**
  * Requests an AO3 invitation for `email`.
  * Resolves with a message to show the user; rejects with AO3's error text.

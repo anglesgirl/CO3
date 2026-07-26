@@ -503,5 +503,21 @@
   "component_update_bookcard_deletion_failed": "Erreur lors de la suppression",
   "account_request_login_label": "Saisissez votre nom d'utilisateur ou votre e-mail. AO3 vous enverra un lien de réinitialisation.",
   "account_request_email_label": "Saisissez votre adresse e-mail pour rejoindre la file d'attente des invitations.",
-  "account_request_submit": "Envoyer"
+  "account_request_submit": "Envoyer",
+  "account_reset_hint": "AO3 vous enverra un lien de réinitialisation. Copiez-le comme indiqué ci-dessous et ouvrez-le pour choisir un nouveau mot de passe.",
+  "account_step_request": "Demande",
+  "account_step_paste": "Coller le lien",
+  "account_step_register": "Inscription",
+  "account_step_activate": "Activation",
+  "account_invite_intro": "AO3 exige une invitation. Saisissez votre e-mail pour rejoindre la file d'attente ; l'invitation arrive généralement en quelques jours.",
+  "account_have_invite_already": "J'ai déjà un lien d'invitation",
+  "account_paste_invite_hint": "Ouvrez l'e-mail d'invitation d'AO3, trouvez le lien d'inscription et collez-le ci-dessous.",
+  "account_invite_link_ok": "Lien d'invitation accepté. Créez maintenant votre compte.",
+  "account_register_hint": "Choisissez votre nom d'utilisateur et votre mot de passe AO3. Le nom ne pourra plus être modifié.",
+  "account_password_confirm": "Confirmer le mot de passe",
+  "account_tos_notice": "En créant un compte, vous confirmez avoir plus de 13 ans et accepter les conditions d'utilisation d'AO3.",
+  "account_create_account": "Créer le compte",
+  "account_activate_hint": "AO3 vous a envoyé un lien d'activation. Copiez-le de la même façon et collez-le ci-dessous pour terminer, ou appuyez dessus dans votre messagerie.",
+  "account_activate_button": "Activer le compte",
+  "account_copy_link_tip": "Astuce : certaines messageries n'ouvrent pas le lien directement. Appuyez longuement dessus et choisissez « Copier l'adresse du lien » ; sinon, appuyez dessus et cherchez un bouton « Copier le lien »."
 }

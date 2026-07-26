@@ -505,5 +505,21 @@
   "component_update_bookcard_deletion_failed": "Error deleting",
   "account_request_login_label": "Enter your username or email address. AO3 will send you a reset link.",
   "account_request_email_label": "Enter your email address to join the invitation queue.",
-  "account_request_submit": "Submit"
+  "account_request_submit": "Submit",
+  "account_reset_hint": "AO3 will email you a reset link. Copy it as described below and open it to choose a new password.",
+  "account_step_request": "Request",
+  "account_step_paste": "Paste link",
+  "account_step_register": "Sign up",
+  "account_step_activate": "Activate",
+  "account_invite_intro": "AO3 requires an invitation. Enter your email and you'll be added to the queue — the invitation usually arrives by email in a few days.",
+  "account_have_invite_already": "I already have an invitation link",
+  "account_paste_invite_hint": "Open the invitation email from AO3, find the sign-up link and paste it below.",
+  "account_invite_link_ok": "Invitation link accepted. Now create your account.",
+  "account_register_hint": "Choose your AO3 username and password. The username cannot be changed later.",
+  "account_password_confirm": "Confirm password",
+  "account_tos_notice": "By creating an account you confirm you are over 13 and accept AO3's Terms of Service.",
+  "account_create_account": "Create account",
+  "account_activate_hint": "AO3 has emailed you an activation link. Copy it the same way and paste it below to finish — or just tap it in your email app.",
+  "account_activate_button": "Activate account",
+  "account_copy_link_tip": "Tip: some email apps won't open the link directly. Long-press the link and choose \"Copy link address\"; if long-press doesn't work, tap it and look for a \"Copy link\" button."
 }
