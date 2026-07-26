@@ -1,0 +1,91 @@
+name: "Build Android APK (ECH)"
+
+# Builds the ECH-enabled APK: compiles the Go ECH proxy into an Android AAR with
+# gomobile, then builds the React Native app that loads it.
+on:
+  push:
+    branches: [ech-support]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  NDK_VERSION: "27.1.12297006"
+
+jobs:
+  build-ech-apk:
+    name: Build ECH Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go 1.24
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install pinned NDK
+        run: |
+          sdkmanager --install "ndk;${NDK_VERSION}" "platforms;android-36" "build-tools;35.0.0"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Build ECH proxy AAR (gomobile)
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          cd ech
+          # Add x/mobile as a module dependency (required by gomobile bind).
+          # NOTE: do not `go mod tidy` afterwards — it would strip this unused-by-source require.
+          go get golang.org/x/mobile/bind@latest
+          mkdir -p ../android/app/libs
+          gomobile bind -v -target=android -androidapi 24 \
+            -o ../android/app/libs/echproxy.aar ./echproxy
+          ls -la ../android/app/libs
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install NPM dependencies
+        run: npm ci
+
+      - name: Generate codegen artifacts
+        run: |
+          cd android
+          ./gradlew generateCodegenArtifactsFromSchema
+
+      - name: Build Release APK
+        run: |
+          cd android
+          ./gradlew assembleRelease
+
+      - name: Rename artifacts
+        run: |
+          APK_DIR=android/app/build/outputs/apk/release
+          mv "$APK_DIR/app-arm64-v8a-release.apk"   CO3-ECH-arm64-v8a.apk   || true
+          mv "$APK_DIR/app-armeabi-v7a-release.apk" CO3-ECH-armeabi-v7a.apk || true
+          mv "$APK_DIR/app-x86-release.apk"          CO3-ECH-x86.apk         || true
+          mv "$APK_DIR/app-x86_64-release.apk"       CO3-ECH-x86_64.apk      || true
+          ls -la CO3-ECH-*.apk
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: CO3-ECH-${{ github.sha }}
+          path: CO3-ECH-*.apk
+          retention-days: 30

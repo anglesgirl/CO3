@@ -77,3 +77,7 @@ yarn-error.log
 # Stakpak session files
 .stakpak/session*
 /dist/
+
+# gomobile-built ECH proxy AAR (regenerated in CI)
+android/app/libs/*.aar
+

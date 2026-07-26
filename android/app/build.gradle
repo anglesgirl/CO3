@@ -7,6 +7,12 @@ react {
     autolinkLibrariesWithApp()
 }
 
+// Local repo for the gomobile-built ECH proxy AAR (produced in CI by
+// `gomobile bind` into android/app/libs/echproxy.aar).
+repositories {
+    flatDir { dirs "$projectDir/libs" }
+}
+
 def enableProguardInReleaseBuilds = false
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
@@ -78,6 +84,9 @@ dependencies {
     implementation "com.facebook.react:react-android"
     implementation "androidx.work:work-runtime:2.9.0"
     implementation "androidx.lifecycle:lifecycle-process:2.8.7"
+
+    // gomobile-built ECH proxy (android/app/libs/echproxy.aar). Generated in CI.
+    implementation(name: 'echproxy', ext: 'aar')
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

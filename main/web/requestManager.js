@@ -1,4 +1,5 @@
-import ky, { TimeoutError } from 'ky';
+import ky from './echKy';
+import { TimeoutError } from 'ky';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fetchViaWebView } from './WebviewFetcher';
 import { Platform } from 'react-native';

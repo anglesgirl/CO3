@@ -1,5 +1,5 @@
 import RNFS from 'react-native-fs';
-import ky from 'ky';
+import ky from '../echKy';
 import { Buffer } from 'buffer';
 
 const FORMATS = ['azw3', 'epub', 'mobi', 'pdf', 'html'];

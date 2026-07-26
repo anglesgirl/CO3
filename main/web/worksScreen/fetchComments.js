@@ -1,4 +1,4 @@
-import ky from 'ky';
+import ky from '../echKy';
 
 let DomParser = require('react-native-html-parser').DOMParser;
 
