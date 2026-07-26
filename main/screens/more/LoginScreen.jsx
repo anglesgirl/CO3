@@ -1,7 +1,6 @@
 import React, { useContext, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Linking,
   Modal,
   ScrollView,
   StyleSheet,
@@ -12,6 +11,10 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import login, { validateCookie } from '../../web/account/login';
+import {
+  requestInvitation,
+  requestPasswordReset,
+} from '../../web/account/accountRequests';
 import {
   deleteCredsPasswd,
   deleteCredsToken,
@@ -39,6 +42,16 @@ const LoginScreen = ({ route }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [validating, setValidating] = useState(true);
+  // In-app "forgot password" / "get invited" prompt.
+  const [requestModal, setRequestModal] = useState({
+    visible: false,
+    kind: null, // 'password' | 'invite'
+    title: '',
+    label: '',
+    value: '',
+    busy: false,
+  });
+
   const [alert, setAlert] = useState({
     visible: false,
     title: '',
@@ -193,12 +206,45 @@ const LoginScreen = ({ route }) => {
     );
   };
 
+  // Both flows are handled in-app: we fetch AO3's form, take its CSRF token and
+  // POST it back through the ECH proxy. Opening a browser would fail entirely on
+  // networks where AO3 is blocked.
   const openForgotPassword = () => {
-    Linking.openURL('https://archiveofourown.org/users/password/new');
+    setRequestModal({
+      visible: true,
+      kind: 'password',
+      title: t('screen_account_forgot_password'),
+      label: t('account_request_login_label'),
+      value: username || '',
+      busy: false,
+    });
   };
 
   const openGetInvited = () => {
-    Linking.openURL('https://archiveofourown.org/invite_requests');
+    setRequestModal({
+      visible: true,
+      kind: 'invite',
+      title: t('screen_account_get_invited'),
+      label: t('account_request_email_label'),
+      value: '',
+      busy: false,
+    });
+  };
+
+  const submitRequest = async () => {
+    const { kind, value } = requestModal;
+    setRequestModal(m => ({ ...m, busy: true }));
+    try {
+      const message =
+        kind === 'password'
+          ? await requestPasswordReset(value)
+          : await requestInvitation(value);
+      setRequestModal(m => ({ ...m, visible: false, busy: false }));
+      showAlert(t('general_success'), message);
+    } catch (e) {
+      setRequestModal(m => ({ ...m, busy: false }));
+      showAlert(t('general_error'), e?.message ?? String(e));
+    }
   };
 
   if (validating) {
@@ -520,6 +566,90 @@ const LoginScreen = ({ route }) => {
         </View>
       </ScrollView>
 
+      <Modal
+        visible={requestModal.visible}
+        transparent
+        animationType="fade"
+        onRequestClose={() =>
+          setRequestModal(m => ({ ...m, visible: false }))
+        }
+      >
+        <View style={styles.requestOverlay}>
+          <View
+            style={[
+              styles.requestBox,
+              { backgroundColor: currentTheme.cardBackground },
+            ]}
+          >
+            <Text
+              style={[styles.requestTitle, { color: currentTheme.textColor }]}
+            >
+              {requestModal.title}
+            </Text>
+            <Text
+              style={[
+                styles.requestLabel,
+                { color: currentTheme.secondaryTextColor },
+              ]}
+            >
+              {requestModal.label}
+            </Text>
+            <TextInput
+              style={[
+                styles.requestInput,
+                {
+                  color: currentTheme.textColor,
+                  borderColor: currentTheme.borderColor,
+                  backgroundColor: currentTheme.inputBackground,
+                },
+              ]}
+              value={requestModal.value}
+              onChangeText={v => setRequestModal(m => ({ ...m, value: v }))}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType={
+                requestModal.kind === 'invite' ? 'email-address' : 'default'
+              }
+              editable={!requestModal.busy}
+            />
+            <View style={styles.requestActions}>
+              <TouchableOpacity
+                style={styles.requestAction}
+                onPress={() =>
+                  setRequestModal(m => ({ ...m, visible: false }))
+                }
+                disabled={requestModal.busy}
+              >
+                <Text style={{ color: currentTheme.secondaryTextColor }}>
+                  {t('general_cancel')}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.requestAction}
+                onPress={submitRequest}
+                disabled={requestModal.busy}
+              >
+                {requestModal.busy ? (
+                  <ActivityIndicator
+                    size="small"
+                    color={currentTheme.primaryColor}
+                  />
+                ) : (
+                  <Text
+                    style={{
+                      color: currentTheme.primaryColor,
+                      fontWeight: '600',
+                    }}
+                  >
+                    {t('account_request_submit')}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <CustomAlert
         visible={alert.visible}
         title={alert.title}
@@ -706,6 +836,36 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     marginLeft: 16,
   },
+  requestOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  requestBox: {
+    width: '100%',
+    maxWidth: 400,
+    borderRadius: 12,
+    padding: 20,
+  },
+  requestTitle: { fontSize: 17, fontWeight: '600' },
+  requestLabel: { fontSize: 13, marginTop: 8 },
+  requestInput: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 8,
+    fontSize: 15,
+  },
+  requestActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 20,
+    marginTop: 16,
+  },
+  requestAction: { paddingVertical: 8, paddingHorizontal: 8 },
 });
 
 export default LoginScreen;

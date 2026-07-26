@@ -9,6 +9,7 @@ import {
 } from '../../storage/Credentials';
 import { navigationRef } from '../../app';
 import i18n from 'i18next';
+import { echUrl } from '../echKy';
 
 export const handleLogin = async (username, password) => {
   const t = i18n.t;
@@ -56,8 +57,9 @@ export default async function login(username, password) {
     formData.append('user[remember_me]', '1');
     formData.append('commit', 'Log in');
 
-    // Send the login request
-    const response = await fetch('https://archiveofourown.org/users/login', {
+    // Send the login request through the ECH proxy (a direct fetch would be
+    // blocked on networks where AO3 is censored).
+    const response = await fetch(await echUrl('https://archiveofourown.org/users/login'), {
       method: 'POST',
       body: formData,
       credentials: 'include', // Important for cookies
@@ -74,7 +76,8 @@ export default async function login(username, password) {
       //We just need to pray cloudflare will leave me alone
     });
 
-    if (response.url === 'https://archiveofourown.org/users/login') {
+    // Still on the login page (proxied or not) means the credentials failed.
+    if (response.url && response.url.endsWith('/users/login')) {
       throw new Error('Wrong username or password');
     }
 
@@ -99,10 +102,7 @@ export default async function login(username, password) {
     }
 
     if (response.ok) {
-      if (
-        response.redirected ||
-        response.url !== 'https://archiveofourown.org/users/login'
-      ) {
+      if (response.redirected || !response.url.endsWith('/users/login')) {
         console.log(
           'Login appears successful but session cookie not found in headers',
         );

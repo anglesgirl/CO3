@@ -19,6 +19,7 @@ import { CommentsScreen } from '../components/Reader/commentsScreen';
 import { getJsonSettings } from '../storage/jsonSettings';
 import Toast from 'react-native-toast-message';
 import { useTranslation } from 'react-i18next';
+import { translateHtmlCached } from '../web/translate';
 
 const PULL_THRESHOLD = 150;
 const PROGRESS_SAVE_DEBOUNCE = 1000;
@@ -97,6 +98,43 @@ const ChapterReader = ({
   const [initialScrollAttempted, setInitialScrollAttempted] = useState(false);
   const [size, setSize] = useState(1);
   const [jsonSettings, setJsonSettings] = useState();
+
+  // Translation state: translatedHtml holds the rendered translation, and
+  // showTranslated toggles between it and the original.
+  const [translatedHtml, setTranslatedHtml] = useState(null);
+  const [showTranslated, setShowTranslated] = useState(false);
+  const [translating, setTranslating] = useState(false);
+
+  // Reset when the chapter changes.
+  useEffect(() => {
+    setTranslatedHtml(null);
+    setShowTranslated(false);
+  }, [chapterID, htmlContent]);
+
+  const handleTranslate = async () => {
+    if (translating) return;
+    if (translatedHtml) {
+      setShowTranslated(v => !v); // already have it — just toggle
+      return;
+    }
+    setTranslating(true);
+    try {
+      const out = await translateHtmlCached(
+        `ch_${chapterID || workId}`,
+        htmlContent,
+      );
+      setTranslatedHtml(out);
+      setShowTranslated(true);
+    } catch (e) {
+      Toast.show({
+        type: 'error',
+        text1: t('translate_failed'),
+        text2: e?.message ?? String(e),
+      });
+    } finally {
+      setTranslating(false);
+    }
+  };
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const webViewRef = useRef(null);
@@ -514,6 +552,23 @@ const ChapterReader = ({
           </Text>
         )}
       </View>
+
+      <TouchableOpacity
+        style={[
+          styles.translateButton,
+          { backgroundColor: currentTheme.cardBackground },
+        ]}
+        onPress={handleTranslate}
+        disabled={translating}
+      >
+        <Icon
+          name={translating ? 'hourglass-empty' : 'translate'}
+          size={22}
+          color={
+            showTranslated ? currentTheme.primaryColor : currentTheme.iconColor
+          }
+        />
+      </TouchableOpacity>
     </Animated.View>
   );
 
@@ -633,7 +688,11 @@ const ChapterReader = ({
           ref={webViewRef}
           originWhitelist={['*']}
           allowFileAccess={true}
-          source={{ html: htmlContent || `<p>${t('reader_error_fallback')}</p>` }}
+          source={{
+            html:
+              (showTranslated && translatedHtml ? translatedHtml : htmlContent) ||
+              `<p>${t('reader_error_fallback')}</p>`,
+          }}
           style={styles.webView}
           injectedJavaScript={injectedJavaScript}
           onMessage={handleMessage}
@@ -702,9 +761,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(0,0,0,0.1)',
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   titleContainer: {
+    flex: 1,
     alignItems: 'center',
+  },
+  translateButton: {
+    marginLeft: 10,
+    padding: 8,
+    borderRadius: 20,
   },
   workTitle: {
     fontSize: 18,

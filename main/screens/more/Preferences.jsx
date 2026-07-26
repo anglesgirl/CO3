@@ -29,6 +29,7 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import EchSection from '../../components/Preferences/EchSection';
 
 const PreferencesScreen = ({
   route
@@ -467,6 +468,9 @@ const PreferencesScreen = ({
             </CustomDropdown>
           </View>
         </View>
+
+        {/* NETWORK / ECH SETTINGS */}
+        <EchSection theme={activeTheme} />
 
         {/* READER SETTINGS */}
         <View

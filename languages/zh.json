@@ -14,22 +14,17 @@
   "general_unknown_work": "未知作品",
   "general_back": "返回",
   "general_not_applicable": "不适用",
-
-
   "onboard_step1_title": "免费、开源的 AO3 阅读器",
   "onboard_step1_ligne1": "无订阅。无广告。无付费墙功能。",
   "onboard_step1_ligne2": "只有你的故事，以它本该有的样子呈现。",
   "onboard_step1_button": "开始使用",
-
   "onboard_step2_language_title": "选择你的语言",
   "onboard_step2_language_sub": "选择你最习惯的语言。之后可以在设置中更改。",
   "onboard_step2_button": "继续",
-
   "onboard_step3_title": "选择你的主题",
   "onboard_step3_sub": "选择 CO3 的外观。之后随时可以更改。",
   "onboard_step3_info_text": "更多显示选项、字号、视图密度等，都可在“偏好设置”菜单中调整。",
   "onboard_step3_button": "继续",
-
   "onboard_step4_title": "支持这个生态",
   "onboard_step4_sub": "CO3 将永远 100% 免费。但如果你愿意回馈，可以这样做：",
   "onboard_step4_ao3_label": "Archive of Our Own",
@@ -39,15 +34,11 @@
   "onboard_step4_co3_desc": "CO3 由业余时间开发和维护。任何支持都有助于持续带来新功能。",
   "onboard_step4_co3_cta": "请我喝杯咖啡",
   "onboard_step4_button": "开始阅读",
-
-
   "navigation_library": "书库",
   "navigation_update": "更新",
   "navigation_browse": "浏览",
   "navigation_history": "历史",
   "navigation_more": "更多",
-
-
   "screen_library_title": "你的书库",
   "screen_library_loading": "正在加载书库……",
   "screen_library_loading_failed": "书库加载失败",
@@ -67,8 +58,6 @@
   "screen_library_sort_selector_alphabetical": "按字母顺序",
   "screen_library_sort_selector_date": "添加日期",
   "screen_library_select_category_modal_title": "选择合集",
-
-
   "screen_update_last_updated": "书库上次更新：{{last_update}}",
   "screen_update_time_now": "刚刚",
   "screen_update_time_minute": "{{count}} 分钟前",
@@ -83,8 +72,6 @@
   "screen_update_yesterday": "昨天",
   "screen_update_earlier": "更早",
   "screen_update_loading": "正在加载更新……",
-
-
   "screen_browse_title": "浏览作品",
   "screen_browse_subtitle": "已加载 {{count}} 部作品",
   "screen_browse_filter_summary": "已应用 {{count}} 个筛选",
@@ -93,15 +80,11 @@
   "screen_browse_end": "没有更多作品了",
   "screen_browse_loading": "正在加载作品……",
   "screen_browse_error": "作品加载失败",
-
-
   "screen_history_title": "阅读历史",
   "screen_history_clear_title": "清除历史",
   "screen_history_clear_text": "确定要清除所有阅读历史吗？",
   "screen_history_clear_button": "清除",
   "screen_history_loading": "正在加载历史……",
-
-
   "screen_more_title": "更多选项",
   "screen_more_subtitle": "更多设置与功能",
   "screen_more_nav_preference": "偏好设置",
@@ -114,8 +97,6 @@
   "screen_more_nav_data": "数据与存储",
   "screen_more_nav_about": "关于",
   "screen_more_nav_help": "帮助",
-
-
   "screen_preferences_title": "设置",
   "screen_preferences_title_general": "通用",
   "screen_preferences_title_reader": "阅读器",
@@ -168,8 +149,36 @@
   "screen_preferences_onboarding_button_text": "再次浏览设置引导页面",
   "screen_preferences_onboarding_title": "重新开始引导",
   "screen_preferences_onboarding_text": "这会带你重新浏览设置引导页面。继续吗？",
-
-
+  "ech_title": "网络与连接（ECH）",
+  "ech_desc": "通过加密 SNI 直连 AO3，可绕过基于域名的封锁。配置一般会自动获取，无需手动设置。",
+  "ech_status_button": "检测连接状态",
+  "ech_status_testing": "正在检测……",
+  "ech_status_ok": "连接正常，ECH 已生效",
+  "ech_status_ok_no_ech": "能连上，但 ECH 未生效",
+  "ech_status_failed": "连接失败",
+  "ech_advanced": "高级设置",
+  "ech_config_domain": "远程配置域名",
+  "ech_config_domain_desc": "从该域名的 TXT 记录自动获取 DoH 和优选 IP。",
+  "ech_get_remote_doh": "获取远程 DoH",
+  "ech_get_remote_ip": "获取远程优选 IP",
+  "ech_reenable_auto": "恢复自动配置",
+  "ech_doh_label": "DoH 服务器",
+  "ech_doh_desc": "用于解析域名，绕过 DNS 污染。",
+  "ech_ip_label": "优选 IP（可选）",
+  "ech_ip_desc": "多个用逗号分隔。仅改变连接线路，不影响加密。留空则使用 DNS 解析。",
+  "ech_save_restart": "保存并重启",
+  "ech_reset_default": "恢复默认",
+  "ech_clear": "清空",
+  "ech_applied": "已应用并重启代理",
+  "ech_fetch_failed": "获取失败",
+  "ech_auto_restored": "已恢复自动配置",
+  "translate_title": "翻译",
+  "translate_button": "翻译",
+  "translate_show_original": "显示原文",
+  "translate_translating": "正在翻译……",
+  "translate_failed": "翻译失败",
+  "translate_target_language": "翻译目标语言",
+  "translate_translated_by": "由谷歌翻译提供",
   "screen_account_title": "账号",
   "screen_account_text": "使用你的 AO3 账号登录",
   "screen_account_username": "用户名",
@@ -192,8 +201,6 @@
   "screen_account_logged_in_title": "你已登录",
   "screen_account_logged_in_subtitle": "你的会话处于活动状态",
   "screen_account_check_session_button": "检查当前会话",
-
-
   "screen_kudos_history_title": "点赞历史",
   "screen_kudos_history_clear_title": "清除点赞历史",
   "screen_kudos_history_clear_message": "确定要清除所有点赞历史吗？",
@@ -202,8 +209,6 @@
   "screen_kudos_history_no_entries_filter_sub": "没有与筛选匹配的条目",
   "screen_kudos_history_no_entries": "暂无点赞历史",
   "screen_kudos_history_no_entries_sub": "点赞过的作品会显示在这里",
-
-
   "screen_bookmarks_title": "书签",
   "screen_bookmarks_title_username": "{{username}} 的书签",
   "screen_bookmarks_error": "书签加载失败",
@@ -212,8 +217,6 @@
   "screen_bookmarks_loading_more": "正在加载更多……",
   "screen_bookmarks_empty_title": "还没有书签。",
   "screen_bookmarks_empty_subtitle": "收藏的作品会显示在这里。",
-
-
   "screen_read_later_title": "稍后阅读",
   "screen_read_later_loading": "正在加载条目……",
   "screen_read_later_loading_more": "正在加载更多……",
@@ -221,8 +224,6 @@
   "screen_read_later_error_not_logged_in": "请登录以查看你账号上标记为稍后阅读的作品。",
   "screen_read_later_empty": "还没有作品。",
   "screen_read_later_empty_sub": "把作品标记为稍后阅读，就会显示在这里。",
-
-
   "screen_category_title": "管理分类",
   "screen_category_new_category": "新建分类",
   "screen_category_new_category_count": "新建分类 {{count}}",
@@ -230,8 +231,6 @@
   "screen_category_duplicate_message": "已存在名为 {{trimmedName}} 的分类。",
   "screen_category_delete_title": "删除分类",
   "screen_category_delete_message": "确定要删除 {{category}} 吗？",
-
-
   "screen_stats_title": "统计",
   "screen_stats_reading_activity": "阅读活动",
   "screen_stats_chapter_read": "已读章节",
@@ -242,16 +241,12 @@
   "screen_stats_work_count_plural": "{{count}} 部作品",
   "screen_stats_no_data": "暂无数据",
   "screen_stats_preferred_tags": "偏好标签",
-
-
   "screen_storage_title": "数据与存储",
   "screen_storage_section_database": "数据库",
   "screen_storage_button_export_database": "导出数据库",
   "screen_storage_export_database_success": "已导出数据库",
   "screen_storage_export_database_success_sub": "数据库已导出到下载文件夹。",
   "screen_storage_export_database_error_generic": "导出数据库失败",
-
-
   "screen_about_title": "关于 CO3",
   "screen_about_sub": "开源的 AO3 移动阅读器",
   "screen_about_text_1": "CO3 是一个开源项目，旨在让在移动设备上阅读 AO3 变得轻松许多。",
@@ -261,37 +256,28 @@
   "screen_about_discord": "Discord",
   "screen_about_support": "支持我",
   "screen_about_version": "版本 {{co3Version}}",
-
-
   "screen_help_title": "帮助",
   "screen_help_sub": "需要帮助或遇到问题了吗？",
   "screen_help_discord": "在 Discord 上提问",
   "screen_help_github": "在 GitHub 上提交 issue",
-
-
   "screen_advancedSearch_title": "作品搜索",
   "screen_advancedSearch_presets_button": "预设",
   "screen_advancedSearch_save_button": "保存",
   "screen_advancedSearch_close_button": "关闭",
   "screen_advancedSearch_search_button": "搜索",
-
-
   "screen_advancedSearch_save_preset_modal_title": "保存预设",
   "screen_advancedSearch_preset_name_label": "预设名称",
   "screen_advancedSearch_preset_name_placeholder": "输入预设名称",
   "screen_advancedSearch_add_button": "添加",
   "screen_advancedSearch_update_button": "更新",
   "screen_advancedSearch_no_presets": "你还没有任何预设！",
-
   "screen_advancedSearch_canonical_tag_banner": "正在浏览规范标签：{{tag}}",
   "screen_advancedSearch_no_canonical_tag_banner": "未提供规范标签。将无法使用排除项。",
-
   "screen_advancedSearch_filter_work_info": "作品信息",
   "screen_advancedSearch_filter_work_tags": "作品标签",
   "screen_advancedSearch_filter_exclude": "排除作品标签",
   "screen_advancedSearch_filter_stats": "作品数据",
   "screen_advancedSearch_filter_search_options": "搜索选项",
-
   "screen_advancedSearch_label_any_field": "任意字段",
   "screen_advancedSearch_placeholder_any_field": "在所有字段中搜索",
   "screen_advancedSearch_label_title": "标题",
@@ -306,7 +292,6 @@
   "screen_advancedSearch_label_word_count": "字数",
   "screen_advancedSearch_placeholder_word_count": "例如 >1000、1000-5000",
   "screen_advancedSearch_label_language": "语言",
-
   "screen_advancedSearch_label_fandoms": "同人圈",
   "screen_advancedSearch_placeholder_fandoms": "例如 哈利·波特、漫威",
   "screen_advancedSearch_label_rating": "分级",
@@ -318,14 +303,12 @@
   "screen_advancedSearch_placeholder_relationships": "例如 哈利·波特/德拉科·马尔福",
   "screen_advancedSearch_label_additional_tags": "附加标签",
   "screen_advancedSearch_placeholder_additional_tags": "例如 亲如家人、伤害/安慰",
-
   "screen_advancedSearch_label_exclude_fandoms": "排除同人圈",
   "screen_advancedSearch_label_exclude_characters": "排除角色",
   "screen_advancedSearch_label_exclude_relationships": "排除配对",
   "screen_advancedSearch_label_exclude_additional_tags": "排除附加标签",
   "screen_advancedSearch_label_exclude_ratings": "排除分级",
   "screen_advancedSearch_label_exclude_warnings": "排除预警",
-
   "screen_advancedSearch_label_hits": "点击数",
   "screen_advancedSearch_placeholder_hits": "例如 >1000",
   "screen_advancedSearch_label_kudos": "点赞数",
@@ -334,10 +317,8 @@
   "screen_advancedSearch_placeholder_comments": "例如 >10",
   "screen_advancedSearch_label_bookmarks": "书签数",
   "screen_advancedSearch_placeholder_bookmarks": "例如 >50",
-
   "screen_advancedSearch_label_sort_by": "排序方式",
   "screen_advancedSearch_label_sort_direction": "排序方向",
-
   "screen_advancedSearch_sort_best_match": "最佳匹配",
   "screen_advancedSearch_sort_creator": "创作者",
   "screen_advancedSearch_sort_title": "标题",
@@ -348,45 +329,37 @@
   "screen_advancedSearch_sort_kudos": "点赞数",
   "screen_advancedSearch_sort_comments": "评论数",
   "screen_advancedSearch_sort_bookmarks": "书签数",
-
   "screen_advancedSearch_sort_ascending": "升序",
   "screen_advancedSearch_sort_descending": "降序",
-
   "screen_advancedSearch_rating_any": "任意分级",
   "screen_advancedSearch_rating_not_rated": "未分级",
   "screen_advancedSearch_rating_general_audiences": "大众级",
   "screen_advancedSearch_rating_teen_and_up": "青少年及以上",
   "screen_advancedSearch_rating_mature": "成人向",
   "screen_advancedSearch_rating_explicit": "限制级",
-
   "screen_advancedSearch_warning_creator_chose_not_to_use": "创作者选择不使用存档预警",
   "screen_advancedSearch_warning_graphic_depictions": "暴力的直观描写",
   "screen_advancedSearch_warning_major_character_death": "主要角色死亡",
   "screen_advancedSearch_warning_no_archive_warnings": "不适用存档预警",
   "screen_advancedSearch_warning_rape_noncon": "强奸/非自愿",
   "screen_advancedSearch_warning_underage_sex": "未成年性行为",
-
   "screen_advancedSearch_category_ff": "F/F",
   "screen_advancedSearch_category_fm": "F/M",
   "screen_advancedSearch_category_gen": "Gen（无 CP）",
   "screen_advancedSearch_category_mm": "M/M",
   "screen_advancedSearch_category_multi": "多元",
   "screen_advancedSearch_category_other": "其他",
-
   "screen_advancedSearch_crossover_include": "包含跨圈作品",
   "screen_advancedSearch_crossover_exclude": "排除跨圈作品",
   "screen_advancedSearch_crossover_only": "仅跨圈作品",
-
   "screen_advancedSearch_completion_all": "全部作品",
   "screen_advancedSearch_completion_complete_only": "仅完结作品",
   "screen_advancedSearch_completion_wip_only": "仅连载中作品",
-
   "reader_incognito_mode": "无痕模式",
   "reader_pull_up_next": "上拉进入下一章",
   "reader_release_next": "松开进入下一章",
   "reader_error_fallback": "如果你看到这句话，说明出了严重的错误",
   "reader_error_opening_link": "打开链接出错",
-
   "global_search_search_in_library": "在书库中搜索",
   "global_search_start_searching": "开始搜索",
   "global_search_search_across": "跨标签、同人圈、配对、角色等搜索",
@@ -402,7 +375,6 @@
   "global_search_section_relationships": "配对",
   "global_search_section_characters": "角色",
   "global_search_section_freeform": "自由标签",
-
   "screen_user_profile_title": "用户主页",
   "screen_user_profile_loading": "正在加载主页……",
   "screen_user_profile_error_load": "加载用户数据失败",
@@ -411,7 +383,6 @@
   "screen_user_profile_bio": "简介",
   "screen_user_profile_bookmark_button": "书签",
   "screen_user_profile_works_button": "作品",
-
   "screen_work_loading": "正在加载作品信息……",
   "screen_work_not_found": "未找到作品",
   "screen_work_add_to_library": "加入书库",
@@ -436,7 +407,6 @@
   "screen_work_refresh": "刷新",
   "screen_work_bookmark": "书签",
   "screen_work_mark_for_later": "标记为稍后阅读",
-
   "screen_work_toast_error_deleting": "删除出错",
   "screen_work_toast_removed_from_library": "已从书库移除",
   "screen_work_toast_added_to_library": "已加入书库",
@@ -455,14 +425,10 @@
   "screen_work_toast_error_loading_work": "加载作品时出了点问题。",
   "screen_work_toast_no_new_chapters_to_download": "没有可下载的新章节",
   "screen_work_toast_added_chapters_to_queue": "已将 {{count}} 章加入下载列表。",
-
-
   "component_side_menu_title": "设置",
   "component_side_menu_incognito_switch": "无痕模式",
   "component_side_menu_support": "支持我们",
-
   "component_update_work_card_author": "作者：{{author}}",
-
   "component_calendar_title": "选择日期范围",
   "component_calendar_sub_start_end": "已选择：{{start}} 至 {{end}}",
   "component_calendar_sub_start": "已选择：{{start}}（点击另一个日期设为结束）",
@@ -470,34 +436,27 @@
   "component_calendar_clear": "清除选择",
   "component_calendar_apply": "应用筛选",
   "component_calendar_show_all": "显示全部",
-
   "component_empty_title": "还没有阅读历史",
   "component_empty_sub": "开始阅读，进度就会显示在这里",
   "component_empty_for_range_title": "所选日期没有阅读历史",
   "component_empty_for_range_sub": "试试选择其他日期",
-
   "component_history_header_count_filtered": "所选日期范围内有 {{totalCount}} 条记录",
   "component_history_header_count": "共 {{totalCount}} 条记录",
   "component_history_header_count_filtered_plural": "所选日期范围内有 {{totalCount}} 条记录",
   "component_history_header_count_plural": "共 {{totalCount}} 条记录",
   "component_history_header_clear_filter": "清除筛选",
   "component_history_header_clear_history": "清除",
-
   "component_history_item_date_today": "今天 {{time}}",
   "component_history_item_date_yesterday": "昨天 {{time}}",
   "component_history_item_date_day": "{{days}} 天前",
   "component_history_item_chapter_start": "第 {{start}} 章",
   "component_history_item_chapter_start_end": "第 {{start}} 至 {{end}} 章",
-
   "component_kudo_list_loading_more": "正在加载更多……",
   "component_kudo_list_end": "你已经到达点赞历史的末尾",
-
   "component_list_loading_more": "正在加载更多……",
   "component_list_end": "你已经到达阅读历史的末尾",
-
   "component_book_card_show_more_button": "显示标签和预警",
   "component_book_card_show_more_button_med": "显示标签、预警和简介",
-
   "component_generic_updated": "更新于：{{date}}",
   "component_generic_kudos": "{{count}} 个赞",
   "component_generic_chapter": "{{chapters}} 章",
@@ -505,7 +464,6 @@
   "component_generic_views": "{{views}} 次浏览",
   "component_generic_words": "{{words}} 字",
   "component_generic_language": "{{language}}",
-
   "component_book_details_modal_title": "“{{title}}”的详情",
   "component_book_details_modal_title_tags_and_warning": "“{{title}}”的标签和预警",
   "component_book_details_modal_title_tags": "“{{title}}”的所有标签",
@@ -515,7 +473,6 @@
   "component_book_details_modal_warnings": "预警：",
   "component_book_details_modal_no_warnings": "此作品没有特定预警。",
   "component_book_details_modal_desc": "简介：",
-
   "component_quick_actions_toast_library_remove_success_title": "已从书库移除",
   "component_quick_actions_toast_library_remove_success_sub": "已成功将此作品从书库移除",
   "component_quick_actions_toast_library_remove_failed_title": "移除失败",
@@ -537,7 +494,6 @@
   "component_quick_actions_button_mark_later": "标记为稍后阅读",
   "component_quick_actions_button_bookmark": "收藏",
   "component_quick_actions_add_collection": "加入合集",
-
   "component_comments_title": "评论",
   "component_comments_deleted": "评论已删除",
   "component_comments_author_deleted": "已删除的用户",
@@ -546,7 +502,8 @@
   "component_comments_loading": "正在加载评论……",
   "component_comments_none": "暂无评论",
   "component_comments_end": "没有更多评论",
-
-  "component_update_bookcard_deletion_failed": "删除出错"
-
+  "component_update_bookcard_deletion_failed": "删除出错",
+  "account_request_login_label": "输入你的用户名或邮箱，AO3 会给你发送重置链接。",
+  "account_request_email_label": "输入你的邮箱地址，加入邀请队列。",
+  "account_request_submit": "提交"
 }

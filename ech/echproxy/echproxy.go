@@ -474,6 +474,54 @@ func resolveViaDoH(host, endpoint string) ([]string, error) {
 	return out, nil
 }
 
+// quotedRe extracts the quoted chunks of a TXT record. Long TXT values are
+// split into multiple 255-byte strings, which DoH returns as "a" "b".
+var quotedRe = regexp.MustCompile(`"([^"]*)"`)
+
+// FetchTxt looks up the TXT records of `name` over DoH and returns them, one
+// record per line, with quoting removed and split chunks re-joined.
+//
+// Used for remote configuration: the operator publishes a TXT record such as
+//
+//	v=co3ech1; doh=https://example.com/dns-query; ip=104.20.8.2,104.20.9.2
+//
+// so end users can pull working settings without knowing what DoH even is.
+// The lookup itself goes over DoH, so a poisoned system resolver can't spoof it.
+func FetchTxt(doh, name string) (string, error) {
+	if strings.TrimSpace(doh) == "" {
+		return "", errors.New("no DoH endpoint configured")
+	}
+	if strings.TrimSpace(name) == "" {
+		return "", errors.New("no config domain given")
+	}
+	dr, err := dohQuery(doh, name, "TXT")
+	if err != nil {
+		return "", err
+	}
+	var lines []string
+	for _, a := range dr.Answer {
+		if a.Type != 16 { // TXT
+			continue
+		}
+		s := a.Data
+		if m := quotedRe.FindAllStringSubmatch(s, -1); len(m) > 0 {
+			var b strings.Builder
+			for _, g := range m {
+				b.WriteString(g[1])
+			}
+			s = b.String()
+		}
+		s = strings.TrimSpace(s)
+		if s != "" {
+			lines = append(lines, s)
+		}
+	}
+	if len(lines) == 0 {
+		return "", errors.New("no TXT records found for " + name)
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
 var echParamRe = regexp.MustCompile(`ech="?([A-Za-z0-9+/=]+)"?`)
 
 // fetchECHViaDoH queries the HTTPS (type 65) record and pulls the ech= SvcParam.

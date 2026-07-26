@@ -64,6 +64,21 @@ class EchProxyModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    /**
+     * Looks up the TXT records of [name] over [doh] and resolves with their
+     * contents (one record per line). Used to pull remote DoH/IP settings.
+     */
+    @ReactMethod
+    fun fetchTxt(doh: String, name: String, promise: Promise) {
+        io.execute {
+            try {
+                promise.resolve(Echproxy.fetchTxt(doh, name))
+            } catch (e: Throwable) {
+                promise.reject("ECH_TXT_FAILED", e.message, e)
+            }
+        }
+    }
+
     /** Returns the latest proxy status line (handshake result / errors). */
     @ReactMethod
     fun status(promise: Promise) {

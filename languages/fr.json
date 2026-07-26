@@ -14,22 +14,17 @@
   "general_unknown_work": "Œuvre Inconnu",
   "general_back": "Retour",
   "general_not_applicable": "Non applicable",
-
-
   "onboard_step1_title": "Le lecteur AO3 gratuit et open source",
   "onboard_step1_ligne1": "Aucun abonnement. Aucune publicité. Aucune fonctionnalité payante.",
   "onboard_step1_ligne2": "Vos histoires, comme elles se doivent d'être.",
   "onboard_step1_button": "Commencer",
-
   "onboard_step2_language_title": "Choisissez votre langue",
   "onboard_step2_language_sub": "Choisissez la langue avec laquelle vous êtes le plus à l'aise. Vous pourrez la changer plus tard dans les paramètres.",
   "onboard_step2_button": "Continuer",
-
   "onboard_step3_title": "Choisissez votre thème",
   "onboard_step3_sub": "Choisissez l'apparence de CO3. Vous pouvez toujours la changer plus tard.",
   "onboard_step3_info_text": "Plus d'options d'affichage, taille de police, densité d'affichage, etc. sont disponibles dans le menu Préférences.",
   "onboard_step3_button": "Continuer",
-
   "onboard_step4_title": "Soutenir l'écosystème",
   "onboard_step4_sub": "CO3 sera toujours 100 % gratuit. Mais si vous souhaitez contribuer, voici comment :",
   "onboard_step4_ao3_label": "Archive of Our Own",
@@ -39,15 +34,11 @@
   "onboard_step4_co3_desc": "CO3 est développé et maintenu sur du temps libre. Tout soutien aide à apporter de nouvelles fonctionnalités.",
   "onboard_step4_co3_cta": "Offrez-moi un café",
   "onboard_step4_button": "Commencer à lire",
-
-
   "navigation_library": "Bibliothèque",
   "navigation_update": "Mise à jour",
   "navigation_browse": "Navigation",
   "navigation_history": "Historique",
   "navigation_more": "Plus",
-
-
   "screen_library_title": "Bibliothèque",
   "screen_library_loading": "Chargement de la bibliothèque...",
   "screen_library_loading_failed": "Échec du chargement de la bibliothèque",
@@ -67,7 +58,6 @@
   "screen_library_sort_selector_alphabetical": "Ordre alphabétique",
   "screen_library_sort_selector_date": "Date d'ajout",
   "screen_library_select_category_modal_title": "Sélectionner une collection",
-
   "screen_update_last_updated": "Dernière mise à jour de la bibliothèque : {{last_update}}",
   "screen_update_time_now": "maintenant",
   "screen_update_time_minute": "il y a {{count}} minute",
@@ -82,8 +72,6 @@
   "screen_update_yesterday": "Hier",
   "screen_update_earlier": "Plus tôt",
   "screen_update_loading": "Chargement des mises à jour...",
-
-
   "screen_browse_title": "Parcourir les œuvres",
   "screen_browse_subtitle": "{{count}} œuvres chargées",
   "screen_browse_filter_summary": "{{count}} filtre appliqué",
@@ -92,15 +80,11 @@
   "screen_browse_end": "Plus aucune œuvre à charger",
   "screen_browse_loading": "Chargement des œuvres...",
   "screen_browse_error": "Échec du chargement des œuvres",
-
-
   "screen_history_title": "Historique de lecture",
   "screen_history_clear_title": "Vider l'historique",
   "screen_history_clear_text": "Êtes-vous sûr(e) que vous voulez supprimer l'intégralité de votre historique de lecture ?",
   "screen_history_clear_button": "Vider",
   "screen_history_loading": "Chargement de l'historique...",
-
-
   "screen_more_title": "Plus d'options",
   "screen_more_subtitle": "Paramètres et fonctionnalités additionnels",
   "screen_more_nav_preference": "Préférences",
@@ -113,8 +97,6 @@
   "screen_more_nav_data": "Données et Stockage",
   "screen_more_nav_about": "À propos",
   "screen_more_nav_help": "Aide",
-
-
   "screen_preferences_title": "Paramètres",
   "screen_preferences_title_general": "Général",
   "screen_preferences_title_reader": "Lecteur",
@@ -163,10 +145,38 @@
   "screen_preferences_selector_download_while_reading_next_10": "Les 10 prochains chapitres",
   "screen_preferences_onboarding_button_title": "Refaire le processus d'accueil",
   "screen_preferences_onboarding_button_text": "Parcourez à nouveau les écrans de configuration",
+  "ech_title": "Réseau et connexion (ECH)",
+  "ech_desc": "Se connecte à AO3 avec un SNI chiffré, ce qui contourne le blocage par domaine. Les réglages sont normalement récupérés automatiquement.",
+  "ech_status_button": "Vérifier la connexion",
+  "ech_status_testing": "Vérification...",
+  "ech_status_ok": "Connecté — ECH actif",
+  "ech_status_ok_no_ech": "Connecté, mais ECH inactif",
+  "ech_status_failed": "Échec de la connexion",
+  "ech_advanced": "Avancé",
+  "ech_config_domain": "Domaine de configuration distante",
+  "ech_config_domain_desc": "Récupère le point d'accès DoH et les IP préférées depuis l'enregistrement TXT de ce domaine.",
+  "ech_get_remote_doh": "Obtenir le DoH distant",
+  "ech_get_remote_ip": "Obtenir les IP distantes",
+  "ech_reenable_auto": "Réactiver la config auto",
+  "ech_doh_label": "Serveur DoH",
+  "ech_doh_desc": "Résout les domaines sans passer par le DNS système.",
+  "ech_ip_label": "IP préférées (facultatif)",
+  "ech_ip_desc": "Séparées par des virgules. Modifie seulement la route, jamais le chiffrement. Vide = utiliser le DNS.",
+  "ech_save_restart": "Enregistrer et redémarrer",
+  "ech_reset_default": "Réinitialiser",
+  "ech_clear": "Effacer",
+  "ech_applied": "Appliqué — proxy redémarré",
+  "ech_fetch_failed": "Échec de la récupération",
+  "ech_auto_restored": "Configuration automatique restaurée",
+  "translate_title": "Traduction",
+  "translate_button": "Traduire",
+  "translate_show_original": "Afficher l'original",
+  "translate_translating": "Traduction en cours...",
+  "translate_failed": "Échec de la traduction",
+  "translate_target_language": "Traduire vers",
+  "translate_translated_by": "Traduit par Google",
   "screen_preferences_onboarding_title": "Recommencer le processus d'accueil.",
   "screen_preferences_onboarding_text": "Ceci vous ramènera aux écrans de configuration. Continuer ?",
-
-
   "screen_account_title": "Compte",
   "screen_account_text": "Se connecter avec votre compte AO3",
   "screen_account_username": "Nom d'utilisateur",
@@ -189,8 +199,6 @@
   "screen_account_logged_in_title": "Vous êtes connecté(e)",
   "screen_account_logged_in_subtitle": "Votre session est active",
   "screen_account_check_session_button": "Vérifier la session actuelle",
-
-
   "screen_kudos_history_title": "Historique des likes",
   "screen_kudos_history_clear_title": "Vider l'historique des likes",
   "screen_kudos_history_clear_message": "Êtes-vous sûr(e) que vous voulez effacer l'intégralité de votre historique des likes ?",
@@ -199,8 +207,6 @@
   "screen_kudos_history_no_entries_filter_sub": "Il n'y a aucune entrée correspondante aux filtres",
   "screen_kudos_history_no_entries": "Aucun historique des likes pour le moment",
   "screen_kudos_history_no_entries_sub": "Les œuvres likées apparaîtront ici",
-
-
   "screen_bookmarks_title": "Marque-pages",
   "screen_bookmarks_title_username": "Les marque-pages de {{username}}",
   "screen_bookmarks_error": "Impossible de charger les marque-pages",
@@ -209,8 +215,6 @@
   "screen_bookmarks_loading_more": "Chargement...",
   "screen_bookmarks_empty_title": "Aucun marque-page pour l'instant.",
   "screen_bookmarks_empty_subtitle": "Les œuvres avec marque-page apparaîtront ici.",
-
-
   "screen_read_later_title": "Marquées pour plus tard",
   "screen_read_later_loading": "Chargement des entrées...",
   "screen_read_later_loading_more": "Chargement...",
@@ -218,8 +222,6 @@
   "screen_read_later_error_not_logged_in": "Merci de vous connecter pour voir les œuvre marquées pour plus tard sur votre compte.",
   "screen_read_later_empty": "Aucune œuvre pour l'instant.",
   "screen_read_later_empty_sub": "Les œuvres marquées pour plus tard apparaîtront ici.",
-
-
   "screen_category_title": "Gérer les catégories",
   "screen_category_new_category": "Nouvelle catégorie",
   "screen_category_new_category_count": "Nouvelle catégorie {{count}}",
@@ -227,8 +229,6 @@
   "screen_category_duplicate_message": "Une catégorie nommée {{trimmedName}} existe déjà.",
   "screen_category_delete_title": "Supprimer la catégorie",
   "screen_category_delete_message": "Êtes-vous sûr(e) que vous voulez supprimer la catégorie {{category}} ?",
-
-
   "screen_stats_title": "Statistiques",
   "screen_stats_reading_activity": "ACTIVITÉ DE LECTURE",
   "screen_stats_chapter_read": "Chapitres lus",
@@ -239,16 +239,12 @@
   "screen_stats_work_count_plural": "{{count}} œuvres",
   "screen_stats_no_data": "Aucune donnée pour l'instant",
   "screen_stats_preferred_tags": "Balises préférées",
-
-
   "screen_storage_title": "Donnée et stockage",
   "screen_storage_section_database": "Base de donnée",
   "screen_storage_button_export_database": "Exporter la base donnée",
   "screen_storage_export_database_success": "Base de donnée exportée",
   "screen_storage_export_database_success_sub": "Exportée dans le dossier de téléchargements",
   "screen_storage_export_database_error_generic": "Impossible d'exporter la base de donnée",
-
-
   "screen_about_title": "À propos de CO3",
   "screen_about_sub": "Le lecteur mobile open source pour AO3",
   "screen_about_text_1": "CO3 est un projet open source qui a pour but de rendre la lecture d'AO3 sur mobile bien plus simple.",
@@ -258,37 +254,28 @@
   "screen_about_discord": "Discord",
   "screen_about_support": "Supportez moi",
   "screen_about_version": "Version {{co3Version}}",
-
-
   "screen_help_title": "Aide",
   "screen_help_sub": "Avez-vous besoin d'aide ou avez-vous le moindre problème ?",
   "screen_help_discord": "Demander sur le Discord",
   "screen_help_github": "Ouvrir un ticket sur GitHub",
-
-
   "screen_advancedSearch_title": "Rechercher",
   "screen_advancedSearch_presets_button": "Préréglages",
   "screen_advancedSearch_save_button": "Enregistrer",
   "screen_advancedSearch_close_button": "Fermer",
   "screen_advancedSearch_search_button": "Rechercher",
-
-
   "screen_advancedSearch_save_preset_modal_title": "Sauvegarder les préréglages",
   "screen_advancedSearch_preset_name_label": "Nom du préréglage",
   "screen_advancedSearch_preset_name_placeholder": "Entrer le nom du préréglage",
   "screen_advancedSearch_add_button": "Ajouter",
   "screen_advancedSearch_update_button": "Mettre à jour",
   "screen_advancedSearch_no_presets": "Vous n'avez aucun préréglage pour le moment !",
-
   "screen_advancedSearch_canonical_tag_banner": "Parcourir les balises canoniques : {{tag}}",
   "screen_advancedSearch_no_canonical_tag_banner": "Aucune balise canonique n'a été fournie. Les exclusions ne seront pas valide.",
-
   "screen_advancedSearch_filter_work_info": "Information de l'œuvre",
   "screen_advancedSearch_filter_work_tags": "Balises de l'œuvre",
   "screen_advancedSearch_filter_exclude": "Balise exclut de l'œuvre",
   "screen_advancedSearch_filter_stats": "Statistiques de l'œuvre",
   "screen_advancedSearch_filter_search_options": "Options de recherche",
-
   "screen_advancedSearch_label_any_field": "N'importe quel champ",
   "screen_advancedSearch_placeholder_any_field": "Rechercher dans tous les champs",
   "screen_advancedSearch_label_title": "Titre",
@@ -303,7 +290,6 @@
   "screen_advancedSearch_label_word_count": "Nombre de mots",
   "screen_advancedSearch_placeholder_word_count": "p.ex., >1000, 1000-5000",
   "screen_advancedSearch_label_language": "Langue",
-
   "screen_advancedSearch_label_fandoms": "Communauté des fans",
   "screen_advancedSearch_placeholder_fandoms": "p.ex., Harry Potter, Marvel",
   "screen_advancedSearch_label_rating": "Notations",
@@ -315,14 +301,12 @@
   "screen_advancedSearch_placeholder_relationships": "p.ex., Harry Potter/Draco Malfoy",
   "screen_advancedSearch_label_additional_tags": "Balises additionnelles",
   "screen_advancedSearch_placeholder_additional_tags": "p.ex., Found Family, Hurt/Comfort",
-
   "screen_advancedSearch_label_exclude_fandoms": "Exclure la communauté des fans",
   "screen_advancedSearch_label_exclude_characters": "Exclure les caractères",
   "screen_advancedSearch_label_exclude_relationships": "Exclure les relations",
   "screen_advancedSearch_label_exclude_additional_tags": "Exclure les balises additionnelles",
   "screen_advancedSearch_label_exclude_ratings": "Exclure les notations",
   "screen_advancedSearch_label_exclude_warnings": "Exclure les avertissements",
-
   "screen_advancedSearch_label_hits": "Vues",
   "screen_advancedSearch_placeholder_hits": "p.ex., >1000",
   "screen_advancedSearch_label_kudos": "Likes",
@@ -331,10 +315,8 @@
   "screen_advancedSearch_placeholder_comments": "p.ex., >10",
   "screen_advancedSearch_label_bookmarks": "Marque-pages",
   "screen_advancedSearch_placeholder_bookmarks": "p.ex., >50",
-
   "screen_advancedSearch_label_sort_by": "Trier par",
   "screen_advancedSearch_label_sort_direction": "Direction du trie",
-
   "screen_advancedSearch_sort_best_match": "Meilleure correspondance",
   "screen_advancedSearch_sort_creator": "Createur",
   "screen_advancedSearch_sort_title": "Titre",
@@ -345,45 +327,37 @@
   "screen_advancedSearch_sort_kudos": "Likes",
   "screen_advancedSearch_sort_comments": "Commentaires",
   "screen_advancedSearch_sort_bookmarks": "Marque-pages",
-
   "screen_advancedSearch_sort_ascending": "Ascendant",
   "screen_advancedSearch_sort_descending": "Descendant",
-
   "screen_advancedSearch_rating_any": "N'importe quelle notation",
   "screen_advancedSearch_rating_not_rated": "Sans notation",
   "screen_advancedSearch_rating_general_audiences": "Audience général",
   "screen_advancedSearch_rating_teen_and_up": "Audience à partir de l'adolescence",
   "screen_advancedSearch_rating_mature": "Mature",
   "screen_advancedSearch_rating_explicit": "Explicite",
-
   "screen_advancedSearch_warning_creator_chose_not_to_use": "Le créateur/La créatrice a choisit de ne pas utilisé l'avertissement de l'archivage",
   "screen_advancedSearch_warning_graphic_depictions": "Représentation graphique de violences",
   "screen_advancedSearch_warning_major_character_death": "Mort d'un personnage principal",
   "screen_advancedSearch_warning_no_archive_warnings": "Aucune application d'avertissement de l'archivage",
   "screen_advancedSearch_warning_rape_noncon": "Viol/Non-Con",
   "screen_advancedSearch_warning_underage_sex": "Sex avec des mineurs",
-
   "screen_advancedSearch_category_ff": "F/F",
   "screen_advancedSearch_category_fm": "F/M",
   "screen_advancedSearch_category_gen": "Gen",
   "screen_advancedSearch_category_mm": "M/M",
   "screen_advancedSearch_category_multi": "Poly",
   "screen_advancedSearch_category_other": "Autre",
-
   "screen_advancedSearch_crossover_include": "Inclure les crossovers",
   "screen_advancedSearch_crossover_exclude": "Exclure les crossovers",
   "screen_advancedSearch_crossover_only": "Seulement les crossovers",
-
   "screen_advancedSearch_completion_all": "Toutes les œuvres",
   "screen_advancedSearch_completion_complete_only": "Œuvres complètes uniquement",
   "screen_advancedSearch_completion_wip_only": "Œuvres en cours uniquement",
-
   "reader_incognito_mode": "Mode incognito",
   "reader_pull_up_next": "Glisser vers le haut pour le prochain chapitre",
   "reader_release_next": "Relâcher pour le prochain chapitre",
   "reader_error_fallback": "Quelque chose s'est pétée la gueule si vous voyez ceci",
   "reader_error_opening_link": "Erreur de l'ouverture de lien",
-
   "global_search_search_in_library": "Rechercher dans la bibliothèque",
   "global_search_start_searching": "Commencer la recherche",
   "global_search_search_across": "Rechercher parmis les balises, la communauté des fans, puces, caractères, et plus encore",
@@ -399,7 +373,6 @@
   "global_search_section_relationships": "Relations",
   "global_search_section_characters": "Caractères",
   "global_search_section_freeform": "Forme libre",
-
   "screen_user_profile_title": "Profile utilisateur",
   "screen_user_profile_loading": "Chargement du profile...",
   "screen_user_profile_error_load": "Impossible de charger les données de l'utilisateur",
@@ -408,7 +381,6 @@
   "screen_user_profile_bio": "Bio",
   "screen_user_profile_bookmark_button": "Marque-pages",
   "screen_user_profile_works_button": "Œuvres",
-
   "screen_work_loading": "Chargement des informations de l'œuvre...",
   "screen_work_not_found": "Œuvre introuvable",
   "screen_work_add_to_library": "Ajouter à la bibliothèque",
@@ -433,7 +405,6 @@
   "screen_work_refresh": "Rafraîchir",
   "screen_work_bookmark": "Marque-pages",
   "screen_work_mark_for_later": "Marquée pour plus tard",
-
   "screen_work_toast_error_deleting": "Erreur lors de la suppression",
   "screen_work_toast_removed_from_library": "Supprimé de la bibliothèque",
   "screen_work_toast_added_to_library": "Ajouté à la bibliothèque",
@@ -452,13 +423,10 @@
   "screen_work_toast_error_loading_work": "Erreur lors du chargement de l'œuvre.",
   "screen_work_toast_no_new_chapters_to_download": "Aucun nouveau chapitre à télécharger",
   "screen_work_toast_added_chapters_to_queue": "{{count}} chapitres ajoutés à la liste de téléchargement.",
-
   "component_side_menu_title": "Paramètres",
   "component_side_menu_incognito_switch": "Mode incognito",
   "component_side_menu_support": "Nous supporter",
-
   "component_update_work_card_author": "Par {{author}}",
-
   "component_calendar_title": "Sélectionner une période",
   "component_calendar_sub_start_end": "Sélectionnée : du {{start}} au {{end}}",
   "component_calendar_sub_start": "Sélectionnée : {{start}} (toucher une autre date pour définir la fin)",
@@ -466,34 +434,27 @@
   "component_calendar_clear": "Déselectionner",
   "component_calendar_apply": "Appliquer",
   "component_calendar_show_all": "Tout montrer",
-
   "component_empty_title": "Aucun historique de lecture",
   "component_empty_sub": "Commencez à lire pour voir votre progression ici",
   "component_empty_for_range_title": "Aucun historique de lecture pour la période sélectionnée",
   "component_empty_for_range_sub": "Essayer de sélectionner des dates différentes",
-
   "component_history_header_count_filtered": "{{totalCount}} entrée pour cette période",
   "component_history_header_count": "{{totalCount}} entrée au total",
   "component_history_header_count_filtered_plural": "{{totalCount}} entrées pour cette période",
   "component_history_header_count_plural": "{{totalCount}} entrées au total",
   "component_history_header_clear_filter": "Rénitialiser",
   "component_history_header_clear_history": "Vider",
-
   "component_history_item_date_today": "Aujourd'hui à {{time}}",
   "component_history_item_date_yesterday": "Hier à {{time}}",
   "component_history_item_date_day": "il y a {{days}} jours",
   "component_history_item_chapter_start": "Chapitre {{start}}",
   "component_history_item_chapter_start_end": "Chapitres {{start}} à {{end}}",
-
   "component_kudo_list_loading_more": "Chargement...",
   "component_kudo_list_end": "Vous avez atteint la fin de votre historique des likes",
-
   "component_list_loading_more": "Chargement...",
   "component_list_end": "Vous avez atteint la fin de votre historique de lecture",
-
   "component_book_card_show_more_button": "Montrer les balises et les avertissements",
   "component_book_card_show_more_button_med": "Monter les balises, avertissements & la description",
-
   "component_generic_updated": "Mis à jour : {{date}}",
   "component_generic_kudos": "{{count}} Likes",
   "component_generic_chapter": "{{chapters}} Chapitres",
@@ -501,7 +462,6 @@
   "component_generic_views": "{{views}} Vues",
   "component_generic_words": "{{words}} Mots",
   "component_generic_language": "{{language}}",
-
   "component_book_details_modal_title": "Détails pour \"{{title}}\"",
   "component_book_details_modal_title_tags_and_warning": "Balises et avertissements pour \"{{title}}\"",
   "component_book_details_modal_title_tags": "Toutes les balises pour \"{{title}}\"",
@@ -511,7 +471,6 @@
   "component_book_details_modal_warnings": "Avertissements :",
   "component_book_details_modal_no_warnings": "Aucun avertissement spécifique pour cette œuvre.",
   "component_book_details_modal_desc": "Description :",
-
   "component_quick_actions_toast_library_remove_success_title": "Supprimé de la bibliothèque",
   "component_quick_actions_toast_library_remove_success_sub": "Cette œuvre a été supprimée de votre bibliothèque avec succès",
   "component_quick_actions_toast_library_remove_failed_title": "Échec de la suppression",
@@ -533,7 +492,6 @@
   "component_quick_actions_button_mark_later": "Marquer pour plus tard",
   "component_quick_actions_button_bookmark": "Ajouter aux marque-pages",
   "component_quick_actions_add_collection": "Ajouter à la collection",
-
   "component_comments_title": "Commentaires",
   "component_comments_deleted": "Commentaire supprimé",
   "component_comments_author_deleted": "Utilisateur supprimé",
@@ -542,6 +500,8 @@
   "component_comments_loading": "Chargement des commentaires...",
   "component_comments_none": "Aucun commentaire",
   "component_comments_end": "Plus de commentaires",
-
-  "component_update_bookcard_deletion_failed": "Erreur lors de la suppression"
+  "component_update_bookcard_deletion_failed": "Erreur lors de la suppression",
+  "account_request_login_label": "Saisissez votre nom d'utilisateur ou votre e-mail. AO3 vous enverra un lien de réinitialisation.",
+  "account_request_email_label": "Saisissez votre adresse e-mail pour rejoindre la file d'attente des invitations.",
+  "account_request_submit": "Envoyer"
 }
