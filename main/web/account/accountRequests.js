@@ -11,11 +11,13 @@ import ky, { echUrl } from '../echKy';
 
 const BASE = 'https://archiveofourown.org';
 
+// Deliberately NOT spoofing a browser User-Agent. The TLS handshake is done by
+// the Go proxy, so claiming to be Chrome produces a fingerprint/UA mismatch that
+// Cloudflare flags with a 403. Plain requests — exactly what the rest of the app
+// sends for browsing — pass fine.
 const BROWSER_HEADERS = {
   Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.5',
-  'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
 };
 
 // Pulls the Rails CSRF token out of a form page. Attribute order varies, so we
@@ -80,8 +82,39 @@ async function postForm(path, fields, referer) {
   return { res, html };
 }
 
+// Cloudflare sometimes 403s a "cold" request to a form page. Fetching the home
+// page first gives the proxy's cookie jar a session, after which the form loads.
+async function fetchWithWarmup(path) {
+  try {
+    return await ky.get(BASE + path, { headers: BROWSER_HEADERS }).text();
+  } catch (e) {
+    const status = e?.response?.status;
+    if (status !== 403 && status !== 503) throw e;
+    try {
+      await ky.get(BASE + '/', { headers: BROWSER_HEADERS }).text();
+    } catch {}
+    try {
+      return await ky
+        .get(BASE + path, {
+          headers: { ...BROWSER_HEADERS, Referer: BASE + '/' },
+        })
+        .text();
+    } catch (e2) {
+      const s2 = e2?.response?.status;
+      if (s2 === 403 || s2 === 503) {
+        throw new Error(
+          'AO3 is currently blocking automated requests (HTTP ' +
+            s2 +
+            '). Please try again later.',
+        );
+      }
+      throw e2;
+    }
+  }
+}
+
 async function getForm(path) {
-  const html = await ky.get(BASE + path, { headers: BROWSER_HEADERS }).text();
+  const html = await fetchWithWarmup(path);
   return { html, token: extractAuthenticityToken(html) };
 }
 
