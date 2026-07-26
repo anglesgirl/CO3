@@ -5,13 +5,20 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigation } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { echSelfTest, getDoh, setDoh, DEFAULT_DOH } from '../../web/echKy';
 
 export default function DebugScreen({ route }) {
   const {db, setScreens} = route.params;
   const [sqlCmd, setSqlCmd] = useState('');
   const [logs, setLogs] = useState([]);
+  const [doh, setDohInput] = useState('');
+
+  useEffect(() => {
+    getDoh().then(setDohInput);
+  }, []);
 
   const addLog = (type, message) => {
     setLogs(prev => [
@@ -30,6 +37,92 @@ export default function DebugScreen({ route }) {
         </Text>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Text style={{ color: '#ff0000' }}>Close debug menu</Text>
+        </TouchableOpacity>
+
+        <Text style={{ marginTop: 16 }}>ECH proxy — DoH endpoint</Text>
+        <TextInput
+          style={{ borderColor: '#000', borderWidth: 1, padding: 6, marginTop: 4 }}
+          placeholder={DEFAULT_DOH}
+          autoCapitalize="none"
+          autoCorrect={false}
+          onChangeText={setDohInput}
+          value={doh}
+        />
+        <View style={{ flexDirection: 'row', marginTop: 6, gap: 8 }}>
+          <TouchableOpacity
+            style={{
+              backgroundColor: '#111',
+              borderRadius: 6,
+              paddingVertical: 10,
+              paddingHorizontal: 12,
+            }}
+            onPress={async () => {
+              addLog('cmd', `> set DoH = ${doh || '(none)'} and restart proxy...`);
+              try {
+                await setDoh(doh);
+                addLog('success', 'Proxy restarted with new DoH. Run "Test ECH status".');
+              } catch (e) {
+                addLog('error', e?.message ?? String(e));
+              }
+            }}
+          >
+            <Text style={{ color: '#fff' }}>Save & restart</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={{
+              backgroundColor: '#555',
+              borderRadius: 6,
+              paddingVertical: 10,
+              paddingHorizontal: 12,
+            }}
+            onPress={() => setDohInput(DEFAULT_DOH)}
+          >
+            <Text style={{ color: '#fff' }}>Reset default</Text>
+          </TouchableOpacity>
+        </View>
+
+        <TouchableOpacity
+          style={{
+            marginTop: 8,
+            backgroundColor: '#111',
+            borderRadius: 6,
+            paddingVertical: 10,
+            paddingHorizontal: 12,
+            alignSelf: 'flex-start',
+          }}
+          onPress={async () => {
+            addLog('cmd', '> ECH self-test (fetching AO3 through proxy)...');
+            try {
+              const result = await echSelfTest();
+              const ok = result.includes('ECHAccepted=true');
+              addLog(ok ? 'success' : 'error', result);
+            } catch (e) {
+              addLog('error', e?.message ?? String(e));
+            }
+          }}
+        >
+          <Text style={{ color: '#fff' }}>Test ECH status</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={{
+            marginTop: 8,
+            backgroundColor: '#7a3',
+            borderRadius: 6,
+            paddingVertical: 10,
+            paddingHorizontal: 12,
+            alignSelf: 'flex-start',
+          }}
+          onPress={async () => {
+            try {
+              await AsyncStorage.removeItem('cf_domains');
+              addLog('success', 'Cleared Cloudflare/WebView fallback mode. Go back and retry.');
+            } catch (e) {
+              addLog('error', e?.message ?? String(e));
+            }
+          }}
+        >
+          <Text style={{ color: '#fff' }}>Clear CF/WebView fallback</Text>
         </TouchableOpacity>
 
         <Text style={{ marginTop: 16 }}>Run SQL cmd</Text>

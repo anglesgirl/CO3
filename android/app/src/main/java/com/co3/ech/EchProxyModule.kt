@@ -26,10 +26,12 @@ class EchProxyModule(private val reactContext: ReactApplicationContext) :
 
     /**
      * Starts the proxy. If [port] is 0 a free port is chosen automatically.
+     * [doh] is the DoH JSON endpoint used to fetch AO3's ech= record (may be
+     * empty to skip DoH and rely on the baked-in config + retry_configs).
      * Resolves with the actual port number.
      */
     @ReactMethod
-    fun start(port: Int, promise: Promise) {
+    fun start(port: Int, doh: String, promise: Promise) {
         io.execute {
             try {
                 val chosen = if (port != 0) port else freePort()
@@ -37,7 +39,7 @@ class EchProxyModule(private val reactContext: ReactApplicationContext) :
                     "127.0.0.1:$chosen",   // listen
                     "archiveofourown.org", // target
                     "",                     // echB64 (empty -> DoH / fallback + retry_configs)
-                    "https://dns.google/resolve", // DoH JSON endpoint
+                    doh,                    // DoH JSON endpoint (from JS; may be empty)
                     false,                  // insecure
                 )
                 promise.resolve(chosen)
