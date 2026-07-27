@@ -1,6 +1,7 @@
 import { getUsername } from '../../storage/Credentials';
 import { parseWorkElements } from '../browse/fetchWorks';
 import getUrl from '../requestManager';
+import { echUrl } from '../echKy';
 
 let DomParser = require('react-native-html-parser').DOMParser;
 
@@ -21,7 +22,7 @@ export async function markForLater(work) {
     const workId = work.id;
     const url = `https://archiveofourown.org/works/${workId}`;
 
-    const pageResponse = await fetch(url, {
+    const pageResponse = await fetch(await echUrl(url), {
       credentials: 'include',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -54,7 +55,7 @@ export async function markForLater(work) {
     formData.append('authenticity_token', token);
     formData.append('_method', 'patch');
 
-    const response = await fetch(markUrl, {
+    const response = await fetch(await echUrl(markUrl), {
       method: 'POST',
       body: formData,
       credentials: 'include',
