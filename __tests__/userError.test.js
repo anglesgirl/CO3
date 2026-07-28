@@ -14,4 +14,10 @@ describe('user-facing error messages', () => {
       'general_operation_failed',
     );
   });
+
+  it('asks the user to retry when a protected ECH request is interrupted', () => {
+    expect(userErrorMessage({ code: 'ECH_REQUIRED' }, t)).toBe(
+      'general_protected_retry',
+    );
+  });
 });

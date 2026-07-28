@@ -151,6 +151,7 @@ const BrowseScreen = ({ currentTheme, viewMode = 'med', setScreens, screens, lib
       if (reset) {
         setError({
           message: err.message || 'Failed to load worksScreen',
+          code: err.code,
           status: err.response?.status || 'Unknown',
           statusText: err.response?.statusText || 'Network Error'
         });

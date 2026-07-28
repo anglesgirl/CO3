@@ -5,6 +5,29 @@ const read = relativePath =>
   fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
 
 describe('AO3 ECH coverage', () => {
+  it('never caches or uses the direct WebView fallback for AO3 requests', () => {
+    const source = read('main/web/requestManager.js');
+    expect(source).not.toContain('enableCFMode');
+    expect(source).not.toContain('fetchViaWebView');
+    expect(source).toContain('new ProtectedConnectionError');
+    expect(source).toContain('cdn-cgi/challenge-platform');
+    expect(source).toContain('429');
+  });
+
+  it('blocks Android AO3 traffic when the ECH proxy is unavailable', () => {
+    const source = read('main/web/echKy.js');
+    expect(source).toContain('async function requireEchBase');
+    expect(source).toContain("code = 'ECH_REQUIRED'");
+    expect(source).toContain("if (Platform.OS === 'android')");
+    expect(source).not.toContain('if (!base) return url;');
+  });
+
+  it('preserves the protected connection error for the Browse retry screen', () => {
+    const source = read('main/screens/Browse.jsx');
+    expect(source).toContain('code: err.code');
+    expect(source).toContain('{userErrorMessage(error, t)}');
+  });
+
   it('routes bookmark creation through echUrl', () => {
     const source = read('main/web/other/bookmarks.js');
     expect(source).toContain("import { echUrl }");

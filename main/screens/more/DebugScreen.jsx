@@ -9,8 +9,10 @@ import { useState } from 'react';
 import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { echSelfTest } from '../../web/echKy';
+import { useTranslation } from 'react-i18next';
 
 export default function DebugScreen({ route }) {
+  const { t } = useTranslation();
   const {db, setScreens} = route.params;
   const [sqlCmd, setSqlCmd] = useState('');
   const [logs, setLogs] = useState([]);
@@ -25,12 +27,10 @@ export default function DebugScreen({ route }) {
 
   return (
       <ScrollView style={{ flex: 1, padding: 12, backgroundColor: '#fff' }}>
-        <Text style={{ fontSize: 25 }}>Debug Screen</Text>
-        <Text>
-          If you don't know what you are doing here, press the red text below.
-        </Text>
+        <Text style={{ fontSize: 25 }}>{t('debug_title')}</Text>
+        <Text>{t('debug_warning')}</Text>
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={{ color: '#ff0000' }}>Close debug menu</Text>
+          <Text style={{ color: '#ff0000' }}>{t('debug_close')}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -43,7 +43,7 @@ export default function DebugScreen({ route }) {
             alignSelf: 'flex-start',
           }}
           onPress={async () => {
-            addLog('cmd', '> ECH self-test (fetching AO3 through proxy)...');
+            addLog('cmd', t('debug_ech_running'));
             try {
               const result = await echSelfTest();
               const ok = result.includes('ECHAccepted=true');
@@ -53,7 +53,7 @@ export default function DebugScreen({ route }) {
             }
           }}
         >
-          <Text style={{ color: '#fff' }}>Test ECH status</Text>
+          <Text style={{ color: '#fff' }}>{t('debug_ech_test')}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -68,16 +68,16 @@ export default function DebugScreen({ route }) {
           onPress={async () => {
             try {
               await AsyncStorage.removeItem('cf_domains');
-              addLog('success', 'Cleared Cloudflare/WebView fallback mode. Go back and retry.');
+              addLog('success', t('debug_cf_cleared'));
             } catch (e) {
               addLog('error', e?.message ?? String(e));
             }
           }}
         >
-          <Text style={{ color: '#fff' }}>Clear CF/WebView fallback</Text>
+          <Text style={{ color: '#fff' }}>{t('debug_clear_cf')}</Text>
         </TouchableOpacity>
 
-        <Text style={{ marginTop: 16 }}>Run SQL cmd</Text>
+        <Text style={{ marginTop: 16 }}>{t('debug_sql_title')}</Text>
         <TextInput
           style={{ borderColor: '#fff', backgroundColor: "#000", color: "#fff", borderWidth: 1, }}
           placeholder="UPDATE works SET..."
@@ -100,16 +100,16 @@ export default function DebugScreen({ route }) {
               if (resultRows.length > 0) {
                 addLog('result', JSON.stringify(resultRows, null, 2));
               } else if (rowsAffected > 0) {
-                addLog('success', `OK — ${rowsAffected} row(s) affected`);
+                addLog('success', t('debug_rows_affected', { count: rowsAffected }));
               } else {
-                addLog('success', 'OK — no rows returned or affected');
+                addLog('success', t('debug_no_rows'));
               }
             } catch (e) {
               addLog('error', e.message);
             }
           }}
         >
-          <Text>Execute SQL</Text>
+          <Text>{t('debug_execute_sql')}</Text>
         </TouchableOpacity>
 
         <View style={{ marginTop: 20 }}>
@@ -120,10 +120,10 @@ export default function DebugScreen({ route }) {
               alignItems: 'center',
             }}
           >
-            <Text style={{ fontSize: 16, fontWeight: '600' }}>Log</Text>
+            <Text style={{ fontSize: 16, fontWeight: '600' }}>{t('debug_log')}</Text>
             {logs.length > 0 && (
               <TouchableOpacity onPress={() => setLogs([])}>
-                <Text style={{ color: '#888', fontSize: 13 }}>Clear</Text>
+                <Text style={{ color: '#888', fontSize: 13 }}>{t('debug_clear_log')}</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -136,7 +136,7 @@ export default function DebugScreen({ route }) {
           >
             {logs.length === 0 ? (
               <Text style={{ color: '#555', fontSize: 13 }}>
-                No output yet...
+                {t('debug_no_output')}
               </Text>
             ) : (
               logs.map(log => (

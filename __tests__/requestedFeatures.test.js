@@ -33,7 +33,15 @@ describe('requested feature boundaries', () => {
 
   it('uses a new Android version so the previous installation is replaced', () => {
     const gradle = read('android/app/build.gradle');
-    expect(gradle).toContain('versionCode 21');
-    expect(gradle).toContain('versionName "B0.0.21"');
+    expect(gradle).toContain('versionCode 22');
+    expect(gradle).toContain('versionName "B0.0.22"');
+  });
+
+  it('localizes the hidden debug screen instead of hard-coding English labels', () => {
+    const source = read('main/screens/more/DebugScreen.jsx');
+    expect(source).toContain('useTranslation');
+    expect(source).toContain("t('debug_clear_cf')");
+    expect(source).not.toContain('Clear CF/WebView fallback');
+    expect(source).not.toContain('Debug Screen');
   });
 });
