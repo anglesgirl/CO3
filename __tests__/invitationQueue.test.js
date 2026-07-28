@@ -20,7 +20,7 @@ describe('AO3 invitation queue parsing', () => {
     });
   });
 
-  it('reads a user's queue position and AO3 estimated date', () => {
+  it("reads a user's queue position and AO3 estimated date", () => {
     const html = `
       <p>You are currently number <strong>12345</strong> on our waiting list!</p>
       <p>At our current rate, you should receive an invitation on or around:
