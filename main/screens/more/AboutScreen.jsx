@@ -80,8 +80,8 @@ export default function AboutScreen({ route }) {
             theme={currentTheme}
           />
           <LinkButton
-            url="https://www.ao3.xyz"
-            label="www.ao3.xyz"
+            url="https://www.ao3.xyz/"
+            label="AO3.XYZ"
             theme={currentTheme}
           />
         </View>
