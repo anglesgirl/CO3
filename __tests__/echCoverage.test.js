@@ -5,13 +5,25 @@ const read = relativePath =>
   fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
 
 describe('AO3 ECH coverage', () => {
-  it('never caches or uses the direct WebView fallback for AO3 requests', () => {
-    const source = read('main/web/requestManager.js');
-    expect(source).not.toContain('enableCFMode');
-    expect(source).not.toContain('fetchViaWebView');
-    expect(source).toContain('new ProtectedConnectionError');
-    expect(source).toContain('cdn-cgi/challenge-platform');
-    expect(source).toContain('429');
+  it('uses an ECH-protected WebView without restoring the 24-hour cache', () => {
+    const manager = read('main/web/requestManager.js');
+    const webView = read('main/web/WebviewFetcher.jsx');
+    expect(manager).not.toContain('enableCFMode');
+    expect(manager).not.toContain('cf_domains');
+    expect(manager).toContain('fetchViaProtectedWebView');
+    expect(manager).toContain('cdn-cgi/challenge-platform');
+    expect(manager).toContain('429');
+    expect(webView).toContain("import { echUrl }");
+    expect(webView).toContain('await echUrl(item.url)');
+    expect(webView).toContain('protectNavigation');
+    expect(webView).not.toContain('setSource({ uri: currentRef.current.url })');
+  });
+
+  it('shows the protected challenge instead of reloading it on confirmation', () => {
+    const source = read('main/web/WebviewFetcher.jsx');
+    expect(source).toContain('currentRef.current.cfWarning = false');
+    expect(source).toContain('setVisible(true)');
+    expect(source).not.toContain('const onWarningDismiss = () => {\n    setShowCFWarning(false);\n    loadCurrent();');
   });
 
   it('blocks Android AO3 traffic when the ECH proxy is unavailable', () => {
@@ -20,6 +32,13 @@ describe('AO3 ECH coverage', () => {
     expect(source).toContain("code = 'ECH_REQUIRED'");
     expect(source).toContain("if (Platform.OS === 'android')");
     expect(source).not.toContain('if (!base) return url;');
+  });
+
+  it('checks the real works endpoint in the ECH self-test', () => {
+    const source = read('main/web/echKy.js');
+    expect(source).toContain("echKy.get('https://archiveofourown.org/works'");
+    expect(source).toContain("includes('work blurb')");
+    expect(source).toContain('/works HTTP');
   });
 
   it('preserves the protected connection error for the Browse retry screen', () => {

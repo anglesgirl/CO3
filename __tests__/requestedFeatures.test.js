@@ -33,8 +33,8 @@ describe('requested feature boundaries', () => {
 
   it('uses a new Android version so the previous installation is replaced', () => {
     const gradle = read('android/app/build.gradle');
-    expect(gradle).toContain('versionCode 22');
-    expect(gradle).toContain('versionName "B0.0.22"');
+    expect(gradle).toContain('versionCode 23');
+    expect(gradle).toContain('versionName "B0.0.23"');
   });
 
   it('localizes the hidden debug screen instead of hard-coding English labels', () => {

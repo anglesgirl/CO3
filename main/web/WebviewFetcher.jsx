@@ -3,6 +3,7 @@ import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import WebView from 'react-native-webview';
 import { useTranslation } from 'react-i18next';
+import { echUrl } from './echKy';
 
 // --- Queue ---
 
@@ -14,7 +15,7 @@ function enqueue(item) {
   triggerNext?.();
 }
 
-export function fetchViaWebView(url, { cfWarning = false } = {}) {
+export function fetchViaProtectedWebView(url, { cfWarning = false } = {}) {
   return new Promise((resolve, reject) => enqueue({ url, resolve, reject, cfWarning }));
 }
 
@@ -68,17 +69,27 @@ export default function WebviewFetcher() {
   const webViewRef = useRef(null);
   const currentRef = useRef(null);
   const httpErrorRef = useRef(null);
+  const interimErrorRef = useRef(null);
 
-  const loadCurrent = () => {
-    setVisible(false);
-    setSource({ uri: currentRef.current.url });
+  const loadCurrent = async () => {
+    const item = currentRef.current;
+    if (!item) return;
+    try {
+      const uri = await echUrl(item.url);
+      if (currentRef.current !== item) return;
+      setVisible(false);
+      setSource({ uri });
+    } catch (error) {
+      if (currentRef.current === item) settle(null, error);
+    }
   };
 
   const processNext = () => {
     if (currentRef.current || queue.length === 0) return;
     currentRef.current = queue.shift();
     httpErrorRef.current = null;
-    loadCurrent();
+    interimErrorRef.current = null;
+    void loadCurrent();
   };
 
   useEffect(() => {
@@ -88,7 +99,7 @@ export default function WebviewFetcher() {
 
   const onWarningDismiss = () => {
     setShowCFWarning(false);
-    loadCurrent();
+    setVisible(true);
   };
 
   const settle = (value, error) => {
@@ -96,6 +107,8 @@ export default function WebviewFetcher() {
     currentRef.current = null;
     setSource(null);
     setVisible(false);
+    setShowCFWarning(false);
+    interimErrorRef.current = null;
     error ? item?.reject(error) : item?.resolve(value);
     setTimeout(processNext, 150);
   };
@@ -104,9 +117,14 @@ export default function WebviewFetcher() {
     const err = httpErrorRef.current;
     httpErrorRef.current = null;
 
-    if (err && !CF_INTERIM_STATUSES.has(err.status)) {
-      settle(null, new WebViewFetchError(err.status, err.statusText, err.url));
-      return;
+    if (err) {
+      if (!CF_INTERIM_STATUSES.has(err.status)) {
+        settle(null, new WebViewFetchError(err.status, err.statusText, err.url));
+        return;
+      }
+      interimErrorRef.current = err;
+    } else {
+      interimErrorRef.current = null;
     }
 
     webViewRef.current?.injectJavaScript(CF_CHALLENGE_DETECTION);
@@ -128,11 +146,27 @@ export default function WebviewFetcher() {
     ));
   };
 
+  const protectNavigation = request => {
+    if (!/^https?:\/\/(?:www\.)?archiveofourown\.org(?:\/|$)/i.test(request.url)) {
+      return true;
+    }
+    const item = currentRef.current;
+    echUrl(request.url)
+      .then(uri => {
+        if (currentRef.current === item) setSource({ uri });
+      })
+      .catch(error => {
+        if (currentRef.current === item) settle(null, error);
+      });
+    return false;
+  };
+
   const onMessage = ({ nativeEvent }) => {
     try {
       const data = JSON.parse(nativeEvent.data);
       if (data.type === 'challenge') {
         if (currentRef.current?.cfWarning) {
+          currentRef.current.cfWarning = false;
           setShowCFWarning(true);
         } else {
           setVisible(true);
@@ -140,6 +174,11 @@ export default function WebviewFetcher() {
         return;
       }
       if (data.type === 'success') {
+        const err = interimErrorRef.current;
+        if (err) {
+          settle(null, new WebViewFetchError(err.status, err.statusText, err.url));
+          return;
+        }
         if (data.acceptedTos) {
           AsyncStorage.setItem(ACCEPTED_TOS_KEY, data.acceptedTos).catch(() => {});
         }
@@ -182,6 +221,7 @@ export default function WebviewFetcher() {
             onHttpError={onHttpError}
             onError={onError}
             onMessage={onMessage}
+            onShouldStartLoadWithRequest={protectNavigation}
             javaScriptEnabled
             domStorageEnabled
             sharedCookiesEnabled

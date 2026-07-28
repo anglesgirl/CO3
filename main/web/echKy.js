@@ -346,10 +346,15 @@ export async function echSelfTest() {
   }
   const t0 = Date.now();
   try {
-    const res = await echKy.get('https://archiveofourown.org/', { timeout: 30000 });
+    const home = await echKy.get('https://archiveofourown.org/', { timeout: 30000 });
+    const works = await echKy.get('https://archiveofourown.org/works', { timeout: 30000 });
+    const worksHtml = await works.text();
+    if (!worksHtml.includes('work blurb')) {
+      throw new Error('AO3 /works did not return a work list');
+    }
     const ms = Date.now() - t0;
     const status = await getEchStatus();
-    return `OK — HTTP ${res.status} in ${ms}ms via ${base}\nDoH: ${doh || '(none)'}\n${status}`;
+    return `OK — / HTTP ${home.status}, /works HTTP ${works.status} in ${ms}ms via ${base}\nDoH: ${doh || '(none)'}\n${status}`;
   } catch (e) {
     const ms = Date.now() - t0;
     const status = await getEchStatus();

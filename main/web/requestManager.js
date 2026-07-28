@@ -1,5 +1,6 @@
 import ky, { ProtectedConnectionError } from './echKy';
 import { TimeoutError } from 'ky';
+import { fetchViaProtectedWebView } from './WebviewFetcher';
 import {
   deleteCredsPasswd,
   deleteCredsToken,
@@ -35,6 +36,13 @@ const cloudflareErrorCodes = [
   503, //Used for CF challenges
   429, //Rate limited; retry through ECH instead of switching transport
 ]
+
+function protectedWebView(url, disabled) {
+  if (disabled) {
+    throw new ProtectedConnectionError('AO3 requires protected browser verification');
+  }
+  return fetchViaProtectedWebView(url, { cfWarning: true });
+}
 
 export default async function getUrl(url, noWebview = false) {
   if (noWebview) {
@@ -89,7 +97,7 @@ export default async function getUrl(url, noWebview = false) {
     const html = await ky.get(url).text();
 
     if (isCFChallenge(html)) {
-      throw new ProtectedConnectionError('AO3 requested an anti-bot retry');
+      return protectedWebView(url, noWebview);
     }
 
     console.log(`fetched ${url} via ky.`);
@@ -97,10 +105,10 @@ export default async function getUrl(url, noWebview = false) {
   } catch (err) {
     if (err instanceof ProtectedConnectionError) throw err;
     if (cloudflareErrorCodes.includes(err?.response?.status)) {
-      throw new ProtectedConnectionError('AO3 temporarily rejected the protected request', err);
+      return protectedWebView(url, noWebview);
     }
     if (err instanceof TimeoutError) {
-      throw new ProtectedConnectionError('Protected AO3 request timed out', err);
+      return protectedWebView(url, noWebview);
     }
     throw err;
   }
