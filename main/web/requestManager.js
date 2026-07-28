@@ -57,6 +57,31 @@ const cloudflareErrorCodes = [
   503, //Used for CF challenges
 ]
 
+function shouldUseWebView(error) {
+  return cloudflareErrorCodes.includes(error?.response?.status) ||
+    error instanceof TimeoutError ||
+    error?.name === 'TypeError';
+}
+
+export async function postForm(url, fields, headers = {}) {
+  const body = new URLSearchParams(fields).toString();
+  const request = {
+    method: 'POST',
+    body,
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      ...headers,
+    },
+  };
+
+  try {
+    return await ky.post(url, { ...request, credentials: 'include' }).text();
+  } catch (error) {
+    if (!shouldUseWebView(error)) throw error;
+    return fetchViaWebView(url, { cfWarning: true, request });
+  }
+}
+
 export default async function getUrl(url, noWebview = false) {
   const { hostname } = new URL(url);
 
@@ -127,11 +152,7 @@ export default async function getUrl(url, noWebview = false) {
     console.log(`fetched ${url} via ky.`);
     return html;
   } catch (err) {
-    if (cloudflareErrorCodes.includes(err?.response?.status)) {
-      await enableCFMode(hostname);
-      return fetchViaWebView(url, { cfWarning: true });
-    }
-    if (err instanceof TimeoutError) {
+    if (shouldUseWebView(err)) {
       await enableCFMode(hostname);
       return fetchViaWebView(url, { cfWarning: true });
     }

@@ -198,7 +198,7 @@ const LoginScreen = ({ route }) => {
   };
 
   const openGetInvited = () => {
-    Linking.openURL('https://archiveofourown.org/invite_requests');
+    navigation.navigate('InviteRequest');
   };
 
   if (validating) {

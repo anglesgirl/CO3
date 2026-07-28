@@ -1,11 +1,10 @@
-import ky from 'ky';
 import getUrl from '../requestManager';
 
 let DomParser = require('react-native-html-parser').DOMParser;
 
 export async function fetchLoginAuthenticityToken() {
   try {
-    let html = await ky.get("https://archiveofourown.org/users/login").text();
+    let html = await getUrl("https://archiveofourown.org/users/login");
     html = html.replace("<br \\>", ''); //Before you ask, no. I don't know. I don't need them anyway. /shrug
     if (html.includes("You are already logged in to an account. Please log out and try again.")) {
       throw "already logged in.";

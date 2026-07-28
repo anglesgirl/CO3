@@ -9,7 +9,6 @@ import {
   ActivityIndicator,
   DeviceEventEmitter,
   FlatList,
-  Linking,
   Modal,
   Pressable,
   RefreshControl,
@@ -676,10 +675,6 @@ const ChapterInfoScreen = ({ route }) => {
     setModalVisible(true);
   }, []);
 
-  const handleOpenWebView = useCallback(() => {
-    Linking.openURL("https://archiveofourown.org/works/" + workId);
-  }, [workId]);
-
   const handleBookmark = async () => {
     setMenuVisible(false);
     bookmark(work).then(() => {
@@ -1006,19 +1001,6 @@ const ChapterInfoScreen = ({ route }) => {
         </Text>
       </TouchableOpacity>
 
-      <TouchableOpacity
-        style={styles.actionButton}
-        onPress={handleOpenWebView}
-      >
-        <Icon
-          name="open-in-browser"
-          size={48}
-          color={currentTheme.iconColor}
-        />
-        <Text style={[styles.actionButtonText, { color: currentTheme.textColor }]}>
-          {t("screen_work_open_in_web")}
-        </Text>
-      </TouchableOpacity>
     </View>
   );
 

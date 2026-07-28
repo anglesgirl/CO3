@@ -7,14 +7,16 @@ import WebView from 'react-native-webview';
 
 const queue = [];
 let triggerNext = null;
+const WEBVIEW_TIMEOUT_MS = 30000;
 
 function enqueue(item) {
   queue.push(item);
   triggerNext?.();
 }
 
-export function fetchViaWebView(url, { cfWarning = false } = {}) {
-  return new Promise((resolve, reject) => enqueue({ url, resolve, reject, cfWarning }));
+export function fetchViaWebView(url, { cfWarning = false, request = {} } = {}) {
+  const source = { uri: url, ...request };
+  return new Promise((resolve, reject) => enqueue({ url, source, resolve, reject, cfWarning }));
 }
 
 // --- Error ---
@@ -66,10 +68,15 @@ export default function WebviewFetcher() {
   const webViewRef = useRef(null);
   const currentRef = useRef(null);
   const httpErrorRef = useRef(null);
+  const timeoutRef = useRef(null);
 
   const loadCurrent = () => {
+    clearTimeout(timeoutRef.current);
     setVisible(false);
-    setSource({ uri: currentRef.current.url });
+    setSource(currentRef.current.source);
+    timeoutRef.current = setTimeout(() => {
+      settle(null, new WebViewFetchError(0, 'Request timed out', currentRef.current?.url));
+    }, WEBVIEW_TIMEOUT_MS);
   };
 
   const processNext = () => {
@@ -81,16 +88,21 @@ export default function WebviewFetcher() {
 
   useEffect(() => {
     triggerNext = processNext;
-    return () => { triggerNext = null; };
+    return () => {
+      triggerNext = null;
+      clearTimeout(timeoutRef.current);
+    };
   }, []);
 
   const onWarningDismiss = () => {
     setShowCFWarning(false);
+    if (currentRef.current) currentRef.current.cfWarning = false;
     loadCurrent();
   };
 
   const settle = (value, error) => {
     const item = currentRef.current;
+    clearTimeout(timeoutRef.current);
     currentRef.current = null;
     setSource(null);
     setVisible(false);
