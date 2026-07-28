@@ -71,6 +71,19 @@ export default function AboutScreen({ route }) {
             label={t('screen_about_source')}
             theme={currentTheme}
           />
+          <Text style={[styles.sectionTitle, { color: currentTheme.textColor }]}>
+            {t('screen_about_assisted_development')}
+          </Text>
+          <LinkButton
+            url="https://anglesya.win/"
+            label={t('screen_about_idea_contributor')}
+            theme={currentTheme}
+          />
+          <LinkButton
+            url="https://www.ao3.xyz"
+            label="www.ao3.xyz"
+            theme={currentTheme}
+          />
         </View>
         <Text
           style={[
@@ -135,6 +148,11 @@ const styles = StyleSheet.create({
     fontWeight: 'ultralight',
     textDecorationLine: 'underline',
     marginLeft: 16,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginTop: 24,
   },
   image: {
     width: 100,

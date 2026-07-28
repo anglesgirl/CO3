@@ -269,6 +269,8 @@
   "screen_about_text_2": "它遵循 GPL V3 许可证，并将永远免于广告、订阅和任何付费功能。",
   "screen_about_news": "更新了什么？",
   "screen_about_source": "源代码",
+  "screen_about_assisted_development": "辅助开发",
+  "screen_about_idea_contributor": "软件思路贡献者",
   "screen_about_discord": "Discord",
   "screen_about_support": "支持我",
   "screen_about_version": "版本 {{co3Version}}",

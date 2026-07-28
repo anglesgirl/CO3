@@ -33,7 +33,7 @@ describe('requested feature boundaries', () => {
 
   it('uses a new Android version so the previous installation is replaced', () => {
     const gradle = read('android/app/build.gradle');
-    expect(gradle).toContain('versionCode 19');
-    expect(gradle).toContain('versionName "B0.0.19"');
+    expect(gradle).toContain('versionCode 20');
+    expect(gradle).toContain('versionName "B0.0.20"');
   });
 });

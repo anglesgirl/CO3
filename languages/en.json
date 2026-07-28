@@ -269,6 +269,8 @@
   "screen_about_text_2": "It follows the GPL V3 licence, and will be free of ads, of subscription and of any paid features, forever.",
   "screen_about_news": "What's new ?",
   "screen_about_source": "Source code",
+  "screen_about_assisted_development": "Assisted development",
+  "screen_about_idea_contributor": "Software concept contributor",
   "screen_about_discord": "Discord",
   "screen_about_support": "Support me",
   "screen_about_version": "Version {{co3Version}}",

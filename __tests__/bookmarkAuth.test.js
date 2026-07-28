@@ -43,7 +43,7 @@ describe('ECH authenticated actions', () => {
     const source = read('main/web/ao3FormParser.js');
     expect(source).toContain('DomParser');
     expect(source).toContain("getAttribute('name')");
-    expect(source).toContain("getAttribute('selected')");
+    expect(source).toContain("hasAttribute('selected')");
   });
 
   it('extracts reordered AO3 bookmark and mark-for-later forms', () => {

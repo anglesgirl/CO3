@@ -251,6 +251,8 @@
   "screen_about_text_2": "L'application suit la liscence GPL V3, est sans pubs, sans abonnement et sans la moindre fonctionnalité de paiement, et ce pour toujours.",
   "screen_about_news": "Qu'est-ce qui est nouveau ?",
   "screen_about_source": "Code source",
+  "screen_about_assisted_development": "Développement assisté",
+  "screen_about_idea_contributor": "Contributeur aux idées du logiciel",
   "screen_about_discord": "Discord",
   "screen_about_support": "Supportez moi",
   "screen_about_version": "Version {{co3Version}}",

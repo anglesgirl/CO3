@@ -33,7 +33,7 @@ function parsePseudSelect(doc) {
   const select = elementsNamed(doc, 'select', 'bookmark[pseud_id]')[0];
   if (!select) return null;
   const options = Array.from(select.getElementsByTagName('option'));
-  const selected = options.find(option => option.getAttribute('selected') !== null);
+  const selected = options.find(option => option.hasAttribute('selected'));
   const fallback = options.find(option => option.getAttribute('value'));
   return (selected || fallback)?.getAttribute('value') || null;
 }
