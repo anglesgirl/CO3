@@ -30,4 +30,10 @@ describe('requested feature boundaries', () => {
     expect(workflow).toContain('path: CO3-ECH-arm64-v8a.apk');
     expect(workflow).not.toContain('CO3-ECH-*.apk');
   });
+
+  it('uses a new Android version so the previous installation is replaced', () => {
+    const gradle = read('android/app/build.gradle');
+    expect(gradle).toContain('versionCode 19');
+    expect(gradle).toContain('versionName "B0.0.19"');
+  });
 });
