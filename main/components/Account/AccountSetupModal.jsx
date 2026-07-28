@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 import {
   activateAccount,
   extractInvitationToken,
+  getInvitationQueueInfo,
   registerAccount,
   requestInvitation,
   requestPasswordReset,
@@ -35,6 +36,7 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
   const [step, setStep] = useState('request');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState(null); // { ok, text }
+  const [queueInfo, setQueueInfo] = useState(null);
 
   const [email, setEmail] = useState('');
   const [inviteLink, setInviteLink] = useState('');
@@ -44,6 +46,22 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
   const [activationLink, setActivationLink] = useState('');
+
+  useEffect(() => {
+    if (!visible || mode !== 'invite') return undefined;
+    let active = true;
+    getInvitationQueueInfo()
+      .then(info => active && setQueueInfo(info))
+      .catch(error => {
+        if (!active) return;
+        setNotice({
+          ok: false,
+          missing: error?.code === 'INVITE_PAGE_NOT_FOUND',
+          text: error?.message ?? String(error),
+        });
+      });
+    return () => { active = false; };
+  }, [visible, mode]);
 
   const reset = () => {
     setStep('request');
@@ -60,11 +78,16 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
     setBusy(true);
     setNotice(null);
     try {
-      const msg = await fn();
-      setNotice({ ok: true, text: msg });
-      onSuccess?.(msg);
+      const result = await fn();
+      const text = typeof result === 'string' ? result : result.message;
+      setNotice({ ok: true, text });
+      onSuccess?.(result);
     } catch (e) {
-      setNotice({ ok: false, text: e?.message ?? String(e) });
+      setNotice({
+        ok: false,
+        missing: e?.code === 'INVITE_PAGE_NOT_FOUND',
+        text: e?.message ?? String(e),
+      });
     } finally {
       setBusy(false);
     }
@@ -117,6 +140,41 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
     </Text>
   );
 
+  const renderQueueInfo = () => {
+    if (!queueInfo) return null;
+    let estimated = queueInfo.estimatedDate;
+    if (estimated && /^\d{4}-\d{2}-\d{2}T/.test(estimated)) {
+      estimated = new Date(estimated).toLocaleDateString();
+    }
+    return (
+      <View style={[styles.queueBox, { borderColor: theme.borderColor }]}>
+        {queueInfo.waiting !== null && (
+          <Text style={[styles.queueText, { color: theme.textColor }]}>
+            {t('account_queue_waiting', { count: queueInfo.waiting.toLocaleString() })}
+          </Text>
+        )}
+        {queueInfo.batchSize !== null && (
+          <Text style={[styles.queueText, { color: theme.secondaryTextColor }]}>
+            {t('account_queue_rate', {
+              count: queueInfo.batchSize.toLocaleString(),
+              hours: queueInfo.intervalHours,
+            })}
+          </Text>
+        )}
+        {queueInfo.position !== null && (
+          <Text style={[styles.queuePosition, { color: theme.primaryColor }]}>
+            {t('account_queue_position', { position: queueInfo.position.toLocaleString() })}
+          </Text>
+        )}
+        {estimated && (
+          <Text style={[styles.queueText, { color: theme.textColor }]}>
+            {t('account_queue_estimated', { date: estimated })}
+          </Text>
+        )}
+      </View>
+    );
+  };
+
   const renderPasswordFlow = () => (
     <>
       <Text style={[styles.body, { color: theme.secondaryTextColor }]}>
@@ -146,6 +204,8 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
         {stepLabel(4, t('account_step_activate'), step === 'activate')}
       </View>
 
+      {renderQueueInfo()}
+
       {step === 'request' && (
         <>
           <Text style={[styles.body, { color: theme.secondaryTextColor }]}>
@@ -157,7 +217,10 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
           {primary(t('account_request_submit'), () =>
             run(
               () => requestInvitation(email),
-              () => setStep('paste'),
+              result => {
+                setQueueInfo(result.queue);
+                setStep('paste');
+              },
             ),
           )}
           <TouchableOpacity onPress={() => setStep('paste')}>
@@ -276,8 +339,13 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
                   { borderColor: notice.ok ? '#22c55e' : '#ef4444' },
                 ]}
               >
+                {notice.missing && (
+                  <Text style={[styles.noticeTitle, { color: '#ef4444' }]}>
+                    {t('account_invite_unavailable_title')}
+                  </Text>
+                )}
                 <Text style={{ color: notice.ok ? '#22c55e' : '#ef4444', fontSize: 13 }}>
-                  {notice.text}
+                  {notice.missing ? t('account_invite_unavailable_body') : notice.text}
                 </Text>
               </View>
             )}
@@ -343,5 +411,9 @@ const styles = StyleSheet.create({
   },
   tipText: { fontSize: 12, lineHeight: 18 },
   notice: { marginTop: 14, padding: 10, borderWidth: 1, borderRadius: 8 },
+  noticeTitle: { fontSize: 14, fontWeight: '700', marginBottom: 4 },
+  queueBox: { borderWidth: 1, borderRadius: 8, padding: 10, marginBottom: 12 },
+  queueText: { fontSize: 12, lineHeight: 18 },
+  queuePosition: { fontSize: 15, fontWeight: '700', marginTop: 4 },
   closeButton: { marginTop: 16, alignItems: 'center', paddingVertical: 8 },
 });

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Dimensions,
   Modal,
@@ -12,6 +12,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useTranslation } from 'react-i18next';
+import Toast from 'react-native-toast-message';
+import { translateText } from '../../web/translate';
 
 const windowHeight = Dimensions.get('window').height;
 
@@ -28,6 +30,9 @@ const BookDetailsModal = ({
 
   const MAX_SCROLL_HEIGHT = windowHeight * 0.7;
   const [scrollHeight, setScrollHeight] = useState(MAX_SCROLL_HEIGHT);
+  const [translatedDescription, setTranslatedDescription] = useState(null);
+  const [showTranslated, setShowTranslated] = useState(false);
+  const [translating, setTranslating] = useState(false);
 
   const handleContentSizeChange = (_w, h) => {
     setScrollHeight(Math.min(h, MAX_SCROLL_HEIGHT));
@@ -42,6 +47,33 @@ const BookDetailsModal = ({
   const showMetadataSection = mode === 'full';
 
   const { t } = useTranslation();
+
+  useEffect(() => {
+    setTranslatedDescription(null);
+    setShowTranslated(false);
+  }, [book.id, book.workId]);
+
+  const handleTranslate = useCallback(async () => {
+    if (translating) return;
+    if (translatedDescription) {
+      setShowTranslated(value => !value);
+      return;
+    }
+    setTranslating(true);
+    try {
+      const translated = await translateText(book.description);
+      setTranslatedDescription(translated);
+      setShowTranslated(true);
+    } catch (error) {
+      Toast.show({
+        type: 'error',
+        text1: t('translate_failed'),
+        text2: error?.message ?? String(error),
+      });
+    } finally {
+      setTranslating(false);
+    }
+  }, [book.description, t, translatedDescription, translating]);
 
   let modalTitle = t("component_book_details_modal_title", {title: book.title});
   if (mode === 'summary') {
@@ -237,11 +269,31 @@ const BookDetailsModal = ({
                           >
                             {t("component_book_details_modal_desc")}
                           </Text>
+                          <TouchableOpacity
+                            style={[styles.translateButton, { borderColor: theme.primaryColor }]}
+                            onPress={handleTranslate}
+                            disabled={translating}
+                          >
+                            <Icon
+                              name={translating ? 'hourglass-empty' : 'translate'}
+                              size={16}
+                              color={theme.primaryColor}
+                            />
+                            <Text style={[styles.translateText, { color: theme.primaryColor }]}>
+                              {translating
+                                ? t('translate_translating')
+                                : showTranslated
+                                  ? t('translate_show_original')
+                                  : t('translate_button')}
+                            </Text>
+                          </TouchableOpacity>
                         </View>
                         <Text
                           style={[styles.description, { color: theme.textColor }]}
                         >
-                          {book.description}
+                          {showTranslated && translatedDescription
+                            ? translatedDescription
+                            : book.description}
                         </Text>
                       </View>
                     )}
@@ -365,7 +417,17 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     marginLeft: 8,
+    flex: 1,
   },
+  translateButton: {
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderRadius: 6,
+  },
+  translateText: { fontSize: 12, marginLeft: 4 },
   tagsContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',

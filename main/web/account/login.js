@@ -124,10 +124,13 @@ export default async function login(username, password) {
 //We detect that to guess if the cookie is valid or not.
 //And guess is a very important word in this sentence lmao.
 export async function validateCookie(sessionToken) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
   try {
     // Send a request to the website with the provided cookies
-    const response = await fetch('https://archiveofourown.org/', {
+    const response = await fetch(await echUrl('https://archiveofourown.org/'), {
       method: 'GET',
+      signal: controller.signal,
       credentials: 'include', // Include cookies in the request
       headers: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -160,5 +163,7 @@ export async function validateCookie(sessionToken) {
   } catch (error) {
     console.error('Error validating cookie:', error);
     throw error;
+  } finally {
+    clearTimeout(timeout);
   }
 }
