@@ -7,6 +7,7 @@ import React, {
 } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   DeviceEventEmitter,
   FlatList,
   Modal,
@@ -44,6 +45,7 @@ import {
 import { deleteDownloaded, isDownloaded } from '../downloads/Downloader';
 import { WorkDescription } from '../components/WorkScreen/DescriptionComponent';
 import { nativeDownload } from '../web/download/NativeDownload';
+import FileExport from '../storage/FileExport';
 import { useTranslation } from 'react-i18next';
 import { StackActions, useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -909,6 +911,12 @@ const ChapterInfoScreen = ({ route }) => {
           <Text style={[styles.nativeModalSubtitle, { color: currentTheme.secondaryTextColor }]}>
             {t("screen_work_choose_format")}
           </Text>
+          <View style={styles.nativeDownloadLocation}>
+            <Icon name="folder" size={18} color={currentTheme.primaryColor} />
+            <Text style={[styles.nativeDownloadLocationText, { color: currentTheme.secondaryTextColor }]}>
+              {t('screen_work_download_folder')}
+            </Text>
+          </View>
 
           {NATIVE_DOWNLOAD_FORMATS.map((format) => {
             const isDownloading = nativeDownloadingFormat === format;
@@ -1194,16 +1202,11 @@ const ChapterInfoScreen = ({ route }) => {
 
   const handleNativeDownload = async (format) => {
     const safeName = (work?.title || `work_${workId}`).replace(/[/\\?%*:|"<>]/g, '_');
-    const filename = `${safeName}.${format}`;
 
     setNativeDownloadingFormat(format);
     try {
-      await nativeDownload(workId, format, safeName);
-      Toast.show({
-        type: 'success',
-        text1: t('screen_work_toast_download_complete'),
-        text2: t('screen_work_toast_download_complete_sub', { filename }),
-      });
+      const download = await nativeDownload(workId, format, safeName);
+      showDownloadedFile(download);
     } catch (err) {
       Toast.show({
         type: 'error',
@@ -1214,6 +1217,26 @@ const ChapterInfoScreen = ({ route }) => {
       setNativeDownloadingFormat(null);
       setNativeDownloadModalVisible(false);
     }
+  };
+
+  const showDownloadedFile = download => {
+    Alert.alert(
+      t('screen_work_toast_download_complete'),
+      t('screen_work_download_location', { filename: download.filename }),
+      [
+        { text: t('general_ok'), style: 'cancel' },
+        {
+          text: t('screen_work_download_open'),
+          onPress: () => FileExport.openFile(download.path, download.mimeType).catch(() => {
+            Toast.show({
+              type: 'error',
+              text1: t('screen_work_download_open_failed'),
+              text2: t('screen_work_download_location', { filename: download.filename }),
+            });
+          }),
+        },
+      ],
+    );
   };
 
   const continueReading = async function()  {
@@ -1649,7 +1672,16 @@ const styles = StyleSheet.create({
   },
   nativeModalSubtitle: {
     fontSize: 13,
-    marginBottom: 16,
+    marginBottom: 10,
+  },
+  nativeDownloadLocation: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  nativeDownloadLocationText: {
+    fontSize: 13,
+    marginLeft: 8,
   },
   nativeFormatRow: {
     flexDirection: 'row',

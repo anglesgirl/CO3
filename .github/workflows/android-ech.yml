@@ -44,6 +44,7 @@ jobs:
           __tests__/downloadExport.test.js
           __tests__/bookmarkAuth.test.js
           __tests__/androidIdentity.test.js
+          __tests__/readerImageProxy.test.js
 
       - name: Setup Go 1.24
         uses: actions/setup-go@v5

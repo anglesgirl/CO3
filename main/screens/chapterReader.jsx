@@ -21,6 +21,7 @@ import Toast from 'react-native-toast-message';
 import { useTranslation } from 'react-i18next';
 import { translateHtmlCached } from '../web/translate';
 import { userErrorMessage } from '../utils/userError';
+import { IMAGE_PROXY_SCRIPT } from '../web/imageProxy';
 
 const PULL_THRESHOLD = 150;
 const PROGRESS_SAVE_DEBOUNCE = 1000;
@@ -695,6 +696,7 @@ const ChapterReader = ({
               `<p>${t('reader_error_fallback')}</p>`,
           }}
           style={styles.webView}
+          injectedJavaScriptBeforeContentLoaded={IMAGE_PROXY_SCRIPT}
           injectedJavaScript={injectedJavaScript}
           onMessage={handleMessage}
           showsVerticalScrollIndicator={false}

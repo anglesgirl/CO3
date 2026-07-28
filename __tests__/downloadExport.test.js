@@ -21,6 +21,17 @@ describe('Android downloads', () => {
     expect(app).toContain('add(FileExportPackage())');
     expect(module).toContain('MediaStore.Downloads.EXTERNAL_CONTENT_URI');
     expect(module).toContain('Environment.DIRECTORY_DOWNLOADS + "/CO3"');
+    expect(module).toContain('Intent.ACTION_VIEW');
+    expect(module).toContain('fun openFile(');
+  });
+
+  it('shows the exact folder and offers to open a manual download', () => {
+    const screen = read('main/screens/workScreen.jsx');
+    const exporter = read('main/storage/FileExport.js');
+    expect(screen).toContain("t('screen_work_download_location'");
+    expect(screen).toContain("t('screen_work_download_open')");
+    expect(screen).toContain('FileExport.openFile');
+    expect(exporter).toContain('nativeModule.openFile');
   });
 
   it('keeps automatic chapter downloads in app storage', () => {
@@ -39,5 +50,11 @@ describe('Android downloads', () => {
     expect(menu).not.toContain("handlePress('Data and Storage')");
     expect(menu).not.toContain("case 'Data and Storage'");
     expect(app).not.toContain('StorageScreen');
+  });
+
+  it('does not show the unavailable update placeholder', () => {
+    const update = read('main/screens/Update.jsx');
+    expect(update).not.toContain("t('screen_update_not_available')");
+    expect(update).not.toContain("DeviceEventEmitter.addListener('doubleTap'");
   });
 });

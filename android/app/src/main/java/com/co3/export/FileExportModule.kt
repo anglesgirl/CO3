@@ -1,6 +1,8 @@
 package com.ao3.xyz.export
 
 import android.content.ContentValues
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -8,6 +10,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -39,6 +42,34 @@ class FileExportModule(private val context: ReactApplicationContext) :
                 promise.reject("FILE_EXPORT_FAILED", error.message, error)
             }
         }
+    }
+
+    @ReactMethod
+    fun openFile(location: String, mimeType: String, promise: Promise) {
+        try {
+            val uri = shareableUri(location)
+            val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val chooser = Intent.createChooser(viewIntent, "Open downloaded file").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(chooser)
+            promise.resolve(true)
+        } catch (error: Throwable) {
+            promise.reject("FILE_OPEN_FAILED", error.message, error)
+        }
+    }
+
+    private fun shareableUri(location: String): Uri {
+        if (location.startsWith("content://")) return Uri.parse(location)
+        return FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.co3-file-export",
+            File(location),
+        )
     }
 
     private fun saveWithMediaStore(source: File, displayName: String, mimeType: String): String {

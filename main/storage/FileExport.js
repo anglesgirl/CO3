@@ -26,6 +26,13 @@ const FileExport = {
     if (!nativeModule?.saveToDownloads) throw new Error('File export module unavailable');
     return nativeModule.saveToDownloads(sourcePath, displayName, mimeType);
   },
+
+  async openFile(location, mimeType) {
+    if (Platform.OS !== 'android') throw new Error('Unsupported open platform');
+    const nativeModule = NativeModules.FileExport;
+    if (!nativeModule?.openFile) throw new Error('File open module unavailable');
+    return nativeModule.openFile(location, mimeType);
+  },
 };
 
 export default FileExport;

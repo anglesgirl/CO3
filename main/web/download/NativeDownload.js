@@ -16,8 +16,9 @@ export async function nativeDownload(workId, format, name) {
     const request = await echRequest(url);
     const headers = { ...request.headers, ...(await getSessionHeaders(false)) };
     await streamDownload(request.url, tempPath, headers);
-    const path = await FileExport.saveToDownloads(tempPath, filename, mimeType(format));
-    return { success: true, path };
+    const type = mimeType(format);
+    const path = await FileExport.saveToDownloads(tempPath, filename, type);
+    return { success: true, path, mimeType: type, filename };
   } catch (err) {
     console.error('nativeDownload error:', err);
     throw err;
