@@ -33,7 +33,7 @@ jobs:
 
       - name: Run tests
         run: >-
-          npm test -- --runInBand
+          npm test -- --config jest.features.config.js --runInBand
           __tests__/loginCookie.test.js
           __tests__/invitationQueue.test.js
           __tests__/requestedFeatures.test.js
