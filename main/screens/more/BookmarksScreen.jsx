@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
-  Linking,
   RefreshControl,
   StyleSheet,
   Text,
@@ -18,6 +17,7 @@ import EmptyState from '../../components/History/Empty';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { userErrorMessage } from '../../utils/userError';
 
 export default function BookmarksScreen({
   route
@@ -186,22 +186,6 @@ export default function BookmarksScreen({
           : t('screen_bookmarks_title')}
       </Text>
 
-      <TouchableOpacity
-        style={{ marginLeft: 'auto' }}
-        onPress={() => {
-          username
-            ? Linking.openURL(
-                `https://archiveofourown.org/users/${username}/bookmarks`,
-              )
-            : getUsername().then(usrname => {
-                Linking.openURL(
-                  `https://archiveofourown.org/users/${usrname}/bookmarks`,
-                );
-              });
-        }}
-      >
-        <Icon name="link" size={24} color={currentTheme.textColor} />
-      </TouchableOpacity>
     </View>
   );
 
@@ -231,7 +215,7 @@ export default function BookmarksScreen({
               { color: currentTheme.secondaryTextColor },
             ]}
           >
-            {error.message}
+            {userErrorMessage(error, t)}
           </Text>
           <TouchableOpacity
             style={[

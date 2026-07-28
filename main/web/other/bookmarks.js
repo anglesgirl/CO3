@@ -1,6 +1,7 @@
 import { getUsername } from '../../storage/Credentials';
 import { parseWorkElements } from '../browse/fetchWorks';
 import getUrl from '../requestManager';
+import { echUrl } from '../echKy';
 
 let DomParser = require('react-native-html-parser').DOMParser;
 
@@ -31,13 +32,11 @@ export async function fetchBookmarks(page, username, pseud, noWebview = false) {
       return null;
     }
 
-    let workElements = Array.from(olElements[0].getElementsByTagName("li"))
-      .filter(li => li.getAttribute("class")?.includes("bookmark blurb"));
-
-    if (workElements.length === 0) {
-      workElements = Array.from(olElements[1].getElementsByTagName("li"))
-        .filter(li => li.getAttribute("class")?.includes("bookmark blurb"));
-    }
+    const workElements = Array.from(olElements).flatMap(list =>
+      Array.from(list.getElementsByTagName('li')).filter(li =>
+        li.getAttribute('class')?.includes('bookmark blurb'),
+      ),
+    );
 
     return parseWorkElements(workElements);
 
@@ -54,7 +53,7 @@ export async function bookmark(work) {
     const url = `https://archiveofourown.org/works/${workId}/bookmarks/new`;
     const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
 
-    const pageResponse = await fetch(url, {
+    const pageResponse = await fetch(await echUrl(url), {
       credentials: 'include',
       headers: { 'User-Agent': userAgent }
     });
@@ -92,7 +91,8 @@ export async function bookmark(work) {
     formData.append('bookmark[rec]', '0');
     formData.append('commit', 'Create');
 
-    const postResponse = await fetch(`https://archiveofourown.org/works/${workId}/bookmarks`, {
+    const postUrl = `https://archiveofourown.org/works/${workId}/bookmarks`;
+    const postResponse = await fetch(await echUrl(postUrl), {
       method: 'POST',
       body: formData,
       credentials: 'include',

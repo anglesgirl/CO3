@@ -81,7 +81,6 @@ import ReadLaterScreen from './screens/more/ReadLaterScreen';
 import PreferencesScreen from './screens/more/Preferences';
 import LoginScreen from './screens/more/LoginScreen';
 import KudoHistoryScreen from './screens/more/KudoHistory';
-import HelpScreen from './screens/more/HelpScreen';
 import DebugScreen from './screens/more/DebugScreen';
 import CategoryScreen from './screens/more/CategoryScreen';
 import BookmarksScreen from './screens/more/BookmarksScreen';
@@ -240,7 +239,6 @@ const AppWrapper = () => {
                   <Stack.Screen name={'Preferences'} component={PreferencesScreen} />
                   <Stack.Screen name={'Account'} component={LoginScreen} />
                   <Stack.Screen name={'KudosHistory'} component={KudoHistoryScreen} />
-                  <Stack.Screen name={'Help'} component={HelpScreen} />
                   <Stack.Screen name={'Debug'} component={DebugScreen} />
                   <Stack.Screen name={'Categories'} component={CategoryScreen} />
                   <Stack.Screen name={'Bookmarks'} component={BookmarksScreen} />
@@ -629,7 +627,7 @@ const App = () => {
       setBooks(booksData);
     } catch (error) {
       console.error('Error initializing app:', error);
-      Alert.alert('Error', 'Failed to initialize app');
+      Alert.alert(t('general_error'), t('app_initialization_failed'));
     } finally {
       setLoading(false);
     }

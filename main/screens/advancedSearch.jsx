@@ -21,6 +21,7 @@ import {
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { echUrl } from '../web/echKy';
 
 const AO3_BASE_URL = 'https://archiveofourown.org/autocomplete';
 
@@ -52,7 +53,7 @@ const fetchAutocompleteSuggestions = async (type, term) => {
   }
   try {
     const url = `${AO3_BASE_URL}/${type}?term=${encodeURIComponent(term)}`;
-    const response = await fetch(url, {
+    const response = await fetch(await echUrl(url), {
       method: 'GET',
       headers: { 'Accept': 'application/json' },
     });

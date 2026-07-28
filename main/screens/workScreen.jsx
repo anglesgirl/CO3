@@ -43,10 +43,11 @@ import {
 } from '../downloads/DownloadQueue';
 import { deleteDownloaded, isDownloaded } from '../downloads/Downloader';
 import { WorkDescription } from '../components/WorkScreen/DescriptionComponent';
-import RNFS from 'react-native-fs';
+import { nativeDownload } from '../web/download/NativeDownload';
 import { useTranslation } from 'react-i18next';
 import { StackActions, useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { userErrorMessage } from '../utils/userError';
 
 const NATIVE_DOWNLOAD_FORMATS = ['azw3', 'epub', 'mobi', 'pdf', 'html'];
 
@@ -142,7 +143,11 @@ const ChapterItem = React.memo(({ chapter, index, currentTheme, onPress, showDat
           setIsDownloadedFile(false);
           setShowDelete(false);
         } catch (error) {
-          Toast.show({ type: "error", text1: t("screen_work_toast_error_deleting"), text2: error.message });
+          Toast.show({
+            type: 'error',
+            text1: t('screen_work_toast_error_deleting'),
+            text2: userErrorMessage(error, t),
+          });
         } finally {
           if (isMounted.current) setIsInQueue(false);
         }
@@ -330,7 +335,7 @@ export const ReaderWrapper = ({
         <View style={styles.errorContainer}>
           <Icon name="error-outline" size={48} color={currentTheme.iconColor} />
           <Text style={[styles.errorText, { color: currentTheme.textColor }]}>
-            {error.toString()}
+            {userErrorMessage(error, t)}
           </Text>
           <TouchableOpacity
             style={[styles.retryButton, { backgroundColor: currentTheme.primaryColor }]}
@@ -523,7 +528,9 @@ const ChapterInfoScreen = ({ route }) => {
         progressDAO.getProgressList(workId),
       ]);
 
-      if (!workData) throw new Error("Could not fetch work data");
+      if (!workData) {
+        throw new Error('work data unavailable');
+      }
 
       setWork(workData);
       setChapters(workData.chapters);
@@ -611,7 +618,7 @@ const ChapterInfoScreen = ({ route }) => {
       }
     } catch (err) {
       console.error('Error loading work data:', err);
-      setError(err.message || 'Failed to load work data');
+      setError(userErrorMessage(err, t));
     } finally {
       setLoading(false);
     }
@@ -1090,7 +1097,7 @@ const ChapterInfoScreen = ({ route }) => {
         <View style={styles.errorContainer}>
           <Icon name="error-outline" size={48} color={currentTheme.iconColor} />
           <Text style={[styles.errorText, { color: currentTheme.textColor }]}>
-            {error}
+            {typeof error === 'string' ? error : userErrorMessage(error, t)}
           </Text>
           <TouchableOpacity
             style={[styles.retryButton, { backgroundColor: currentTheme.primaryColor }]}
@@ -1186,21 +1193,23 @@ const ChapterInfoScreen = ({ route }) => {
   }
 
   const handleNativeDownload = async (format) => {
-    const url = `https://archiveofourown.org/downloads/${workId}/work.${format}`;
     const safeName = (work?.title || `work_${workId}`).replace(/[/\\?%*:|"<>]/g, '_');
     const filename = `${safeName}.${format}`;
-    const destPath = `${RNFS.DownloadDirectoryPath}/${filename}`;
 
     setNativeDownloadingFormat(format);
     try {
-      const result = await RNFS.downloadFile({ fromUrl: url, toFile: destPath }).promise;
-      if (result.statusCode === 200) {
-        Toast.show({ type: 'success', text1: t('screen_work_toast_download_complete'), text2: t("screen_work_toast_download_complete_sub", {filename: filename})});
-      } else {
-        Toast.show({ type: 'error', text1: t('screen_work_toast_download_failed'), text2: t("screen_work_toast_download_failed_sub", { statusCode: result.statusCode })});
-      }
+      await nativeDownload(workId, format, safeName);
+      Toast.show({
+        type: 'success',
+        text1: t('screen_work_toast_download_complete'),
+        text2: t('screen_work_toast_download_complete_sub', { filename }),
+      });
     } catch (err) {
-      Toast.show({ type: 'error', text1: t('screen_work_toast_download_failed'), text2: err.message});
+      Toast.show({
+        type: 'error',
+        text1: t('screen_work_toast_download_failed'),
+        text2: t('screen_work_toast_download_failed_network'),
+      });
     } finally {
       setNativeDownloadingFormat(null);
       setNativeDownloadModalVisible(false);

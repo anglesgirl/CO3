@@ -37,6 +37,10 @@ jobs:
           __tests__/loginCookie.test.js
           __tests__/invitationQueue.test.js
           __tests__/requestedFeatures.test.js
+          __tests__/historyNavigation.test.js
+          __tests__/interfaceCleanup.test.js
+          __tests__/echCoverage.test.js
+          __tests__/userError.test.js
 
       - name: Setup Go 1.24
         uses: actions/setup-go@v5

@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Linking,
   Modal,
   Pressable,
   ScrollView,
@@ -334,38 +333,6 @@ const SideMenu = ({
                 { borderTopColor: currentTheme.borderColor },
               ]}
             >
-              <View style={styles.supportSection}>
-                <Text
-                  style={[
-                    styles.sectionTitle,
-                    { color: currentTheme.textColor },
-                  ]}
-                >
-                  {t('component_side_menu_support')}
-                </Text>
-                <View style={styles.supportContainer}>
-                  <TouchableOpacity
-                    style={[
-                      styles.supportButton,
-                      { backgroundColor: '#22c55e' },
-                    ]}
-                    onPress={() =>
-                      Linking.openURL('https://archiveofourown.org/donate')
-                    }
-                  >
-                    <Text style={styles.supportButtonText}>AO3</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[
-                      styles.supportButton,
-                      { backgroundColor: '#6366f1' },
-                    ]}
-                    onPress={() => Linking.openURL('https://ko-fi.com/tbvns')}
-                  >
-                    <Text style={styles.supportButtonText}>CO3</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
               <Text
                 style={[
                   styles.version,
@@ -488,25 +455,6 @@ const styles = StyleSheet.create({
   footer: {
     padding: 20,
     borderTopWidth: 1,
-  },
-  supportSection: {
-    marginBottom: 12,
-  },
-  supportContainer: {
-    flexDirection: 'row',
-    marginTop: 12,
-    gap: 12,
-  },
-  supportButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  supportButtonText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
   },
   version: {
     textAlign: 'center',

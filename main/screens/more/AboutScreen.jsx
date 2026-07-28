@@ -67,23 +67,8 @@ export default function AboutScreen({ route }) {
             {t('screen_about_text_2')}
           </Text>
           <LinkButton
-            url="https://github.com/tbvns/CO3/releases"
-            label={t('screen_about_news')}
-            theme={currentTheme}
-          />
-          <LinkButton
             url="https://github.com/tbvns/CO3"
             label={t('screen_about_source')}
-            theme={currentTheme}
-          />
-          <LinkButton
-            url="https://tbvns.xyz/discord"
-            label={t('screen_about_discord')}
-            theme={currentTheme}
-          />
-          <LinkButton
-            url="https://ko-fi.com/tbvns"
-            label={t('screen_about_support')}
             theme={currentTheme}
           />
         </View>

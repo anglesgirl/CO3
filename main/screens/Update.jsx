@@ -51,8 +51,7 @@ const UpdateScreen = ({
       );
       Toast.show({
         type: 'error',
-        text1: 'Not implemented yet !',
-        text2: 'Future download manager screen will be here.',
+        text1: t('screen_update_not_available'),
       });
     });
 

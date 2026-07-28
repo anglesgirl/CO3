@@ -1,4 +1,4 @@
-import ky from '../echKy';
+import ky, { echUrl } from '../echKy';
 
 let DomParser = require('react-native-html-parser').DOMParser;
 
@@ -108,8 +108,13 @@ export async function fetchComments(setCannotNext, setStep, preferHTML, singleCh
       const datetime = comH.getElementsByClassName("datetime", false)[0];
       const timestamp = getElementText(datetime).replace(/\s+/g, ' ').trim();
 
-      const icon = coms[i].getElementsByTagName("img")?.[0];
-      const authorImg = icon?.getAttribute("src") || null;
+      const icon = coms[i].getElementsByTagName('img')?.[0];
+      const authorPath =
+        icon?.getAttribute('src') ||
+        '/images/skins/iconsets/default/icon_user.png';
+      const authorImg = await echUrl(
+        new URL(authorPath, 'https://archiveofourown.org').href,
+      );
 
       const blockquote = coms[i].getElementsByTagName("blockquote")[0];
       let html, content;

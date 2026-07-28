@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import WebView from 'react-native-webview';
+import { useTranslation } from 'react-i18next';
 
 // --- Queue ---
 
@@ -60,6 +61,7 @@ export const ACCEPTED_TOS_KEY = 'accepted_tos';
 // --- Component ---
 
 export default function WebviewFetcher() {
+  const { t } = useTranslation();
   const [source, setSource] = useState(null);
   const [visible, setVisible] = useState(false);
   const [showCFWarning, setShowCFWarning] = useState(false);
@@ -160,15 +162,12 @@ export default function WebviewFetcher() {
       >
         <View style={styles.overlay}>
           <View style={styles.modal}>
-            <Text style={styles.title}>AO3 anti-bot mode active</Text>
-            <Text style={styles.body}>
-              AO3 is currently blocking automated requests. Pages will load slower
-              until the restriction lifts (up to 8 hours).{'\n\n'}
-              Some features like kudos, bookmarks and read later may not work properly
-              during this time.
-            </Text>
+            <Text style={styles.title}>{t('webview_antibot_title')}</Text>
+            <Text style={styles.body}>{t('webview_antibot_body')}</Text>
             <Pressable style={styles.button} onPress={onWarningDismiss}>
-              <Text style={styles.buttonText}>Got it</Text>
+              <Text style={styles.buttonText}>
+                {t('webview_antibot_confirm')}
+              </Text>
             </Pressable>
           </View>
         </View>

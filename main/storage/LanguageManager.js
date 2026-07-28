@@ -34,16 +34,16 @@ availableLanguages.forEach(lang => {
 export const getSavedLanguage = async () => {
   try {
     const savedLang = await AsyncStorage.getItem('app_language');
-    return savedLang || 'en';
+    return savedLang || 'zh';
   } catch (e) {
-    return 'en';
+    return 'zh';
   }
 };
 
 i18n.use(initReactI18next).init({
   resources,
-  lng: 'en',
-  fallbackLng: 'en',
+  lng: 'zh',
+  fallbackLng: 'zh',
   interpolation: {
     escapeValue: false,
   },

@@ -14,7 +14,6 @@ import LoginScreen from './more/LoginScreen';
 import KudoHistoryScreen from './more/KudoHistory';
 import CategoryScreen from './more/CategoryScreen';
 import AboutScreen from './more/AboutScreen';
-import HelpScreen from './more/HelpScreen';
 import BookmarksScreen from './more/BookmarksScreen';
 import ReadLaterScreen from './more/ReadLaterScreen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -185,18 +184,6 @@ const MoreScreen = ({
           db: databaseObj,
         })
         break;
-      case 'Help':
-        navigation.push("Help", {
-          currentTheme: currentTheme,
-          workDAO: workDAO,
-          libraryDAO: libraryDAO,
-          setScreens: setScreens,
-          historyDAO: historyDAO,
-          settingsDAO: settingsDAO,
-          progressDAO: progressDAO,
-          kudoHistoryDAO: kudoHistoryDAO,
-        })
-        break;
     }
     console.log(`${screenName} pressed`);
   };
@@ -246,11 +233,6 @@ const MoreScreen = ({
       name: t('screen_more_nav_about'),
       icon: 'info',
       handler: () => handlePress('About'),
-    },
-    {
-      name: t('screen_more_nav_help'),
-      icon: 'help',
-      handler: () => handlePress('Help'),
     },
   ];
 

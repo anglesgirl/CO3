@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
-  Linking,
   RefreshControl,
   StyleSheet,
   Text,
@@ -18,6 +17,7 @@ import EmptyState from '../../components/History/Empty';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { userErrorMessage } from '../../utils/userError';
 
 export default function ReadLaterScreen({
   route
@@ -176,18 +176,6 @@ export default function ReadLaterScreen({
         {t('screen_read_later_title')}
       </Text>
 
-      <TouchableOpacity
-        style={{ marginLeft: 'auto' }}
-        onPress={() =>
-          getUsername().then(usrname => {
-            Linking.openURL(
-              `https://archiveofourown.org/users/${usrname}/readings?show=to-read`,
-            );
-          })
-        }
-      >
-        <Icon name="link" size={24} color={currentTheme.textColor} />
-      </TouchableOpacity>
     </View>
   );
 
@@ -234,7 +222,7 @@ export default function ReadLaterScreen({
               { color: currentTheme.secondaryTextColor },
             ]}
           >
-            {error.message}
+            {userErrorMessage(error, t)}
           </Text>
           <TouchableOpacity
             style={[

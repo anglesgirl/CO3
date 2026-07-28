@@ -1,4 +1,5 @@
 import getUrl from '../requestManager';
+import { echUrl } from '../echKy';
 
 let DomParser = require('react-native-html-parser').DOMParser;
 
@@ -17,10 +18,10 @@ async function scrapeUserPage(url, username) {
 
   console.log(avatar);
 
-  let avatarUrl = avatar.getAttribute("src");
-  if (avatarUrl === "/images/skins/iconsets/default/icon_user.png") {
-    avatarUrl = "https://archiveofourown.org/images/skins/iconsets/default/icon_user.png";
-  }
+  const avatarPath = avatar?.getAttribute('src');
+  const avatarUrl = avatarPath
+    ? await echUrl(new URL(avatarPath, 'https://archiveofourown.org').href)
+    : null;
 
   return {
     username: username,

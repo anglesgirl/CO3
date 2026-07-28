@@ -36,7 +36,13 @@ const THEMES = [
   },
 ];
 
-export default function Step3({ currentTheme, setScreen, theme, setTheme }) {
+export default function Step3({
+  currentTheme,
+  setScreen,
+  theme,
+  setTheme,
+  onFinish,
+}) {
   const { t } = useTranslation();
 
   return (
@@ -113,7 +119,7 @@ export default function Step3({ currentTheme, setScreen, theme, setTheme }) {
 
         <TouchableOpacity
           style={[styles.nextButton, { backgroundColor: currentTheme.primaryColor }]}
-          onPress={() => setScreen(prev => prev + 1)}
+          onPress={onFinish}
           activeOpacity={0.85}
         >
           <Text style={styles.nextButtonText}>{t('onboard_step3_button')}</Text>

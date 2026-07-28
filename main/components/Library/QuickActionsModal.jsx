@@ -16,6 +16,7 @@ import { markForLater } from '../../web/other/markedLater';
 import { bookmark } from '../../web/other/bookmarks';
 import { normalizeWorkData } from '../../storage/dao/WorkDAO';
 import { useTranslation } from 'react-i18next';
+import { userErrorMessage } from '../../utils/userError';
 
 const QuickActionsModal = ({
   isOpen,
@@ -114,9 +115,7 @@ const QuickActionsModal = ({
         Toast.show({
           type: 'error',
           text1: t('component_quick_actions_toast_library_remove_failed_title'),
-          text2:
-            error.message ||
-            t('component_quick_actions_toast_library_remove_failed_sub'),
+          text2: userErrorMessage(error, t),
         });
       }
     } else if (categories.length === 1) {
@@ -133,9 +132,7 @@ const QuickActionsModal = ({
         Toast.show({
           type: 'error',
           text1: t('component_quick_actions_toast_library_add_failed_title'),
-          text2:
-            error.message ||
-            t('component_quick_actions_toast_library_add_failed_sub'),
+          text2: userErrorMessage(error, t),
         });
       }
     } else {
@@ -158,9 +155,7 @@ const QuickActionsModal = ({
         Toast.show({
           type: 'error',
           text1: t('component_quick_actions_toast_mark_later_failed_title'),
-          text2:
-            error.message ||
-            t('component_quick_actions_toast_mark_later_failed_sub'),
+          text2: userErrorMessage(error, t),
         });
       });
   };
@@ -179,9 +174,7 @@ const QuickActionsModal = ({
       Toast.show({
         type: 'error',
         text1: t('component_quick_actions_toast_library_add_failed_title'),
-        text2:
-          error.message ||
-          t('component_quick_actions_toast_library_add_failed_sub'),
+        text2: userErrorMessage(error, t),
       });
     }
   };
@@ -201,9 +194,7 @@ const QuickActionsModal = ({
         Toast.show({
           type: 'error',
           text1: t('component_quick_actions_toast_bookmark_failed_title'),
-          text2:
-            error.message ||
-            t('component_quick_actions_toast_bookmark_failed_sub'),
+          text2: userErrorMessage(error, t),
         });
       });
   };

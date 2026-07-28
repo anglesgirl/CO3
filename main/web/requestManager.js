@@ -19,6 +19,7 @@ import {
 } from '@react-navigation/native';
 import { navigationRef } from '../app';
 import { handleLogin } from './account/login';
+import i18n from '../storage/LanguageManager';
 
 const CF_STORAGE_KEY = 'cf_domains';
 const CF_MODE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
@@ -68,8 +69,8 @@ export default async function getUrl(url, noWebview = false) {
           Toast.show(
             {
               type: 'error',
-              text1: "You have been logged out !",
-              text2: "It's been two week since you last logged in.",
+              text1: i18n.t('screen_account_session_expired'),
+              text2: i18n.t('screen_account_session_expired_sub'),
               onPress: async () => {
                 if (await hasStoredPassword()) {
                   try {
@@ -77,8 +78,10 @@ export default async function getUrl(url, noWebview = false) {
                   } catch (e) {
                     Toast.show({
                       type: 'error',
-                      text1: "Login failed.",
-                      text2: e,
+                      text1: i18n.t('screen_search_fetch_failed', {
+                        resource: i18n.t('screen_search_resource_login'),
+                      }),
+                      text2: i18n.t('general_operation_failed'),
                       onPress: () => {
                         navigationRef.navigate("Account", {});
                       }

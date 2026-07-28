@@ -139,12 +139,20 @@ export async function getInvitationQueueInfo(email) {
   const publicInfo = parseInvitationQueue(publicHtml);
   if (!email?.trim()) return publicInfo;
 
-  const statusHtml = await ky
-    .get(BASE + '/invite_requests/show', {
-      headers: BROWSER_HEADERS,
-      searchParams: { email: email.trim(), commit: 'Look me up' },
-    })
-    .text();
+  let statusHtml;
+  try {
+    statusHtml = await ky
+      .get(BASE + '/invite_requests/show', {
+        headers: BROWSER_HEADERS,
+        searchParams: { email: email.trim(), commit: 'Look me up' },
+      })
+      .text();
+  } catch (error) {
+    if (error?.response?.status === 404) {
+      throw invitationPageError();
+    }
+    throw error;
+  }
   return mergeQueueInfo(publicInfo, parseInvitationQueue(statusHtml));
 }
 

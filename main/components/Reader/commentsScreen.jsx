@@ -63,11 +63,8 @@ export const CommentsScreen = ({
   };
 
   const renderAuthorPic = authorImg => {
-    let url =
-      'https://archiveofourown.org/images/skins/iconsets/default/icon_user.png';
-    if (authorImg?.startsWith('https://archiveofourown.org/')) url = authorImg;
-
-    return <Image style={styles.commentPic} src={url} />;
+    if (!authorImg) return null;
+    return <Image style={styles.commentPic} source={{ uri: authorImg }} />;
   };
 
   const handlePress = comment => {

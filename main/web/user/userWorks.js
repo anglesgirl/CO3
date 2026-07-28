@@ -31,13 +31,9 @@ export async function fetchUserWorks(page, username, pseud) {
       return null;
     }
 
-    let workElements = Array.from(olElements[0].getElementsByTagName("li"))
-      .filter(li => li.getAttribute("class")?.includes("work blurb"));
-
-    if (workElements.length === 0) {
-      workElements = Array.from(olElements[1].getElementsByTagName("li"))
-        .filter(li => li.getAttribute("class")?.includes("work blurb"));
-    }
+    const workElements = Array.from(olElements)
+      .flatMap(list => Array.from(list.getElementsByTagName('li')))
+      .filter(li => li.getAttribute('class')?.includes('work blurb'));
 
     return parseWorkElements(workElements);
 

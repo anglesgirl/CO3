@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
-  Linking,
   RefreshControl,
   StyleSheet,
   Text,
@@ -12,13 +11,14 @@ import {
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import BookCard from '../../components/Library/BookCard';
 import LoadingSpinner from '../../components/History/Spinner';
-import { getUsername } from '../../storage/Credentials';
 import { fetchUserWorks } from '../../web/user/userWorks';
 import EmptyState from '../../components/History/Empty';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useTranslation } from 'react-i18next';
 
 export default function UserWorkScreen({ route }) {
+  const { t } = useTranslation();
   const [bookmarks, setBookmarks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -61,7 +61,7 @@ export default function UserWorkScreen({ route }) {
       description: work.description,
       lastUpdated: work.updated
         ? new Date(work.updated).toLocaleDateString()
-        : 'Unknown',
+        : t('general_unknown'),
       likes: work.kudos,
       bookmarks: work.bookmarks,
       words: work.words,
@@ -164,25 +164,10 @@ export default function UserWorkScreen({ route }) {
         <Icon name="arrow-back" size={24} color={currentTheme.textColor} />
       </TouchableOpacity>
       <Text style={[styles.title, { color: currentTheme.textColor }]}>
-        {username ? username + "'s " : ''}Works
+        {username
+          ? t('screen_user_works_title_username', { username })
+          : t('screen_user_works_title')}
       </Text>
-
-      <TouchableOpacity
-        style={{ marginLeft: 'auto' }}
-        onPress={() => {
-          username
-            ? Linking.openURL(
-                `https://archiveofourown.org/users/${username}/works`,
-              )
-            : getUsername().then(usrname => {
-                Linking.openURL(
-                  `https://archiveofourown.org/users/${usrname}/works`,
-                );
-              });
-        }}
-      >
-        <Icon name="link" size={24} color={currentTheme.textColor} />
-      </TouchableOpacity>
     </View>
   );
 
@@ -197,7 +182,7 @@ export default function UserWorkScreen({ route }) {
             { color: currentTheme.placeholderColor },
           ]}
         >
-          Loading more...
+          {t('screen_library_loading_more')}
         </Text>
       </View>
     );
@@ -205,7 +190,10 @@ export default function UserWorkScreen({ route }) {
 
   if (loading) {
     return (
-      <LoadingSpinner currentTheme={currentTheme} message="Loading works..." />
+      <LoadingSpinner
+        currentTheme={currentTheme}
+        message={t('screen_user_works_loading')}
+      />
     );
   }
 

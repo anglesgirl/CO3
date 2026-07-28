@@ -1,4 +1,5 @@
 // Service for fetching autocomplete suggestions from AO3
+import { echUrl } from '../echKy';
 
 const AO3_BASE_URL = 'https://archiveofourown.org/autocomplete';
 
@@ -15,7 +16,7 @@ export const fetchAutocompleteSuggestions = async (type, term) => {
 
     try {
         const url = `${AO3_BASE_URL}/${type}?term=${encodeURIComponent(term)}`;
-        const response = await fetch(url, {
+        const response = await fetch(await echUrl(url), {
             method: 'GET',
             headers: {
                 'Accept': 'application/json',

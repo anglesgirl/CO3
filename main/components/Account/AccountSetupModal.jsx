@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
+import { userErrorMessage } from '../../utils/userError';
 import {
   activateAccount,
   extractInvitationToken,
@@ -37,6 +38,8 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState(null); // { ok, text }
   const [queueInfo, setQueueInfo] = useState(null);
+  const [lookupEmail, setLookupEmail] = useState('');
+  const [lookupBusy, setLookupBusy] = useState(false);
 
   const [email, setEmail] = useState('');
   const [inviteLink, setInviteLink] = useState('');
@@ -57,7 +60,7 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
         setNotice({
           ok: false,
           missing: error?.code === 'INVITE_PAGE_NOT_FOUND',
-          text: error?.message ?? String(error),
+          text: userErrorMessage(error, t),
         });
       });
     return () => { active = false; };
@@ -86,7 +89,7 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
       setNotice({
         ok: false,
         missing: e?.code === 'INVITE_PAGE_NOT_FOUND',
-        text: e?.message ?? String(e),
+        text: userErrorMessage(e, t),
       });
     } finally {
       setBusy(false);
@@ -175,6 +178,58 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
     );
   };
 
+  const lookupQueuePosition = async () => {
+    if (!lookupEmail.trim()) {
+      setNotice({ ok: false, text: t('account_queue_email_required') });
+      return;
+    }
+    setLookupBusy(true);
+    setNotice(null);
+    try {
+      const info = await getInvitationQueueInfo(lookupEmail);
+      setQueueInfo(info);
+      setNotice({
+        ok: info.position !== null,
+        text: info.position !== null
+          ? t('account_queue_lookup_success')
+          : t('account_queue_email_not_found'),
+      });
+    } catch (error) {
+      setNotice({
+        ok: false,
+        missing: error?.code === 'INVITE_PAGE_NOT_FOUND',
+        text: userErrorMessage(error, t),
+      });
+    } finally {
+      setLookupBusy(false);
+    }
+  };
+
+  const renderQueueLookup = () => (
+    <View style={styles.lookupSection}>
+      <Text style={[styles.hint, { color: theme.secondaryTextColor }]}>
+        {t('account_queue_lookup_hint')}
+      </Text>
+      {input(lookupEmail, setLookupEmail, 'you@example.com', {
+        keyboardType: 'email-address',
+        editable: !lookupBusy && !busy,
+      })}
+      <TouchableOpacity
+        style={[styles.lookupButton, { borderColor: theme.primaryColor }]}
+        onPress={lookupQueuePosition}
+        disabled={lookupBusy || busy}
+      >
+        {lookupBusy ? (
+          <ActivityIndicator size="small" color={theme.primaryColor} />
+        ) : (
+          <Text style={[styles.lookupButtonText, { color: theme.primaryColor }]}>
+            {t('account_queue_lookup')}
+          </Text>
+        )}
+      </TouchableOpacity>
+    </View>
+  );
+
   const renderPasswordFlow = () => (
     <>
       <Text style={[styles.body, { color: theme.secondaryTextColor }]}>
@@ -205,6 +260,7 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
       </View>
 
       {renderQueueInfo()}
+      {step === 'request' && renderQueueLookup()}
 
       {step === 'request' && (
         <>
@@ -233,14 +289,6 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
 
       {step === 'paste' && (
         <>
-          <Text style={[styles.body, { color: theme.secondaryTextColor }]}>
-            {t('account_paste_invite_hint')}
-          </Text>
-          <View style={[styles.tipBox, { borderColor: theme.primaryColor }]}>
-            <Text style={[styles.tipText, { color: theme.textColor }]}>
-              {t('account_copy_link_tip')}
-            </Text>
-          </View>
           {input(
             inviteLink,
             setInviteLink,
@@ -298,14 +346,6 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
 
       {step === 'activate' && (
         <>
-          <Text style={[styles.body, { color: theme.secondaryTextColor }]}>
-            {t('account_activate_hint')}
-          </Text>
-          <View style={[styles.tipBox, { borderColor: theme.primaryColor }]}>
-            <Text style={[styles.tipText, { color: theme.textColor }]}>
-              {t('account_copy_link_tip')}
-            </Text>
-          </View>
           {input(
             activationLink,
             setActivationLink,
@@ -415,5 +455,15 @@ const styles = StyleSheet.create({
   queueBox: { borderWidth: 1, borderRadius: 8, padding: 10, marginBottom: 12 },
   queueText: { fontSize: 12, lineHeight: 18 },
   queuePosition: { fontSize: 15, fontWeight: '700', marginTop: 4 },
+  lookupSection: { marginBottom: 12 },
+  lookupButton: {
+    minHeight: 42,
+    borderWidth: 1,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  lookupButtonText: { fontSize: 14, fontWeight: '600' },
   closeButton: { marginTop: 16, alignItems: 'center', paddingVertical: 8 },
 });
