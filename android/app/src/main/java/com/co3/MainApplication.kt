@@ -1,4 +1,4 @@
-package com.co3
+package com.ao3.xyz
 
 import android.app.Application
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -10,7 +10,8 @@ import com.facebook.react.ReactNativeHost
 import com.facebook.react.ReactPackage
 import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
 import com.facebook.react.defaults.DefaultReactNativeHost
-import com.co3.ech.EchProxyPackage
+import com.ao3.xyz.ech.EchProxyPackage
+import com.ao3.xyz.export.FileExportPackage
 import com.swmansion.rnscreens.RNScreensPackage;
 
 class MainApplication : Application(), ReactApplication {
@@ -21,6 +22,7 @@ class MainApplication : Application(), ReactApplication {
             PackageList(this).packages.apply {
                 add(LibrarySchedulerPackage())
                 add(EchProxyPackage())
+                add(FileExportPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"

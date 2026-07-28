@@ -29,13 +29,13 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace "com.co3"
+    namespace "com.ao3.xyz"
     defaultConfig {
-        applicationId "com.co3"
+        applicationId "com.ao3.xyz"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 19
-        versionName "B0.0.19"
+        versionCode 20
+        versionName "B0.0.20"
     }
 
     splits {

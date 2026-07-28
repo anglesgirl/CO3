@@ -1,4 +1,4 @@
-package com.co3.ech
+package com.ao3.xyz.ech
 
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext

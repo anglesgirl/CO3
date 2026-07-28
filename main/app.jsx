@@ -75,7 +75,6 @@ import {
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import UserInfoScreen from './screens/UserInfo';
 import UserWorkScreen from './screens/more/UserWorkScreen';
-import StorageScreen from './screens/more/StorageScreen';
 import StatsScreen from './screens/more/StatsScreen';
 import ReadLaterScreen from './screens/more/ReadLaterScreen';
 import PreferencesScreen from './screens/more/Preferences';
@@ -233,7 +232,6 @@ const AppWrapper = () => {
                   <Stack.Screen name={'Reader'} component={ReaderWrapper} />
                   <Stack.Screen name={'User'} component={UserInfoScreen} />
                   <Stack.Screen name={'UserWork'} component={UserWorkScreen} />
-                  <Stack.Screen name={'Storage'} component={StorageScreen} />
                   <Stack.Screen name={'Statistics'} component={StatsScreen} />
                   <Stack.Screen name={'ReadLater'} component={ReadLaterScreen} />
                   <Stack.Screen name={'Preferences'} component={PreferencesScreen} />

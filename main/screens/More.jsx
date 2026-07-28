@@ -158,19 +158,6 @@ const MoreScreen = ({
           chapterDAO: chapterDAO,
         });
         break;
-      case 'Data and Storage':
-        navigation.push("Storage", {
-          currentTheme: currentTheme,
-          workDAO: workDAO,
-          libraryDAO: libraryDAO,
-          setScreens: setScreens,
-          historyDAO: historyDAO,
-          settingsDAO: settingsDAO,
-          progressDAO: progressDAO,
-          kudoHistoryDAO: kudoHistoryDAO,
-          databaseObj: databaseObj
-        })
-        break;
       case 'About':
         navigation.push("About", {
           currentTheme: currentTheme,
@@ -223,11 +210,6 @@ const MoreScreen = ({
       name: t('screen_more_nav_stats'),
       icon: 'bar-chart',
       handler: () => handlePress('Statistics'),
-    },
-    {
-      name: t('screen_more_nav_data'),
-      icon: 'storage',
-      handler: () => handlePress('Data and Storage'),
     },
     {
       name: t('screen_more_nav_about'),

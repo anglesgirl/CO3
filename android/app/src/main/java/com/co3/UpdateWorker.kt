@@ -1,4 +1,4 @@
-package com.co3
+package com.ao3.xyz
 
 import android.content.Context
 import android.content.Intent

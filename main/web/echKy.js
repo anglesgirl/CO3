@@ -160,6 +160,22 @@ export async function echUrl(url) {
   }
 }
 
+// Returns a URL and headers suitable for native streaming clients. Unlike
+// echUrl(), this also supports AO3's separate download host.
+export async function echRequest(url) {
+  try {
+    const base = await getEchBase();
+    if (!base) return { url, headers: {} };
+    const parsed = new URL(url);
+    return {
+      url: base + parsed.pathname + parsed.search,
+      headers: { 'X-Ech-Target': parsed.hostname },
+    };
+  } catch {
+    return { url, headers: {} };
+  }
+}
+
 // echFetch sends a request for ANY host through the local proxy, so it gets the
 // proxy's DoH resolution (and ECH when the host supports it) instead of the
 // system resolver. Used for services like the translation API, which are

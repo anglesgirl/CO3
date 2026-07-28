@@ -687,7 +687,7 @@ const ChapterInfoScreen = ({ route }) => {
     bookmark(work).then(() => {
       showToast(t('screen_work_toast_added_to_bookmarks'), 'success');
     }) .catch(error => {
-      showToast(error, 'error');
+      showToast(userErrorMessage(error, t), 'error');
     })
   };
 
@@ -696,7 +696,7 @@ const ChapterInfoScreen = ({ route }) => {
     markForLater(work).then(() => {
       showToast(t('screen_work_toast_marked_for_later'), 'success');
     }) .catch(error => {
-      showToast(error, 'error');
+      showToast(userErrorMessage(error, t), 'error');
     })
   };
 

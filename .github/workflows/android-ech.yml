@@ -41,6 +41,9 @@ jobs:
           __tests__/interfaceCleanup.test.js
           __tests__/echCoverage.test.js
           __tests__/userError.test.js
+          __tests__/downloadExport.test.js
+          __tests__/bookmarkAuth.test.js
+          __tests__/androidIdentity.test.js
 
       - name: Setup Go 1.24
         uses: actions/setup-go@v5

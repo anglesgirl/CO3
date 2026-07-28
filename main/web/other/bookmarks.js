@@ -2,6 +2,8 @@ import { getUsername } from '../../storage/Credentials';
 import { parseWorkElements } from '../browse/fetchWorks';
 import getUrl from '../requestManager';
 import { echUrl } from '../echKy';
+import { parseBookmarkForm } from '../ao3FormParser';
+import { getSessionHeaders } from '../sessionHeaders';
 
 let DomParser = require('react-native-html-parser').DOMParser;
 
@@ -52,33 +54,17 @@ export async function bookmark(work) {
     const workId = work.id;
     const url = `https://archiveofourown.org/works/${workId}/bookmarks/new`;
     const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
+    const sessionHeaders = await getSessionHeaders();
 
     const pageResponse = await fetch(await echUrl(url), {
       credentials: 'include',
-      headers: { 'User-Agent': userAgent }
+      headers: { 'User-Agent': userAgent, ...sessionHeaders }
     });
 
+    if (!pageResponse.ok) throw new Error(`Bookmark form failed: ${pageResponse.status}`);
+
     const html = await pageResponse.text();
-
-    const getAttributeValue = (tagString, attributeName) => {
-      const regex = new RegExp(`${attributeName}="([^"]+)"`, 'i');
-      const match = tagString.match(regex);
-      return match ? match[1] : null;
-    };
-
-    const tokenTagMatch = html.match(/<input[^>]*name="authenticity_token"[^>]*>/i);
-    if (!tokenTagMatch) throw new Error('Authenticity token tag not found');
-    const token = getAttributeValue(tokenTagMatch[0], 'value');
-
-    const pseudTagMatch = html.match(/<input[^>]*name="bookmark\[pseud_id\]"[^>]*>/i);
-
-    let pseudId = null;
-    if (pseudTagMatch) {
-      pseudId = getAttributeValue(pseudTagMatch[0], 'value');
-    } else {
-      const selectMatch = html.match(/<select[^>]*name="bookmark\[pseud_id\]"[^>]*>[\s\S]*?<option[^>]*value="([^"]+)"[^>]*selected/i);
-      pseudId = selectMatch ? selectMatch[1] : null;
-    }
+    const { token, pseudId } = parseBookmarkForm(html);
 
     if (!token || !pseudId) {
       throw new Error(`Extraction failed. Token: ${!!token}, Pseud: ${!!pseudId}`);
@@ -100,6 +86,7 @@ export async function bookmark(work) {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Referer': url,
         'User-Agent': userAgent,
+        ...sessionHeaders,
       }
     });
 
