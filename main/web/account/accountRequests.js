@@ -2,12 +2,13 @@
 // that used to bounce the user out to a browser:
 //
 //   * password reset   GET /users/password/new  -> POST /users/password
-//   * invitation       GET /invite_requests/new -> POST /invite_requests
+//   * invitation       GET /invite_requests -> POST /invite_requests
 //
 // Both requests go through the local ECH proxy, so they work on networks where
 // AO3 is blocked (an external browser would simply fail there).
 
 import ky, { echUrl } from '../echKy';
+import { mergeQueueInfo, parseInvitationQueue } from './invitationQueue';
 
 const BASE = 'https://archiveofourown.org';
 
@@ -116,6 +117,43 @@ async function fetchWithWarmup(path) {
 async function getForm(path) {
   const html = await fetchWithWarmup(path);
   return { html, token: extractAuthenticityToken(html) };
+}
+
+function invitationPageError() {
+  const error = new Error('AO3 invitation page is unavailable (HTTP 404).');
+  error.code = 'INVITE_PAGE_NOT_FOUND';
+  return error;
+}
+
+export async function getInvitationQueueInfo(email) {
+  let publicHtml;
+  try {
+    publicHtml = await fetchWithWarmup('/invite_requests');
+  } catch (error) {
+    if (error?.response?.status === 404) {
+      throw invitationPageError();
+    }
+    throw error;
+  }
+
+  const publicInfo = parseInvitationQueue(publicHtml);
+  if (!email?.trim()) return publicInfo;
+
+  let statusHtml;
+  try {
+    statusHtml = await ky
+      .get(BASE + '/invite_requests/show', {
+        headers: BROWSER_HEADERS,
+        searchParams: { email: email.trim(), commit: 'Look me up' },
+      })
+      .text();
+  } catch (error) {
+    if (error?.response?.status === 404) {
+      throw invitationPageError();
+    }
+    throw error;
+  }
+  return mergeQueueInfo(publicInfo, parseInvitationQueue(statusHtml));
 }
 
 /**
@@ -362,7 +400,13 @@ export async function activateAccount(input) {
  */
 export async function requestInvitation(email) {
   if (!email || !email.trim()) throw new Error('Enter your email address.');
-  const { token } = await getForm('/invite_requests/new');
+  let token;
+  try {
+    ({ token } = await getForm('/invite_requests'));
+  } catch (error) {
+    if (error?.response?.status === 404) throw invitationPageError();
+    throw error;
+  }
   const { res, html } = await postForm(
     '/invite_requests',
     {
@@ -370,16 +414,22 @@ export async function requestInvitation(email) {
       'invite_request[email]': email.trim(),
       commit: 'Add me to the list!',
     },
-    BASE + '/invite_requests/new',
+    BASE + '/invite_requests',
   );
 
   const outcome = readOutcome(html);
   if (outcome) {
     if (!outcome.ok) throw new Error(outcome.message);
-    return outcome.message;
+    return {
+      message: outcome.message,
+      queue: await getInvitationQueueInfo(email),
+    };
   }
   if (res.ok || res.redirected) {
-    return 'Your invitation request has been submitted.';
+    return {
+      message: 'Your invitation request has been submitted.',
+      queue: await getInvitationQueueInfo(email),
+    };
   }
   throw new Error(`Request failed (HTTP ${res.status}).`);
 }

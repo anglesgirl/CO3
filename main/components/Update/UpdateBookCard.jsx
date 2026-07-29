@@ -18,6 +18,7 @@ import { deleteDownloaded, isDownloaded } from '../../downloads/Downloader';
 import Toast from 'react-native-toast-message';
 import { processQueue } from '../../downloads/DownloadManager';
 import { useTranslation } from 'react-i18next';
+import { userErrorMessage } from '../../utils/userError';
 
 const imageMappings = {
   rating: {
@@ -144,7 +145,11 @@ const UpdateBookCard = ({ update, workDAO, theme, onPress }) => {
           setIsDownloadedFile(false);
           setShowDelete(false);
         } catch (error) {
-          Toast.show({ type: "error", text1: t("component_update_bookcard_deletion_failed"), text2: error.message });
+          Toast.show({
+            type: 'error',
+            text1: t('component_update_bookcard_deletion_failed'),
+            text2: userErrorMessage(error, t),
+          });
         } finally {
           if (isMounted.current) setIsInQueue(false);
         }

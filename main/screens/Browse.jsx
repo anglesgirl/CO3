@@ -23,6 +23,7 @@ import { getJsonSettings } from '../storage/jsonSettings';
 import { getAllPresets } from '../storage/jsonSearches';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useTranslation } from 'react-i18next';
+import { userErrorMessage } from '../utils/userError';
 
 const FilterIcon = ({ color, size }) => (
   <Icon name={'filter-list'} style={{ color: color }} size={size} />
@@ -150,6 +151,7 @@ const BrowseScreen = ({ currentTheme, viewMode = 'med', setScreens, screens, lib
       if (reset) {
         setError({
           message: err.message || 'Failed to load worksScreen',
+          code: err.code,
           status: err.response?.status || 'Unknown',
           statusText: err.response?.statusText || 'Network Error'
         });
@@ -285,12 +287,12 @@ const BrowseScreen = ({ currentTheme, viewMode = 'med', setScreens, screens, lib
 
   const handleClearFilters = () => {
     Alert.alert(
-      "Clear Filters",
-      "Are you sure you want to clear all filters?",
+      t('screen_browse_clear_filters_title'),
+      t('screen_browse_clear_filters_message'),
       [
         { text: t('general_cancel'), style: "cancel" },
         {
-          text: "Clear",
+          text: t('screen_browse_clear_filters_button'),
           onPress: () => {
             setTagMode({ active: false, tagName: null });
             setAppliedFilters({});
@@ -456,7 +458,7 @@ const BrowseScreen = ({ currentTheme, viewMode = 'med', setScreens, screens, lib
               { color: currentTheme.secondaryTextColor },
             ]}
           >
-            {error.message}
+            {userErrorMessage(error, t)}
           </Text>
           <TouchableOpacity
             style={[

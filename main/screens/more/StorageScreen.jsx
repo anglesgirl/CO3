@@ -59,11 +59,11 @@ export default function StorageScreen({
                   text2: t('screen_storage_export_database_success_sub'),
                 });
               })
-              .catch(err => {
+              .catch(() => {
                 Toast.show({
                   type: 'error',
                   text1: t('screen_storage_export_database_error_generic'),
-                  text2: err.message,
+                  text2: t('general_operation_failed'),
                 });
               });
           }}

@@ -3,14 +3,23 @@
 //
 // The proxy listens on http://127.0.0.1:<port> and re-originates each request to
 // https://archiveofourown.org over a TLS handshake whose SNI is hidden with ECH.
-// If the proxy can't start (non-Android build, missing native module, handshake
-// failure) we fall back to a direct request so the app keeps working.
+// Android never falls back to direct AO3 traffic. If the proxy cannot start,
+// protected requests fail visibly so the user can retry without leaking SNI.
 
 import ky from 'ky';
 import { NativeModules, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const AO3_HOSTS = new Set(['archiveofourown.org', 'www.archiveofourown.org']);
+
+export class ProtectedConnectionError extends Error {
+  constructor(message = 'Protected ECH connection unavailable', cause) {
+    super(message);
+    this.name = 'ProtectedConnectionError';
+    this.code = 'ECH_REQUIRED';
+    this.cause = cause;
+  }
+}
 
 // Default DoH endpoint (JSON API) used to fetch AO3's current ech= record.
 // A reachable DoH is important behind the GFW — dns.google is usually blocked,
@@ -68,7 +77,7 @@ function startProxy() {
       console.log(`[ECH] proxy started on ${base} (doh=${doh || '(none)'}, ip=${ips || '(dns)'})`);
       return base;
     } catch (e) {
-      console.warn('[ECH] proxy failed to start, using direct requests:', e?.message ?? e);
+      console.warn('[ECH] proxy failed to start; Android direct requests are blocked:', e?.message ?? e);
       return null;
     }
   })();
@@ -77,6 +86,18 @@ function startProxy() {
 
 function getEchBase() {
   return echBasePromise || startProxy();
+}
+
+async function requireEchBase() {
+  let base = await getEchBase();
+  if (base || Platform.OS !== 'android') return base;
+
+  // A rejected start is memoised as null. Retry once for each user action so
+  // tapping Retry can recover without ever exposing AO3 to a direct request.
+  echBasePromise = null;
+  base = await startProxy();
+  if (!base) throw new ProtectedConnectionError();
+  return base;
 }
 
 // Eagerly warm up the proxy so it's ready before the first AO3 request, then
@@ -147,33 +168,42 @@ export async function syncRemoteConfig() {
 
 // echUrl rewrites an AO3 URL so it goes through the local ECH proxy. Use it for
 // raw fetch() calls (form POSTs, cookie-sensitive requests) that can't use the
-// `echKy` instance. Falls back to the original URL when the proxy isn't running.
+// `echKy` instance. Android throws instead of exposing AO3 to a direct request.
 export async function echUrl(url) {
-  try {
-    const base = await getEchBase();
-    if (!base) return url;
-    const u = new URL(url);
-    if (!AO3_HOSTS.has(u.hostname)) return url;
-    return base + u.pathname + u.search;
-  } catch {
-    return url;
-  }
+  const u = new URL(url);
+  if (!AO3_HOSTS.has(u.hostname)) return url;
+  const base = await requireEchBase();
+  return base ? base + u.pathname + u.search : url;
+}
+
+// Returns a URL and headers suitable for native streaming clients. Unlike
+// echUrl(), this also supports AO3's separate download host.
+export async function echRequest(url) {
+  const base = await requireEchBase();
+  if (!base) return { url, headers: {} };
+  const parsed = new URL(url);
+  return {
+    url: base + parsed.pathname + parsed.search,
+    headers: { 'X-Ech-Target': parsed.hostname },
+  };
 }
 
 // echFetch sends a request for ANY host through the local proxy, so it gets the
 // proxy's DoH resolution (and ECH when the host supports it) instead of the
 // system resolver. Used for services like the translation API, which are
-// unreachable on networks with poisoned DNS. Falls back to a direct fetch when
-// the proxy isn't available.
+// unreachable on networks with poisoned DNS. Android never falls back directly.
 export async function echFetch(url, options = {}) {
-  const base = await getEchBase();
+  const base = await requireEchBase();
   let u;
   try {
     u = new URL(url);
-  } catch {
+  } catch (cause) {
+    if (Platform.OS === 'android') {
+      throw new ProtectedConnectionError('Invalid protected request URL', cause);
+    }
     return fetch(url, options);
   }
-  if (!base) return fetch(url, options);
+  if (!base) return fetch(url, options); // Non-Android platforms only.
 
   return fetch(base + u.pathname + u.search, {
     ...options,
@@ -290,8 +320,6 @@ const echKy = ky.create({
   hooks: {
     beforeRequest: [
       async (request) => {
-        const base = await getEchBase();
-        if (!base) return; // no proxy -> leave request untouched (direct)
         let u;
         try {
           u = new URL(request.url);
@@ -299,6 +327,8 @@ const echKy = ky.create({
           return;
         }
         if (!AO3_HOSTS.has(u.hostname)) return;
+        const base = await requireEchBase();
+        if (!base) return; // Non-Android platforms keep their existing path.
         return new Request(base + u.pathname + u.search, request);
       },
     ],
@@ -316,10 +346,15 @@ export async function echSelfTest() {
   }
   const t0 = Date.now();
   try {
-    const res = await echKy.get('https://archiveofourown.org/', { timeout: 30000 });
+    const home = await echKy.get('https://archiveofourown.org/', { timeout: 30000 });
+    const works = await echKy.get('https://archiveofourown.org/works', { timeout: 30000 });
+    const worksHtml = await works.text();
+    if (!worksHtml.includes('work blurb')) {
+      throw new Error('AO3 /works did not return a work list');
+    }
     const ms = Date.now() - t0;
     const status = await getEchStatus();
-    return `OK — HTTP ${res.status} in ${ms}ms via ${base}\nDoH: ${doh || '(none)'}\n${status}`;
+    return `OK — / HTTP ${home.status}, /works HTTP ${works.status} in ${ms}ms via ${base}\nDoH: ${doh || '(none)'}\n${status}`;
   } catch (e) {
     const ms = Date.now() - t0;
     const status = await getEchStatus();

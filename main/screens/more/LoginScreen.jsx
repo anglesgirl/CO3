@@ -121,7 +121,7 @@ const LoginScreen = ({ route }) => {
       });
     } catch (error) {
       console.error('Error retrieving session info:', error);
-      showAlert('Error', 'Failed to retrieve session information');
+      showAlert(t('general_error'), t('screen_account_session_load_failed'));
     }
   };
 
@@ -136,7 +136,7 @@ const LoginScreen = ({ route }) => {
 
   const handleLogin = async () => {
     if (!username || !password) {
-      showAlert('Error', 'Please enter both username and password');
+      showAlert(t('general_error'), t('screen_account_credentials_required'));
       return;
     }
 
@@ -286,7 +286,9 @@ const LoginScreen = ({ route }) => {
               ]}
               onPress={handleLogout}
             >
-              <Text style={styles.logoutButtonText}>Logout</Text>
+              <Text style={styles.logoutButtonText}>
+                {t('screen_account_logout_button')}
+              </Text>
             </TouchableOpacity>
           </View>
         </ScrollView>
@@ -356,7 +358,7 @@ const LoginScreen = ({ route }) => {
                 ]}
                 onPress={hideSessionInfo}
               >
-                <Text style={styles.modalButtonText}>Close</Text>
+                <Text style={styles.modalButtonText}>{t('general_close')}</Text>
               </TouchableOpacity>
             </View>
           </View>

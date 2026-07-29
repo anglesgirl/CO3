@@ -7,8 +7,13 @@ export function buildPath(workId, chapterId) {
 }
 
 export async function downloadChapter(workId, chapterId) {
-  const [html, css] = await fetchChapter(workId, chapterId, true);
+  const content = await fetchChapter(workId, chapterId, true);
+  if (!content?.[0]) throw new Error('Chapter content is unavailable');
+  const [html, css] = content;
   await saveFile(html, css, workId, chapterId);
+  if (!await isDownloaded(workId, chapterId)) {
+    throw new Error('Chapter download was not saved');
+  }
 }
 
 const saveFile = async (html, css, workId, chapterId) => {
@@ -23,9 +28,15 @@ const saveFile = async (html, css, workId, chapterId) => {
     await RNFS.writeFile(path + ".css", css, 'utf8');
     console.log(`Download successful ${chapterId} from work ${workId} to ${path}.html and .css`);
   } catch (err) {
-    console.log(err.message);
+    await removeIfPresent(path + '.html');
+    await removeIfPresent(path + '.css');
+    throw err;
   }
 };
+
+async function removeIfPresent(path) {
+  if (await RNFS.exists(path)) await RNFS.unlink(path);
+}
 
 export async function isDownloaded(workId, chapterId) {
   const path = buildPath(workId, chapterId);

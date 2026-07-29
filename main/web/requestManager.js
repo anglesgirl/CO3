@@ -1,8 +1,6 @@
-import ky from './echKy';
+import ky, { ProtectedConnectionError } from './echKy';
 import { TimeoutError } from 'ky';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { fetchViaWebView } from './WebviewFetcher';
-import { Platform } from 'react-native';
+import { fetchViaProtectedWebView } from './WebviewFetcher';
 import {
   deleteCredsPasswd,
   deleteCredsToken,
@@ -19,34 +17,14 @@ import {
 } from '@react-navigation/native';
 import { navigationRef } from '../app';
 import { handleLogin } from './account/login';
-
-const CF_STORAGE_KEY = 'cf_domains';
-const CF_MODE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
-
-async function getCFMap() {
-  const raw = await AsyncStorage.getItem(CF_STORAGE_KEY);
-  return raw ? JSON.parse(raw) : {};
-}
-
-async function isCFMode(domain) {
-  const map = await getCFMap();
-  if (!map[domain]) return false;
-  if (Date.now() > map[domain]) {
-    delete map[domain];
-    await AsyncStorage.setItem(CF_STORAGE_KEY, JSON.stringify(map));
-    return false;
-  }
-  return true;
-}
-
-async function enableCFMode(domain) {
-  const map = await getCFMap();
-  map[domain] = Date.now() + CF_MODE_DURATION;
-  await AsyncStorage.setItem(CF_STORAGE_KEY, JSON.stringify(map));
-}
+import i18n from '../storage/LanguageManager';
 
 function isCFChallenge(html) {
-  return html.includes('_cf_chl_opt');
+  return [
+    '_cf_chl_opt',
+    'cdn-cgi/challenge-platform',
+    'challenges.cloudflare.com',
+  ].some(marker => html.includes(marker));
 }
 
 const cloudflareErrorCodes = [
@@ -56,11 +34,17 @@ const cloudflareErrorCodes = [
   520, //CF specific, "Unknown error"
   522, //CF specific, "Connection Timed Out"
   503, //Used for CF challenges
+  429, //Rate limited; retry through ECH instead of switching transport
 ]
 
-export default async function getUrl(url, noWebview = false) {
-  const { hostname } = new URL(url);
+function protectedWebView(url, disabled) {
+  if (disabled) {
+    throw new ProtectedConnectionError('AO3 requires protected browser verification');
+  }
+  return fetchViaProtectedWebView(url, { cfWarning: true });
+}
 
+export default async function getUrl(url, noWebview = false) {
   if (noWebview) {
     getLastLogin().then(async (time) => {
       try {
@@ -68,8 +52,8 @@ export default async function getUrl(url, noWebview = false) {
           Toast.show(
             {
               type: 'error',
-              text1: "You have been logged out !",
-              text2: "It's been two week since you last logged in.",
+              text1: i18n.t('screen_account_session_expired'),
+              text2: i18n.t('screen_account_session_expired_sub'),
               onPress: async () => {
                 if (await hasStoredPassword()) {
                   try {
@@ -77,8 +61,10 @@ export default async function getUrl(url, noWebview = false) {
                   } catch (e) {
                     Toast.show({
                       type: 'error',
-                      text1: "Login failed.",
-                      text2: e,
+                      text1: i18n.t('screen_search_fetch_failed', {
+                        resource: i18n.t('screen_search_resource_login'),
+                      }),
+                      text2: i18n.t('general_operation_failed'),
                       onPress: () => {
                         navigationRef.navigate("Account", {});
                       }
@@ -107,34 +93,22 @@ export default async function getUrl(url, noWebview = false) {
     })
   }
 
-  if (!(Platform.OS === 'ios' || Platform.OS === 'android')) {
-    noWebview = true;
-  }
-
-  if (!noWebview && await isCFMode(hostname)) {
-    console.log(`using webview to fetch ${url}`);
-    return fetchViaWebView(url);
-  }
-
   try {
     const html = await ky.get(url).text();
 
     if (isCFChallenge(html)) {
-      console.log(`isCfChalenged fiered with ${html}`);
-      await enableCFMode(hostname);
-      return fetchViaWebView(url, { cfWarning: true });
+      return protectedWebView(url, noWebview);
     }
 
     console.log(`fetched ${url} via ky.`);
     return html;
   } catch (err) {
+    if (err instanceof ProtectedConnectionError) throw err;
     if (cloudflareErrorCodes.includes(err?.response?.status)) {
-      await enableCFMode(hostname);
-      return fetchViaWebView(url, { cfWarning: true });
+      return protectedWebView(url, noWebview);
     }
     if (err instanceof TimeoutError) {
-      await enableCFMode(hostname);
-      return fetchViaWebView(url, { cfWarning: true });
+      return protectedWebView(url, noWebview);
     }
     throw err;
   }

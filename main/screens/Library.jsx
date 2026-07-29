@@ -17,6 +17,7 @@ import CategorySelectionModal from '../components/WorkScreen/CategorySelectionMo
 import { getJsonSettings } from '../storage/jsonSettings';
 import ReadLaterScreen from './more/ReadLaterScreen';
 import { useTranslation } from 'react-i18next';
+import { userErrorMessage } from '../utils/userError';
 import { useNavigation } from '@react-navigation/native';
 
 const SortIcon = ({ color, size }) => (
@@ -665,7 +666,7 @@ const LibraryScreen = ({
               { color: currentTheme.secondaryTextColor },
             ]}
           >
-            {error.message}
+            {userErrorMessage(error, t)}
           </Text>
           <TouchableOpacity
             style={[

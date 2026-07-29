@@ -67,23 +67,21 @@ export default function AboutScreen({ route }) {
             {t('screen_about_text_2')}
           </Text>
           <LinkButton
-            url="https://github.com/tbvns/CO3/releases"
-            label={t('screen_about_news')}
-            theme={currentTheme}
-          />
-          <LinkButton
             url="https://github.com/tbvns/CO3"
             label={t('screen_about_source')}
             theme={currentTheme}
           />
+          <Text style={[styles.sectionTitle, { color: currentTheme.textColor }]}>
+            {t('screen_about_assisted_development')}
+          </Text>
           <LinkButton
-            url="https://tbvns.xyz/discord"
-            label={t('screen_about_discord')}
+            url="https://anglesya.win/"
+            label={t('screen_about_idea_contributor')}
             theme={currentTheme}
           />
           <LinkButton
-            url="https://ko-fi.com/tbvns"
-            label={t('screen_about_support')}
+            url="https://www.ao3.xyz/"
+            label="AO3.XYZ"
             theme={currentTheme}
           />
         </View>
@@ -150,6 +148,11 @@ const styles = StyleSheet.create({
     fontWeight: 'ultralight',
     textDecorationLine: 'underline',
     marginLeft: 16,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginTop: 24,
   },
   image: {
     width: 100,

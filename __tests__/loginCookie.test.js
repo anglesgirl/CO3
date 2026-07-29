@@ -1,0 +1,31 @@
+jest.mock('../main/web/account/fetchAuthenticityToken', () => ({
+  fetchLoginAuthenticityToken: jest.fn(),
+}));
+jest.mock('../main/storage/Credentials', () => ({}));
+jest.mock('../main/app', () => ({ navigationRef: {} }));
+jest.mock('react-native-toast-message', () => ({ show: jest.fn() }));
+jest.mock('i18next', () => ({ t: key => key }));
+jest.mock('../main/web/echKy', () => ({
+  echUrl: jest.fn(async () => 'http://127.0.0.1:12345/'),
+}));
+
+import { validateCookie } from '../main/web/account/login';
+import { echUrl } from '../main/web/echKy';
+
+describe('validateCookie', () => {
+  beforeEach(() => {
+    global.fetch = jest.fn(async () => ({
+      headers: { get: jest.fn(() => null) },
+    }));
+  });
+
+  it('validates the session through the ECH URL with a timeout signal', async () => {
+    await expect(validateCookie('session-token')).resolves.toBe(true);
+
+    expect(echUrl).toHaveBeenCalledWith('https://archiveofourown.org/');
+    expect(global.fetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:12345/',
+      expect.objectContaining({ signal: expect.anything() }),
+    );
+  });
+});

@@ -16,6 +16,7 @@ import { searchJsonPreset } from '../storage/jsonSearches';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
+import { userErrorMessage } from '../utils/userError';
 
 const SECTION_META = {
   categories: { icon: 'bookmark-box-multiple-outline' },
@@ -321,6 +322,18 @@ export default function GlobalSearchScreen({ currentTheme, searchTerm, setActive
     return categories.filter(s => s.toLowerCase().includes(term.toLowerCase()))
   }
 
+  const showFetchError = (resourceKey, error) => {
+    Toast.show({
+      type: 'error',
+      text1: t('screen_search_fetch_failed', {
+        resource: t(resourceKey),
+      }),
+      text2: userErrorMessage(error, t),
+      position: 'bottom',
+      bottomOffset: 100,
+    });
+  };
+
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -338,22 +351,22 @@ export default function GlobalSearchScreen({ currentTheme, searchTerm, setActive
       libraryDAO.search(term).then(setLibraryResults)
       fetchFilteredWorks({"work_search[query]": term, "work_search[sort_column]": "hits"})
         .then(setWorksResultResult)
-        .catch(e => Toast.show({ type: "error", text1: "Error fetching works", text2: e.message, position: "bottom", bottomOffset: 100 }))
+        .catch(error => showFetchError('screen_search_resource_works', error))
       autoComplete.fetchAutocompleteSuggestions('tag', term)
         .then(setTags)
-        .catch(e => Toast.show({ type: "error", text1: "Error fetching tags", text2: e.message, position: "bottom", bottomOffset: 100 }));
+        .catch(error => showFetchError('screen_search_resource_tags', error));
       autoComplete.fetchFandomSuggestions(term)
         .then(setFandoms)
-        .catch(e => Toast.show({ type: "error", text1: "Error fetching fandoms", text2: e.message, position: "bottom", bottomOffset: 100 }));
+        .catch(error => showFetchError('screen_search_resource_fandoms', error));
       autoComplete.fetchRelationshipSuggestions(term)
         .then(setShips)
-        .catch(e => Toast.show({ type: "error", text1: "Error fetching ships", text2: e.message, position: "bottom", bottomOffset: 100 }));
+        .catch(error => showFetchError('screen_search_resource_relationships', error));
       autoComplete.fetchCharacterSuggestions(term)
         .then(setChars)
-        .catch(e => Toast.show({ type: "error", text1: "Error fetching characters", text2: e.message, position: "bottom", bottomOffset: 100 }));
+        .catch(error => showFetchError('screen_search_resource_characters', error));
       autoComplete.fetchFreeformSuggestions(term)
         .then(setFreeform)
-        .catch(e => Toast.show({ type: "error", text1: "Error fetching freeforms", text2: e.message, position: "bottom", bottomOffset: 100 }));
+        .catch(error => showFetchError('screen_search_resource_freeforms', error));
     }, 500);
 
     return () => clearTimeout(timer);

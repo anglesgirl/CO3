@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import WorkScreen from './workScreen';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
+import { firstHistoryItemForDoubleTap } from '../utils/historyNavigation';
 
 const HistoryScreen = ({
   currentTheme,
@@ -61,7 +62,10 @@ const HistoryScreen = ({
 
   useEffect(() => {
     const subscription = DeviceEventEmitter.addListener('doubleTap', id => {
-      handleClick(history[0]);
+      const item = firstHistoryItemForDoubleTap(history, id);
+      if (item) {
+        handleClick(item);
+      }
     });
 
     return () => {

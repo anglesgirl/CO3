@@ -235,7 +235,7 @@ export async function exportDb(db) {
     const exportFileName = 'CO3-Database-Export.db';
 
     const dbPath = Platform.select({
-      android: `/data/data/com.co3/databases/${dbFileName}`,
+      android: `/data/data/com.ao3.xyz/databases/${dbFileName}`,
       ios: `${RNFS.LibraryDirectoryPath}/LocalDatabase/${dbFileName}`,
     });
 
