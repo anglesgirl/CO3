@@ -150,6 +150,82 @@ func StartStrict(listen, target, echB64, doh, ipList, cachePath string, insecure
 	return start(listen, target, echB64, doh, ipList, cachePath, insecure, false)
 }
 
+// ECHPublicName returns the public_name encoded in the first ECHConfig of a
+// base64 ECHConfigList. The standalone tester uses this as a cross-check beside
+// the SNI observed in the ClientHello that it actually writes to the socket.
+func ECHPublicName(echB64 string) (string, error) {
+	b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(echB64))
+	if err != nil { return "", fmt.Errorf("ECH base64: %w", err) }
+	if len(b) < 2 { return "", errors.New("short ECHConfigList") }
+	listLen := int(b[0])<<8 | int(b[1])
+	if listLen+2 > len(b) || listLen < 4 { return "", errors.New("invalid ECHConfigList length") }
+	// ECHConfig: version(2), contents_length(2), contents. ECHConfigContents
+	// begins config_id(1), kem_id(2), public_key(opaque16), cipher_suites
+	// (opaque16), maximum_name_length(1), public_name(opaque8).
+	off := 2
+	if off+4 > len(b) { return "", errors.New("short ECHConfig") }
+	contentsLen := int(b[off+2])<<8 | int(b[off+3])
+	off += 4
+	end := off + contentsLen
+	if end > len(b) || off+5 > end { return "", errors.New("invalid ECHConfig contents") }
+	off += 3 // config_id + kem_id
+	pkLen := int(b[off])<<8 | int(b[off+1]); off += 2 + pkLen
+	if off+2 > end { return "", errors.New("short ECH public key") }
+	csLen := int(b[off])<<8 | int(b[off+1]); off += 2 + csLen
+	if off+2 > end { return "", errors.New("short ECH cipher suites") }
+	off++ // maximum_name_length
+	nameLen := int(b[off]); off++
+	if nameLen == 0 || off+nameLen > end { return "", errors.New("invalid ECH public_name") }
+	return string(b[off : off+nameLen]), nil
+}
+
+// observedSNIConn records the first TLS record written by crypto/tls and
+// extracts the literal server_name extension from the outer ClientHello. This
+// observes the bytes before they leave the proxy, rather than inferring SNI
+// merely from an ECHConfigList.
+type observedSNIConn struct {
+	net.Conn
+	buf []byte
+	name string
+}
+
+func (c *observedSNIConn) Write(p []byte) (int, error) {
+	if c.name == "" && len(c.buf) < 65536 {
+		c.buf = append(c.buf, p...)
+		c.name = outerClientHelloSNI(c.buf)
+	}
+	return c.Conn.Write(p)
+}
+
+func outerClientHelloSNI(b []byte) string {
+	if len(b) < 9 || b[0] != 22 { return "" } // TLS handshake record
+	recordLen := int(b[3])<<8 | int(b[4])
+	if len(b) < 5+recordLen || b[5] != 1 { return "" } // ClientHello
+	off := 9 // handshake header (4) + legacy_version (2) + random (32) follows
+	off += 2 + 32
+	if off >= len(b) { return "" }
+	sidLen := int(b[off]); off += 1 + sidLen
+	if off+2 > len(b) { return "" }; cipherLen := int(b[off])<<8 | int(b[off+1]); off += 2 + cipherLen
+	if off >= len(b) { return "" }; compLen := int(b[off]); off += 1 + compLen
+	if off+2 > len(b) { return "" }; extEnd := off + 2 + (int(b[off])<<8 | int(b[off+1])); off += 2
+	if extEnd > len(b) { return "" }
+	for off+4 <= extEnd {
+		typ := int(b[off])<<8 | int(b[off+1])
+		length := int(b[off+2])<<8 | int(b[off+3])
+		off += 4
+		if off+length > extEnd { return "" }
+		if typ == 0 && length >= 5 { // server_name: list length, type, name length, name
+			p := off + 2
+			if b[p] == 0 && p+3 <= off+length {
+				nameLen := int(b[p+1])<<8 | int(b[p+2])
+				if p+3+nameLen <= off+length { return string(b[p+3 : p+3+nameLen]) }
+			}
+		}
+		off += length
+	}
+	return ""
+}
+
 func start(listen, target, echB64, doh, ipList, cachePath string, insecure, allowRetry bool) error {
 	mu.Lock()
 	if server != nil {
@@ -168,7 +244,12 @@ func start(listen, target, echB64, doh, ipList, cachePath string, insecure, allo
 	if err != nil || len(echList) == 0 {
 		return fmt.Errorf("could not obtain ECH config for %s: %v", target, err)
 	}
-	setConfigInfo("%d bytes for %s, source: %s", len(echList), target, src)
+	publicName, nameErr := ECHPublicName(base64.StdEncoding.EncodeToString(echList))
+	if nameErr != nil {
+		setConfigInfo("%d bytes for %s, source: %s, public_name: (parse failed: %v)", len(echList), target, src, nameErr)
+	} else {
+		setConfigInfo("%d bytes for %s, source: %s, ECH public_name=%q", len(echList), target, src, publicName)
+	}
 
 	// 2. User-supplied edge IPs take priority over any DNS result.
 	custom := parseIPList(ipList)
@@ -547,7 +628,8 @@ func echDialContext(sni string, echList []byte, cachePath string, insecure, allo
 				InsecureSkipVerify:             insecure,
 			}
 			hctx, cancel := context.WithTimeout(ctx, dialTimeout)
-			tc := tls.Client(raw, cfg)
+			observed := &observedSNIConn{Conn: raw}
+			tc := tls.Client(observed, cfg)
 			err = tc.HandshakeContext(hctx)
 			cancel()
 
@@ -569,7 +651,8 @@ func echDialContext(sni string, echList []byte, cachePath string, insecure, allo
 				if err == nil {
 					cfg.EncryptedClientHelloConfigList = echList
 					hctx, retryCancel := context.WithTimeout(ctx, dialTimeout)
-					tc = tls.Client(raw, cfg)
+					observed = &observedSNIConn{Conn: raw}
+					tc = tls.Client(observed, cfg)
 					err = tc.HandshakeContext(hctx)
 					retryCancel()
 				}
@@ -582,8 +665,8 @@ func echDialContext(sni string, echList []byte, cachePath string, insecure, allo
 			}
 			st := tc.ConnectionState()
 			logged.Do(func() {
-				setShakeInfo("ok via %s ECHAccepted=%v TLS=%s ALPN=%q",
-					dialed, st.ECHAccepted, tlsVersionName(st.Version), st.NegotiatedProtocol)
+				setShakeInfo("ok via %s ECHAccepted=%v TLS=%s ALPN=%q outer_SNI=%q",
+					dialed, st.ECHAccepted, tlsVersionName(st.Version), st.NegotiatedProtocol, orNone(observed.name))
 			})
 			return tc, nil
 		}
