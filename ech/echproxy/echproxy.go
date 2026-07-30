@@ -1,27 +1,23 @@
-// Package echproxy is an on-device ECH (Encrypted Client Hello) front proxy for
-// CO3 / AO3, designed to be compiled into the Android app with `gomobile bind`.
+// Package echproxy provides a reusable on-device DoH/ECH HTTP proxy for Android.
+// Every valid target is resolved through DoH. Only targets that resolve entirely
+// to Cloudflare AS13335 and publish their own HTTPS ECH record use ECH; all
+// other targets use ordinary TLS over the DoH-resolved addresses.
 //
-// It runs a small local HTTP reverse proxy on 127.0.0.1:<port>. Every request it
-// receives is forwarded to https://<target> (archiveofourown.org) over a TLS 1.3
-// handshake whose SNI is hidden with ECH, so the React Native HTTP client (ky)
-// can point at the plain-HTTP loopback endpoint without doing any TLS itself.
+// gomobile-exported surface (basic types only):
 //
-// Two censorship problems are handled:
-//   - SNI inspection  -> ECH (Config.EncryptedClientHelloConfigList, Go 1.24+)
-//   - DNS poisoning   -> addresses are resolved over DoH and dialled directly,
-//     bypassing the (poisoned) system resolver. IPv4 is preferred.
-//
-// gomobile-exported surface (basic types only, so it binds cleanly to Java):
-//
-//	Start(listen, target, echB64, doh string, insecure bool) error
+//	IsAs13335(doh, host) bool
+//	Start(listen, target, echB64, doh, ipList, cachePath string, insecure bool) error
 //	Stop() error
 //	LastStatus() string
+//	FetchTxt(doh, name) (string, error)
 package echproxy
 
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,19 +27,21 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
 
-const dialTimeout = 20 * time.Second
+var androidCertPool *x509.CertPool
+var androidCertPoolOnce sync.Once
 
-// Last-resort baked-in ECHConfigList for archiveofourown.org (public_name
-// cloudflare-ech.com). Cloudflare ROTATES these, so it WILL go stale — it only
-// exists so the proxy still starts when DoH is blocked. The retry_configs
-// self-heal path fixes a stale value automatically when the handshake is allowed.
-const fallbackECH = "AEX+DQBBEgAgACCCqb/I3qllxRj0GsvaltwQOKEVxT3s7r9QsejF510DIgAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA="
+const (
+	dialTimeout = 20 * time.Second
+	publicECHCacheTTL = 12 * time.Hour
+)
 
 var (
 	mu          sync.Mutex
@@ -54,6 +52,7 @@ var (
 	shakeInfo   string   // last TLS handshake result (ECHAccepted=…)
 	upstreamIPs []string // DoH-resolved upstream addresses, IPv4 first
 	customIPs   []string // user-supplied edge IPs, tried before everything else
+	fallbackECH []byte   // operator-published ECHConfigList for AS13335 targets
 
 	// Per-host state for secondary targets (translation API, mirrors, …) reached
 	// through the same proxy via the X-Ech-Target header.
@@ -68,6 +67,7 @@ var (
 type hostConf struct {
 	ips       []string
 	ech       []byte
+	as13335   bool
 	transport *http.Transport
 }
 
@@ -133,7 +133,114 @@ func orNone(s string) string {
 // instead of DNS (e.g. hand-picked fast Cloudflare IPs). Because Cloudflare is
 // anycast, any edge IP serves the site — the SNI and the ECH config are
 // unaffected, so a custom IP changes only the route, never the encryption.
-func Start(listen, target, echB64, doh, ipList string, insecure bool) error {
+// IsAs13335 resolves host through the configured DoH endpoints and returns true
+// only when it has at least one answer and every returned IP is in Cloudflare
+// AS13335. It performs no system-DNS fallback, so a failed/ambiguous lookup does
+// not accidentally route a host through the ECH proxy.
+// loadAndroidCertPool accepts both Android hashed DER certificates and PEM
+// bundles. CGO-free Go binaries do not reliably inherit Android's trust store.
+func loadAndroidCertPool() *x509.CertPool {
+	androidCertPoolOnce.Do(func() {
+		pool := x509.NewCertPool()
+		loaded := 0
+		for _, dir := range []string{
+			"/system/etc/security/cacerts",
+			"/apex/com.android.conscrypt/cacerts",
+			"/system/etc/security/cacerts_google",
+			"/data/misc/user/0/cacerts-added",
+		} {
+			entries, err := os.ReadDir(dir)
+			if err != nil { continue }
+			for _, entry := range entries {
+				if entry.IsDir() { continue }
+				data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+				if err != nil { continue }
+				if cert, err := x509.ParseCertificate(data); err == nil {
+					pool.AddCert(cert); loaded++
+				} else if pool.AppendCertsFromPEM(data) {
+					loaded++
+				}
+			}
+		}
+		if loaded > 0 { androidCertPool = pool }
+	})
+	return androidCertPool
+}
+
+func IsAs13335(doh, host string) bool {
+	if !isTargetHost(host) {
+		return false
+	}
+	ips, err := resolveViaDoH(host, doh)
+	if err != nil || len(ips) == 0 {
+		return false
+	}
+	return allCloudflareAS13335(ips)
+}
+
+// HasECH reports whether the target publishes its own HTTPS ECH configuration.
+// It is independent from AS qualification: callers use ordinary DoH resolution
+// for hosts that are not ECH-capable.
+func HasECH(doh, host string) bool {
+	if !isTargetHost(host) {
+		return false
+	}
+	config, err := fetchECHViaDoH(host, doh)
+	return err == nil && len(config) > 0
+}
+
+// Resolve returns DoH-resolved A/AAAA addresses as a comma-separated string
+// for gomobile callers. It never falls back to Android/system DNS.
+func Resolve(doh, host string) (string, error) {
+	if !isTargetHost(host) {
+		return "", errors.New("invalid target host")
+	}
+	ips, err := resolveViaDoH(host, doh)
+	if err != nil {
+		return "", err
+	}
+	return strings.Join(ips, ","), nil
+}
+
+// isCloudflareAS13335 checks the published IPv4 and IPv6 CIDRs assigned to
+// Cloudflare's AS13335. The list is intentionally conservative: unknown
+// addresses are treated as non-AS13335 and stay on Mihon's regular route.
+func isCloudflareAS13335(value string) bool {
+	ip := net.ParseIP(value)
+	if ip == nil {
+		return false
+	}
+	for _, cidr := range cloudflareAS13335CIDRs {
+		_, network, _ := net.ParseCIDR(cidr)
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func allCloudflareAS13335(ips []string) bool {
+	if len(ips) == 0 {
+		return false
+	}
+	for _, ip := range ips {
+		if !isCloudflareAS13335(ip) {
+			return false
+		}
+	}
+	return true
+}
+
+var cloudflareAS13335CIDRs = []string{
+	"173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+	"141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+	"197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+	"104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+	"2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32",
+	"2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
+}
+
+func Start(listen, target, echB64, doh, ipList, cachePath string, insecure bool) error {
 	mu.Lock()
 	if server != nil {
 		mu.Unlock()
@@ -141,43 +248,34 @@ func Start(listen, target, echB64, doh, ipList string, insecure bool) error {
 	}
 	mu.Unlock()
 
-	if target == "" {
-		target = "archiveofourown.org"
+	// Generic mode: each requested host is resolved lazily. echB64 is an
+	// operator-published fallback ECHConfigList for AS13335 targets whose own
+	// HTTPS record has no ech= parameter.
+	_ = target
+	_ = cachePath
+	fallback := []byte(nil)
+	if strings.TrimSpace(echB64) != "" {
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(echB64))
+		if err != nil || len(decoded) == 0 {
+			return fmt.Errorf("invalid fallback ECHConfigList: %w", err)
+		}
+		fallback = decoded
 	}
 
-	// 1. ECH config (flag > DoH HTTPS record > baked-in fallback).
-	echList, src, err := loadECHConfig(target, echB64, doh)
-	if err != nil || len(echList) == 0 {
-		return fmt.Errorf("could not obtain ECH config for %s: %v", target, err)
+	custom := make([]string, 0)
+	for _, ip := range parseIPList(ipList) {
+		if isCloudflareAS13335(ip) {
+			custom = append(custom, ip)
+		}
 	}
-	setConfigInfo("%d bytes for %s, source: %s", len(echList), target, src)
-
-	// 2. User-supplied edge IPs take priority over any DNS result.
-	custom := parseIPList(ipList)
 	mu.Lock()
 	customIPs = custom
+	fallbackECH = fallback
+	upstreamIPs = nil
 	mu.Unlock()
+	setDNSInfo("per-host DoH; ECH only for AS13335-qualified hosts")
 
-	// 3. Resolve upstream IPs over DoH, bypassing the (possibly poisoned)
-	//    system resolver. Failure is non-fatal: we fall back to system DNS.
-	ips, derr := resolveViaDoH(target, doh)
-	mu.Lock()
-	upstreamIPs = ips
-	mu.Unlock()
-
-	switch {
-	case len(custom) > 0 && len(ips) > 0:
-		setDNSInfo("custom IP(s): %s | DoH also resolved: %s",
-			strings.Join(custom, ", "), strings.Join(ips, ", "))
-	case len(custom) > 0:
-		setDNSInfo("custom IP(s): %s (DoH unused/failed: %v)", strings.Join(custom, ", "), derr)
-	case derr != nil || len(ips) == 0:
-		setDNSInfo("DoH resolve failed (%v) — falling back to system DNS (may be poisoned)", derr)
-	default:
-		setDNSInfo("DoH resolved %d addr(s): %s", len(ips), strings.Join(ips, ", "))
-	}
-
-	// Remember the settings so secondary hosts can be resolved the same way.
+	// Remember the settings so every requested host can be resolved the same way.
 	hostsMu.Lock()
 	activeDoH, activeInse = doh, insecure
 	hostConfs = map[string]*hostConf{}
@@ -185,9 +283,7 @@ func Start(listen, target, echB64, doh, ipList string, insecure bool) error {
 
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
-		// Route each request to a transport built for its own host, so the proxy
-		// can also front other services (e.g. a translation API) over DoH+ECH.
-		Transport: &hostRouter{primary: target, primaryTransport: newECHTransport(target, echList, insecure)},
+		Transport: &hostRouter{},
 		Jar:       jar,
 		Timeout:   60 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -205,7 +301,7 @@ func Start(listen, target, echB64, doh, ipList string, insecure bool) error {
 	server = srv
 	mu.Unlock()
 
-	setStatus("reverse proxy listening on http://%s -> https://%s (via ECH)", listen, target)
+	setStatus("generic ECH proxy listening on http://%s", listen)
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			setStatus("server stopped: %v", err)
@@ -250,7 +346,11 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// through the same DoH + ECH path instead of the poisoned system resolver.
 	target := h.target
 	if t := strings.TrimSpace(r.Header.Get("X-Ech-Target")); t != "" {
-		target = t
+		if !isTargetHost(t) {
+			http.Error(w, "echproxy: invalid target host", http.StatusBadRequest)
+			return
+		}
+		target = strings.ToLower(t)
 	}
 
 	outURL := &url.URL{Scheme: "https", Host: target, Path: r.URL.Path, RawQuery: r.URL.RawQuery}
@@ -296,6 +396,26 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
+// isTargetHost accepts DNS host names only. The header is intentionally not a
+// general URL/authority escape hatch: ports, paths, userinfo, IP literals, and
+// malformed names would bypass the per-host TLS/DNS routing assumptions.
+func isTargetHost(value string) bool {
+	if value == "" || len(value) > 253 || net.ParseIP(value) != nil || strings.ContainsAny(value, "/:@?#\\") {
+		return false
+	}
+	for _, label := range strings.Split(strings.TrimSuffix(value, "."), ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			if !(r == '-' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func rewriteLocation(loc, target string) string {
 	u, err := url.Parse(loc)
 	if err != nil {
@@ -313,15 +433,12 @@ func rewriteLocation(loc, target string) string {
 // hostRouter sends each request through a transport built for its own hostname.
 // The primary target keeps the transport built at Start(); any other host gets
 // one created on demand (DoH-resolved addresses, ECH when the server offers it).
-type hostRouter struct {
-	primary          string
-	primaryTransport *http.Transport
-}
+type hostRouter struct{}
 
 func (hr *hostRouter) RoundTrip(req *http.Request) (*http.Response, error) {
 	host := req.URL.Hostname()
-	if host == hr.primary || host == "" {
-		return hr.primaryTransport.RoundTrip(req)
+	if host == "" {
+		return nil, errors.New("missing target host")
 	}
 	t, err := transportFor(host)
 	if err != nil {
@@ -343,12 +460,29 @@ func transportFor(host string) (*http.Transport, error) {
 	hc := &hostConf{}
 	if ips, err := resolveViaDoH(host, doh); err == nil {
 		hc.ips = ips
+		hc.as13335 = allCloudflareAS13335(ips)
+		setDNSInfo("%s: %d DoH address(es), AS13335=%v", host, len(ips), hc.as13335)
 	} else {
-		log.Printf("echproxy: DoH resolve for %s failed: %v (falling back to system DNS)", host, err)
+		log.Printf("echproxy: DoH resolve for %s failed: %v", host, err)
 	}
-	// ECH is optional here — most non-Cloudflare hosts don't publish it.
-	if b, err := fetchECHViaDoH(host, doh); err == nil && len(b) > 0 {
-		hc.ech = b
+	// AS13335 is the ECH qualification. The target's own ech= is preferred;
+	// the operator fallback covers Cloudflare hosts that omit HTTPS ech=.
+	if hc.as13335 {
+		if b, err := fetchECHViaDoH(host, doh); err == nil && len(b) > 0 {
+			hc.ech = b
+			setConfigInfo("%d bytes for %s, source: target HTTPS ech=", len(b), host)
+		} else {
+			mu.Lock()
+			hc.ech = append([]byte(nil), fallbackECH...)
+			mu.Unlock()
+			if len(hc.ech) > 0 {
+				setConfigInfo("%d bytes for %s, source: operator fallback", len(hc.ech), host)
+			} else {
+				setConfigInfo("no ECHConfigList for AS13335 host %s", host)
+			}
+		}
+	} else {
+		setConfigInfo("%s is not AS13335; ordinary TLS via DoH", host)
 	}
 	hc.transport = &http.Transport{
 		DialTLSContext:        hostDialContext(host, hc, insecure),
@@ -366,19 +500,30 @@ func transportFor(host string) (*http.Transport, error) {
 	return hc.transport, nil
 }
 
-// hostDialContext dials a secondary host over its DoH-resolved addresses,
-// enabling ECH only when that host actually publishes a config.
+// hostDialContext dials a secondary host over its DoH-resolved addresses.
+// AS13335 hosts always use ECH: their own HTTPS ech= is preferred, otherwise
+// the operator-published fallback ConfigList is used.
 func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		_, port, err := net.SplitHostPort(addr)
 		if err != nil || port == "" {
 			port = "443"
 		}
-		cands := make([]string, 0, len(hc.ips)+1)
+		mu.Lock()
+		custom := append([]string(nil), customIPs...)
+		mu.Unlock()
+		// Prefer the addresses published for this host. A manually curated
+		// Cloudflare edge can be useful as a fallback, but it is not guaranteed
+		// to serve every Cloudflare customer or application endpoint reliably.
+		cands := make([]string, 0, len(custom)+len(hc.ips))
 		for _, ip := range hc.ips {
 			cands = append(cands, net.JoinHostPort(ip, port))
 		}
-		cands = append(cands, addr) // last resort: system DNS
+		if hc.as13335 {
+			for _, ip := range custom {
+				cands = append(cands, net.JoinHostPort(ip, port))
+			}
+		}
 
 		d := &net.Dialer{Timeout: dialTimeout}
 		var raw net.Conn
@@ -398,9 +543,13 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 			NextProtos:         []string{"h2", "http/1.1"},
 			InsecureSkipVerify: insecure,
 		}
-		if len(hc.ech) > 0 {
+		if hc.as13335 && len(hc.ech) > 0 {
 			cfg.EncryptedClientHelloConfigList = hc.ech
 			cfg.MinVersion = tls.VersionTLS13
+		}
+		if hc.as13335 && len(hc.ech) == 0 {
+			raw.Close()
+			return nil, fmt.Errorf("%s is AS13335 but no ECHConfigList is available", host)
 		}
 		hctx, cancel := context.WithTimeout(ctx, dialTimeout)
 		defer cancel()
@@ -409,21 +558,38 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 		if err := tc.HandshakeContext(hctx); err != nil {
 			var rej *tls.ECHRejectionError
 			if errors.As(err, &rej) && len(rej.RetryConfigList) > 0 {
+				// Production routing may accept one server retry config. It is
+				// host-scoped in hc (never promoted to the shared fallback), and
+				// the second attempt still requires ECH rather than plain TLS.
 				raw.Close()
-				raw2, derr := d.DialContext(ctx, "tcp", cands[0])
-				if derr != nil {
-					return nil, derr
+				setConfigInfo("%d bytes for %s, source: server retry_configs", len(rej.RetryConfigList), host)
+				raw, retryErr := d.DialContext(ctx, "tcp", cands[0])
+				if retryErr != nil {
+					return nil, fmt.Errorf("%s retry dial failed: %w", host, retryErr)
 				}
-				cfg.EncryptedClientHelloConfigList = rej.RetryConfigList
-				tc = tls.Client(raw2, cfg)
-				if err2 := tc.HandshakeContext(hctx); err2 != nil {
-					raw2.Close()
-					return nil, fmt.Errorf("%s handshake failed: %w", host, err2)
+				retryConfig := *cfg
+				retryConfig.EncryptedClientHelloConfigList = rej.RetryConfigList
+				retryCtx, retryCancel := context.WithTimeout(ctx, dialTimeout)
+				retryConn := tls.Client(raw, &retryConfig)
+				retryErr = retryConn.HandshakeContext(retryCtx)
+				retryCancel()
+				if retryErr == nil && retryConn.ConnectionState().ECHAccepted {
+					hc.ech = append([]byte(nil), rej.RetryConfigList...)
+					setShakeInfo("ok via %s ECHAccepted=true source=server retry_configs", cands[0])
+					return retryConn, nil
 				}
-				return tc, nil
+				raw.Close()
+				return nil, fmt.Errorf("%s retry ECH handshake failed: %w", host, retryErr)
 			}
 			raw.Close()
 			return nil, fmt.Errorf("%s handshake failed: %w", host, err)
+		}
+		if hc.as13335 && !tc.ConnectionState().ECHAccepted {
+			raw.Close()
+			return nil, fmt.Errorf("%s ECH was not accepted", host)
+		}
+		if hc.as13335 {
+			setShakeInfo("ok via DoH ECHAccepted=true source=%s", orNone(configInfo))
 		}
 		return tc, nil
 	}
@@ -431,9 +597,9 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 
 // --- ECH transport --------------------------------------------------------
 
-func newECHTransport(sni string, echList []byte, insecure bool) *http.Transport {
+func newECHTransport(sni string, echList []byte, cachePath string, insecure bool) *http.Transport {
 	return &http.Transport{
-		DialTLSContext:        echDialContext(sni, echList, insecure),
+		DialTLSContext:        echDialContext(sni, echList, cachePath, insecure),
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          20,
 		IdleConnTimeout:       90 * time.Second,
@@ -479,78 +645,65 @@ func dialCandidates(addr string) []string {
 }
 
 // echDialContext dials the upstream and performs a TLS 1.3 handshake with ECH.
-func echDialContext(sni string, echList []byte, insecure bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
+func echDialContext(sni string, echList []byte, cachePath string, insecure bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	var logged sync.Once
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		d := &net.Dialer{Timeout: dialTimeout}
+		candidates := dialCandidates(addr)
+		var lastErr error
 
-		var raw net.Conn
-		var err error
-		var dialed string
-		for _, cand := range dialCandidates(addr) {
-			raw, err = d.DialContext(ctx, "tcp", cand)
-			if err == nil {
-				dialed = cand
-				break
+		// An edge can reset or reject an otherwise valid ECH connection. Try every
+		// configured edge before failing, but never downgrade this protected path to
+		// ordinary TLS (which would expose the real AO3 SNI).
+		for _, dialed := range candidates {
+			raw, err := d.DialContext(ctx, "tcp", dialed)
+			if err != nil {
+				lastErr = err
+				log.Printf("echproxy: dial %s failed: %v", dialed, err)
+				continue
 			}
-			log.Printf("echproxy: dial %s failed: %v", cand, err)
-		}
-		if raw == nil {
-			setShakeInfo("FAILED: could not connect to any upstream address: %v", err)
-			return nil, fmt.Errorf("dial failed: %w", err)
-		}
 
-		cfg := &tls.Config{
-			ServerName:                     sni,
-			MinVersion:                     tls.VersionTLS13, // ECH requires TLS 1.3
-			NextProtos:                     []string{"h2", "http/1.1"},
-			EncryptedClientHelloConfigList: echList,
-			InsecureSkipVerify:             insecure,
-		}
-		hctx, cancel := context.WithTimeout(ctx, dialTimeout)
-		defer cancel()
-
-		tc := tls.Client(raw, cfg)
-		err = tc.HandshakeContext(hctx)
-
-		// If the server rejected our (stale/GREASE) ECH config, it returns a fresh
-		// ECHConfigList in retry_configs. Redial once with it — self-heals against
-		// config rotation and a blocked DoH lookup.
-		var rej *tls.ECHRejectionError
-		if errors.As(err, &rej) && len(rej.RetryConfigList) > 0 {
-			raw.Close()
-			setStatus("ECH rejected; retrying with server retry_configs (%d bytes)", len(rej.RetryConfigList))
-			raw2, derr := d.DialContext(ctx, "tcp", dialed)
-			if derr != nil {
-				return nil, derr
+			cfg := &tls.Config{
+				ServerName:                     sni,
+				MinVersion:                     tls.VersionTLS13, // ECH requires TLS 1.3
+				NextProtos:                     []string{"h2", "http/1.1"},
+				EncryptedClientHelloConfigList: echList,
+				InsecureSkipVerify:             insecure,
 			}
-			cfg.EncryptedClientHelloConfigList = rej.RetryConfigList
-			tc = tls.Client(raw2, cfg)
-			raw = raw2
+			hctx, cancel := context.WithTimeout(ctx, dialTimeout)
+			tc := tls.Client(raw, cfg)
 			err = tc.HandshakeContext(hctx)
-		}
-		if err != nil {
-			raw.Close()
-			if errors.As(err, &rej) {
-				setShakeInfo("FAILED via %s: server rejected ECH, %d bytes retry_configs "+
-					"(if 0, endpoint likely isn't a real ECH server)", dialed, len(rej.RetryConfigList))
-				return nil, fmt.Errorf("ECH handshake failed: rejected, %d bytes retry_configs", len(rej.RetryConfigList))
+			cancel()
+
+			// Do not use server retry_configs. This proxy validates the ECH
+			// configuration obtained for the target host itself, without silently
+			// switching to a server-provided configuration.
+			var rej *tls.ECHRejectionError
+			if errors.As(err, &rej) && len(rej.RetryConfigList) > 0 {
+				setStatus("ECH rejected via %s; server retry_configs ignored", dialed)
 			}
-			setShakeInfo("FAILED via %s: %v", dialed, err)
-			return nil, fmt.Errorf("ECH handshake failed: %w", err)
+			if err != nil {
+				raw.Close()
+				lastErr = err
+				log.Printf("echproxy: ECH handshake via %s failed; trying next candidate: %v", dialed, err)
+				continue
+			}
+			st := tc.ConnectionState()
+			logged.Do(func() {
+				setShakeInfo("ok via %s ECHAccepted=%v TLS=%s ALPN=%q",
+					dialed, st.ECHAccepted, tlsVersionName(st.Version), st.NegotiatedProtocol)
+			})
+			return tc, nil
 		}
-		st := tc.ConnectionState()
-		logged.Do(func() {
-			setShakeInfo("ok via %s ECHAccepted=%v TLS=%s ALPN=%q",
-				dialed, st.ECHAccepted, tlsVersionName(st.Version), st.NegotiatedProtocol)
-		})
-		return tc, nil
+		setShakeInfo("FAILED after %d ECH candidate(s): %v", len(candidates), lastErr)
+		return nil, fmt.Errorf("ECH handshake failed after %d candidate(s): %w", len(candidates), lastErr)
 	}
 }
 
 // --- DoH ------------------------------------------------------------------
 
 type dohResp struct {
+	Status int `json:"Status"`
 	Answer []struct {
 		Type int    `json:"type"`
 		Data string `json:"data"`
@@ -559,31 +712,54 @@ type dohResp struct {
 
 // dohQuery performs a DoH JSON query and returns the answer records.
 func dohQuery(endpoint, name, qtype string) (*dohResp, error) {
-	q := endpoint
-	if strings.Contains(q, "?") {
-		q += "&"
-	} else {
-		q += "?"
+	var lastErr error
+	for _, base := range strings.Split(endpoint, ",") {
+		base = strings.TrimSpace(base)
+		if base == "" {
+			continue
+		}
+		q := base
+		if strings.Contains(q, "?") {
+			q += "&"
+		} else {
+			q += "?"
+		}
+		q += "name=" + url.QueryEscape(name) + "&type=" + qtype
+		req, err := http.NewRequest("GET", q, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("accept", "application/dns-json")
+		transport := &http.Transport{}
+		if pool := loadAndroidCertPool(); pool != nil { transport.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12} }
+		resp, err := (&http.Client{Timeout: dialTimeout, Transport: transport}).Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode != 200 {
+			lastErr = fmt.Errorf("DoH HTTP %d via %s", resp.StatusCode, base)
+			resp.Body.Close()
+			continue
+		}
+		var dr dohResp
+		err = json.NewDecoder(resp.Body).Decode(&dr)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if dr.Status != 0 {
+			lastErr = fmt.Errorf("DoH DNS status %d via %s", dr.Status, base)
+			continue
+		}
+		return &dr, nil
 	}
-	q += "name=" + url.QueryEscape(name) + "&type=" + qtype
-	req, err := http.NewRequest("GET", q, nil)
-	if err != nil {
-		return nil, err
+	if lastErr == nil {
+		lastErr = errors.New("no DoH endpoint configured")
 	}
-	req.Header.Set("accept", "application/dns-json")
-	resp, err := (&http.Client{Timeout: dialTimeout}).Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("DoH HTTP %d", resp.StatusCode)
-	}
-	var dr dohResp
-	if err := json.NewDecoder(resp.Body).Decode(&dr); err != nil {
-		return nil, err
-	}
-	return &dr, nil
+	return nil, lastErr
 }
 
 // resolveViaDoH returns the upstream IPs (IPv4 first) for host, using DoH so the
@@ -673,54 +849,101 @@ func FetchTxt(doh, name string) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-var echParamRe = regexp.MustCompile(`ech="?([A-Za-z0-9+/=]+)"?`)
+var echParamRe = regexp.MustCompile(`(?:^|\s)ech="?([A-Za-z0-9+/=]+)"?`)
 
-// fetchECHViaDoH queries the HTTPS (type 65) record and pulls the ech= SvcParam.
+// fetchECHViaDoH queries HTTPS (type 65) and accepts both textual SVCB output
+// and RFC 3597 wire-format output returned by different DoH providers.
 func fetchECHViaDoH(host, endpoint string) ([]byte, error) {
 	dr, err := dohQuery(endpoint, host, "HTTPS")
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	for _, a := range dr.Answer {
-		if a.Type != 65 { // HTTPS
-			continue
+		if a.Type != 65 { continue }
+		if match := echParamRe.FindStringSubmatch(a.Data); match != nil {
+			value, err := base64.StdEncoding.DecodeString(match[1])
+			if err != nil { return nil, fmt.Errorf("ECH base64: %w", err) }
+			return value, nil
 		}
-		if m := echParamRe.FindStringSubmatch(a.Data); m != nil {
-			b, err := base64.StdEncoding.DecodeString(m[1])
-			if err != nil {
-				return nil, fmt.Errorf("ech param not base64: %w", err)
-			}
-			return b, nil
-		}
+		if value, err := parseSVCBWireECH(a.Data); err == nil { return value, nil }
 	}
 	return nil, errors.New("no ech= parameter in HTTPS record")
 }
 
-func loadECHConfig(host, echB64, doh string) ([]byte, string, error) {
+// parseSVCBWireECH extracts SvcParam key 5 (ech) from RFC 3597 form:
+// "\\# <wire-length> <hex bytes>".
+func parseSVCBWireECH(data string) ([]byte, error) {
+	if !strings.HasPrefix(data, `\# `) { return nil, errors.New("not RFC3597 wire format") }
+	parts := strings.Fields(data)
+	if len(parts) < 3 { return nil, errors.New("malformed RFC3597 wire format") }
+	hexBytes := strings.Join(parts[2:], "")
+	wire, err := hex.DecodeString(hexBytes)
+	if err != nil || len(wire) < 3 { return nil, errors.New("invalid SVCB wire data") }
+	position := 2 // priority
+	for position < len(wire) && wire[position] != 0 {
+		length := int(wire[position]); position += 1 + length
+		if position > len(wire) { return nil, errors.New("invalid SVCB target") }
+	}
+	position++
+	for position+4 <= len(wire) {
+		key := int(wire[position])<<8 | int(wire[position+1])
+		length := int(wire[position+2])<<8 | int(wire[position+3])
+		position += 4
+		if position+length > len(wire) { return nil, errors.New("invalid SVCB parameter") }
+		if key == 5 { return append([]byte(nil), wire[position:position+length]...), nil }
+		position += length
+	}
+	return nil, errors.New("no ECH SvcParam")
+}
+
+type publicECHCache struct {
+	Host      string `json:"host"`
+	ConfigB64 string `json:"config_b64"`
+	ExpiresAt int64  `json:"expires_at"`
+}
+
+// The cache is deliberately limited to a public ECHConfigList and expiry.
+// It is shared by all proxy starts in this app installation; it never stores
+// HTTP data, cookies, credentials, private keys, or a bypass decision.
+func loadPublicECHCache(path, host string) ([]byte, bool) {
+	if strings.TrimSpace(path) == "" { return nil, false }
+	data, err := os.ReadFile(path)
+	if err != nil { return nil, false }
+	var record publicECHCache
+	if json.Unmarshal(data, &record) != nil || !strings.EqualFold(record.Host, host) || record.ExpiresAt <= time.Now().Unix() { return nil, false }
+	b, err := base64.StdEncoding.DecodeString(record.ConfigB64)
+	if err != nil || len(b) == 0 { return nil, false }
+	return b, true
+}
+
+func storePublicECHCache(path, host string, config []byte) {
+	if strings.TrimSpace(path) == "" || len(config) == 0 { return }
+	record, err := json.Marshal(publicECHCache{Host: strings.ToLower(host), ConfigB64: base64.StdEncoding.EncodeToString(config), ExpiresAt: time.Now().Add(publicECHCacheTTL).Unix()})
+	if err != nil { return }
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil { return }
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".echconfig-")
+	if err != nil { return }
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err = tmp.Write(record); err != nil { tmp.Close(); return }
+	if err = tmp.Chmod(0600); err != nil { tmp.Close(); return }
+	if err = tmp.Close(); err != nil { return }
+	_ = os.Rename(name, path)
+}
+
+func loadECHConfig(host, echB64, doh, cachePath string) ([]byte, string, error) {
 	if strings.TrimSpace(echB64) != "" {
 		b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(echB64))
-		if err != nil {
-			return nil, "", fmt.Errorf("ech base64: %w", err)
-		}
+		if err != nil { return nil, "", fmt.Errorf("ech base64: %w", err) }
 		return b, "flag", nil
 	}
 	if strings.TrimSpace(doh) != "" {
 		if b, err := fetchECHViaDoH(host, doh); err == nil && len(b) > 0 {
+			if cachePath != "" { storePublicECHCache(cachePath, host, b) }
 			return b, "DoH", nil
-		} else if err != nil {
-			// Surface the reason — this is the usual cause of a stale config.
-			b2, e2 := base64.StdEncoding.DecodeString(fallbackECH)
-			if e2 != nil {
-				return nil, "", e2
-			}
-			return b2, fmt.Sprintf("baked-in-fallback (DoH failed: %v)", err), nil
+		} else if cachePath != "" {
+			if cached, ok := loadPublicECHCache(cachePath, host); ok { return cached, fmt.Sprintf("public cache (DoH failed: %v)", err), nil }
 		}
 	}
-	b, err := base64.StdEncoding.DecodeString(fallbackECH)
-	if err != nil {
-		return nil, "", err
-	}
-	return b, "baked-in-fallback", nil
+	return nil, "", errors.New("no ECH HTTPS record available")
 }
 
 func tlsVersionName(v uint16) string {
