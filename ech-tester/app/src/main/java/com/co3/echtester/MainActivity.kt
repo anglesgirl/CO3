@@ -55,7 +55,7 @@ class MainActivity : Activity() {
         publicNameInput = EditText(this).apply {
             hint = "ECH public_name"
             setText(getPreferences(MODE_PRIVATE).getString(publicNamePreference, bundledPublicName))
-            singleLine = true
+            setSingleLine(true)
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
         }
         root.addView(publicNameInput, LinearLayout.LayoutParams(-1, -2))
