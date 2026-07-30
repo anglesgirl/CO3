@@ -34,6 +34,31 @@ describe('AO3 ECH coverage', () => {
     expect(source).not.toContain('if (!base) return url;');
   });
 
+  it('persists only an expiring public ECH configuration cache on Android', () => {
+    const proxy = read('ech/echproxy/echproxy.go');
+    const module = read('android/app/src/main/java/com/co3/ech/EchProxyModule.kt');
+    expect(proxy).toContain('type publicECHCache struct');
+    expect(proxy).toContain('publicECHCacheTTL = 12 * time.Hour');
+    expect(proxy).toContain('storePublicECHCache(cachePath, host, b)');
+    expect(proxy).toContain('storePublicECHCache(cachePath, sni, rej.RetryConfigList)');
+    expect(proxy).toContain('cookies, credentials, private keys');
+    expect(module).toContain('ech-public-config.json');
+  });
+
+  it('covers AO3 ky and getUrl paths through the shared ECH client', () => {
+    const ky = read('main/web/echKy.js');
+    const manager = read('main/web/requestManager.js');
+    const loginToken = read('main/web/account/fetchAuthenticityToken.js');
+    const account = read('main/web/account/accountRequests.js');
+    const comments = read('main/web/worksScreen/fetchComments.js');
+    expect(ky).toContain('const echKy = ky.create');
+    expect(ky).toContain('new Request(base + u.pathname + u.search, request)');
+    expect(manager).toContain("from './echKy'");
+    expect(loginToken).toContain("import ky from '../echKy'");
+    expect(account).toContain("import ky, { echUrl } from '../echKy'");
+    expect(comments).toContain("import ky, { echUrl } from '../echKy'");
+  });
+
   it('checks the real works endpoint in the ECH self-test', () => {
     const source = read('main/web/echKy.js');
     expect(source).toContain("echKy.get('https://archiveofourown.org/works'");

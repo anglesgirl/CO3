@@ -41,16 +41,12 @@ export default function BookmarksScreen({
   const [refreshing, setRefreshing] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
-  const [viewMode, setViewMode] = useState('med');
+  const viewMode = 'med';
   const [error, setError] = useState(null);
 
   const { t } = useTranslation();
 
   const PAGE_SIZE = 20;
-
-  useEffect(() => {
-    loadInitialBookmarks();
-  }, [loadInitialBookmarks]);
 
   const formatWork = work => {
     return {
@@ -81,12 +77,10 @@ export default function BookmarksScreen({
     };
   };
 
-  const loadInitialBookmarks = async () => {
-    let usrname = username;
+  const loadInitialBookmarks = useCallback(async () => {
+    const resolvedUsername = username || await getUsername();
 
-    if (!username) usrname = await getUsername();
-
-    if (!usrname) {
+    if (!resolvedUsername) {
       setError({ message: t('screen_bookmarks_error_not_logged_in') });
       setLoading(false);
       return;
@@ -94,34 +88,37 @@ export default function BookmarksScreen({
 
     try {
       setLoading(true);
+      setError(null);
       setCurrentPage(1);
-      const res = pseud
-        ? await fetchBookmarks(1, username, pseud)
-        : username
-        ? await fetchBookmarks(1, username)
-        : await fetchBookmarks(1);
+      const res = await fetchBookmarks(1, resolvedUsername, pseud);
       setBookmarks(res || []);
       setHasMore((res?.length || 0) === PAGE_SIZE);
-    } catch (error) {
-      console.error('Error loading bookmarks:', error);
+    } catch (err) {
+      console.error('Error loading bookmarks:', err);
       setBookmarks([]);
-      setError(error);
+      setError(err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [pseud, t, username]);
+
+  useEffect(() => {
+    loadInitialBookmarks();
+  }, [loadInitialBookmarks]);
 
   const loadMoreBookmarks = async () => {
     if (loadingMore || !hasMore) return;
 
     try {
       setLoadingMore(true);
+      const resolvedUsername = username || await getUsername();
+      if (!resolvedUsername) {
+        setError({ message: t('screen_bookmarks_error_not_logged_in') });
+        setHasMore(false);
+        return;
+      }
       const nextPage = currentPage + 1;
-      const res = pseud
-        ? await fetchBookmarks(nextPage, username, pseud)
-        : username
-        ? await fetchBookmarks(nextPage, username)
-        : await fetchBookmarks(nextPage);
+      const res = await fetchBookmarks(nextPage, resolvedUsername, pseud);
       const moreData = res || [];
 
       if (moreData.length > 0) {
@@ -131,9 +128,9 @@ export default function BookmarksScreen({
       } else {
         setHasMore(false);
       }
-    } catch (error) {
-      console.error('Error loading more bookmarks:', error);
-      setError(error);
+    } catch (err) {
+      console.error('Error loading more bookmarks:', err);
+      setError(err);
     } finally {
       setLoadingMore(false);
     }
@@ -143,7 +140,7 @@ export default function BookmarksScreen({
     setRefreshing(true);
     await loadInitialBookmarks();
     setRefreshing(false);
-  }, []);
+  }, [loadInitialBookmarks]);
 
   const navigation = useNavigation();
 

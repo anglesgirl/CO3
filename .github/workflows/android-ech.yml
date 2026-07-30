@@ -51,6 +51,11 @@ jobs:
         with:
           go-version: '1.24'
 
+      - name: Test ECH proxy
+        run: |
+          cd ech
+          go test ./echproxy
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:

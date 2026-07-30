@@ -31,13 +31,18 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
 
-const dialTimeout = 20 * time.Second
+const (
+	dialTimeout = 20 * time.Second
+	publicECHCacheTTL = 12 * time.Hour
+)
 
 // Last-resort baked-in ECHConfigList for archiveofourown.org (public_name
 // cloudflare-ech.com). Cloudflare ROTATES these, so it WILL go stale — it only
@@ -133,7 +138,7 @@ func orNone(s string) string {
 // instead of DNS (e.g. hand-picked fast Cloudflare IPs). Because Cloudflare is
 // anycast, any edge IP serves the site — the SNI and the ECH config are
 // unaffected, so a custom IP changes only the route, never the encryption.
-func Start(listen, target, echB64, doh, ipList string, insecure bool) error {
+func Start(listen, target, echB64, doh, ipList, cachePath string, insecure bool) error {
 	mu.Lock()
 	if server != nil {
 		mu.Unlock()
@@ -145,8 +150,9 @@ func Start(listen, target, echB64, doh, ipList string, insecure bool) error {
 		target = "archiveofourown.org"
 	}
 
-	// 1. ECH config (flag > DoH HTTPS record > baked-in fallback).
-	echList, src, err := loadECHConfig(target, echB64, doh)
+	// 1. Fetch the public ECHConfigList over DoH and share it through the
+	// expiring cache. The cache contains no credentials, cookies, or keys.
+	echList, src, err := loadECHConfig(target, echB64, doh, cachePath)
 	if err != nil || len(echList) == 0 {
 		return fmt.Errorf("could not obtain ECH config for %s: %v", target, err)
 	}
@@ -187,7 +193,7 @@ func Start(listen, target, echB64, doh, ipList string, insecure bool) error {
 	client := &http.Client{
 		// Route each request to a transport built for its own host, so the proxy
 		// can also front other services (e.g. a translation API) over DoH+ECH.
-		Transport: &hostRouter{primary: target, primaryTransport: newECHTransport(target, echList, insecure)},
+		Transport: &hostRouter{primary: target, primaryTransport: newECHTransport(target, echList, cachePath, insecure)},
 		Jar:       jar,
 		Timeout:   60 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -250,7 +256,11 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// through the same DoH + ECH path instead of the poisoned system resolver.
 	target := h.target
 	if t := strings.TrimSpace(r.Header.Get("X-Ech-Target")); t != "" {
-		target = t
+		if !isTargetHost(t) {
+			http.Error(w, "echproxy: invalid target host", http.StatusBadRequest)
+			return
+		}
+		target = strings.ToLower(t)
 	}
 
 	outURL := &url.URL{Scheme: "https", Host: target, Path: r.URL.Path, RawQuery: r.URL.RawQuery}
@@ -294,6 +304,26 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+// isTargetHost accepts DNS host names only. The header is intentionally not a
+// general URL/authority escape hatch: ports, paths, userinfo, IP literals, and
+// malformed names would bypass the per-host TLS/DNS routing assumptions.
+func isTargetHost(value string) bool {
+	if value == "" || len(value) > 253 || net.ParseIP(value) != nil || strings.ContainsAny(value, "/:@?#\\") {
+		return false
+	}
+	for _, label := range strings.Split(strings.TrimSuffix(value, "."), ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			if !(r == '-' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func rewriteLocation(loc, target string) string {
@@ -431,9 +461,9 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 
 // --- ECH transport --------------------------------------------------------
 
-func newECHTransport(sni string, echList []byte, insecure bool) *http.Transport {
+func newECHTransport(sni string, echList []byte, cachePath string, insecure bool) *http.Transport {
 	return &http.Transport{
-		DialTLSContext:        echDialContext(sni, echList, insecure),
+		DialTLSContext:        echDialContext(sni, echList, cachePath, insecure),
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          20,
 		IdleConnTimeout:       90 * time.Second,
@@ -479,7 +509,7 @@ func dialCandidates(addr string) []string {
 }
 
 // echDialContext dials the upstream and performs a TLS 1.3 handshake with ECH.
-func echDialContext(sni string, echList []byte, insecure bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
+func echDialContext(sni string, echList []byte, cachePath string, insecure bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	var logged sync.Once
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		d := &net.Dialer{Timeout: dialTimeout}
@@ -525,6 +555,7 @@ func echDialContext(sni string, echList []byte, insecure bool) func(ctx context.
 				return nil, derr
 			}
 			cfg.EncryptedClientHelloConfigList = rej.RetryConfigList
+			storePublicECHCache(cachePath, sni, rej.RetryConfigList)
 			tc = tls.Client(raw2, cfg)
 			raw = raw2
 			err = tc.HandshakeContext(hctx)
@@ -696,30 +727,64 @@ func fetchECHViaDoH(host, endpoint string) ([]byte, error) {
 	return nil, errors.New("no ech= parameter in HTTPS record")
 }
 
-func loadECHConfig(host, echB64, doh string) ([]byte, string, error) {
+type publicECHCache struct {
+	Host      string `json:"host"`
+	ConfigB64 string `json:"config_b64"`
+	ExpiresAt int64  `json:"expires_at"`
+}
+
+// The cache is deliberately limited to a public ECHConfigList and expiry.
+// It is shared by all proxy starts in this app installation; it never stores
+// HTTP data, cookies, credentials, private keys, or a bypass decision.
+func loadPublicECHCache(path, host string) ([]byte, bool) {
+	if strings.TrimSpace(path) == "" { return nil, false }
+	data, err := os.ReadFile(path)
+	if err != nil { return nil, false }
+	var record publicECHCache
+	if json.Unmarshal(data, &record) != nil || !strings.EqualFold(record.Host, host) || record.ExpiresAt <= time.Now().Unix() { return nil, false }
+	b, err := base64.StdEncoding.DecodeString(record.ConfigB64)
+	if err != nil || len(b) == 0 { return nil, false }
+	return b, true
+}
+
+func storePublicECHCache(path, host string, config []byte) {
+	if strings.TrimSpace(path) == "" || len(config) == 0 { return }
+	record, err := json.Marshal(publicECHCache{Host: strings.ToLower(host), ConfigB64: base64.StdEncoding.EncodeToString(config), ExpiresAt: time.Now().Add(publicECHCacheTTL).Unix()})
+	if err != nil { return }
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil { return }
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".echconfig-")
+	if err != nil { return }
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err = tmp.Write(record); err != nil { tmp.Close(); return }
+	if err = tmp.Chmod(0600); err != nil { tmp.Close(); return }
+	if err = tmp.Close(); err != nil { return }
+	_ = os.Rename(name, path)
+}
+
+func loadECHConfig(host, echB64, doh, cachePath string) ([]byte, string, error) {
 	if strings.TrimSpace(echB64) != "" {
 		b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(echB64))
-		if err != nil {
-			return nil, "", fmt.Errorf("ech base64: %w", err)
-		}
+		if err != nil { return nil, "", fmt.Errorf("ech base64: %w", err) }
 		return b, "flag", nil
 	}
+	// Prefer a fresh public DNS record. This keeps config rotation fast while
+	// making the cache a resilient shared base when DoH is temporarily blocked.
 	if strings.TrimSpace(doh) != "" {
 		if b, err := fetchECHViaDoH(host, doh); err == nil && len(b) > 0 {
-			return b, "DoH", nil
+			storePublicECHCache(cachePath, host, b)
+			return b, "DoH (cached)", nil
+		} else if cached, ok := loadPublicECHCache(cachePath, host); ok {
+			return cached, fmt.Sprintf("public cache (DoH failed: %v)", err), nil
 		} else if err != nil {
-			// Surface the reason — this is the usual cause of a stale config.
 			b2, e2 := base64.StdEncoding.DecodeString(fallbackECH)
-			if e2 != nil {
-				return nil, "", e2
-			}
+			if e2 != nil { return nil, "", e2 }
 			return b2, fmt.Sprintf("baked-in-fallback (DoH failed: %v)", err), nil
 		}
 	}
+	if cached, ok := loadPublicECHCache(cachePath, host); ok { return cached, "public cache", nil }
 	b, err := base64.StdEncoding.DecodeString(fallbackECH)
-	if err != nil {
-		return nil, "", err
-	}
+	if err != nil { return nil, "", err }
 	return b, "baked-in-fallback", nil
 }
 
