@@ -440,8 +440,6 @@ const ChapterInfoScreen = ({ route }) => {
   const [downloadMenuVisible, setDownloadMenuVisible] = useState(false);
   const [nativeDownloadModalVisible, setNativeDownloadModalVisible] = useState(false);
   const [nativeDownloadingFormat, setNativeDownloadingFormat] = useState(null);
-  const [openingChapter, setOpeningChapter] = useState(false);
-  const openingChapterRef = useRef(false);
   const [showDate, setShowDate] = useState(false);
   const [loadChapterRef, setLoadChapterRef] = useState(loadChapter);
 
@@ -723,11 +721,6 @@ const ChapterInfoScreen = ({ route }) => {
   };
 
   const handleChapterPress = useCallback(async (chapter, originalIndex) => {
-    // The chapter fetch can take several seconds. A ref closes the click
-    // race before React has rendered the loading overlay.
-    if (openingChapterRef.current) return;
-    openingChapterRef.current = true;
-    setOpeningChapter(true);
     try {
       const existingWork = await workDAO.get(workId);
       if (!existingWork) {
@@ -774,9 +767,6 @@ const ChapterInfoScreen = ({ route }) => {
     } catch (error) {
       console.error('Error opening chapter reader:', error);
       showToast(userErrorMessage(error, t), 'error');
-    } finally {
-      openingChapterRef.current = false;
-      setOpeningChapter(false);
     }
   }, [workId, work, chapters, currentTheme, setScreens, settingsDAO, historyDAO, progressDAO, workDAO, t]);
 
@@ -1373,18 +1363,6 @@ const ChapterInfoScreen = ({ route }) => {
         title={t("screen_category_new_category")}
       />
 
-      {openingChapter && (
-        <View
-          style={[styles.chapterOpeningOverlay, { backgroundColor: currentTheme.backgroundColor }]}
-          pointerEvents="auto"
-        >
-          <ActivityIndicator size="large" color={currentTheme.primaryColor} />
-          <Text style={[styles.loadingText, { color: currentTheme.textColor }]}>
-            {t('general_loading')}
-          </Text>
-        </View>
-      )}
-
       <TouchableOpacity
         style={[styles.readButtonFab, { backgroundColor: currentTheme.primaryColor }]}
         onPress={() => continueReading()}
@@ -1561,13 +1539,6 @@ const styles = StyleSheet.create({
   },
   loadingContainer: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  chapterOpeningOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 100,
-    elevation: 100,
     justifyContent: 'center',
     alignItems: 'center',
   },
