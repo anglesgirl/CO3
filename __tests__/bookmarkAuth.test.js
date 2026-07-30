@@ -33,6 +33,13 @@ describe('ECH authenticated actions', () => {
     expect(source.match(/\.\.\.sessionHeaders/g)).toHaveLength(2);
   });
 
+  it('does not treat an AO3 login page as an empty bookmark list or a successful post', () => {
+    const source = read('main/web/other/bookmarks.js');
+    expect(source).toContain('function isLoginPage');
+    expect(source).toContain('AO3 session was rejected while loading bookmarks');
+    expect(source).toContain('AO3 session was rejected while creating the bookmark');
+  });
+
   it('adds the session cookie to mark-for-later GET and POST requests', () => {
     const source = read('main/web/other/markedLater.js');
     expect(source).toContain('const sessionHeaders = await getSessionHeaders()');

@@ -8,6 +8,11 @@ import { getSessionHeaders } from '../sessionHeaders';
 
 let DomParser = require('react-native-html-parser').DOMParser;
 
+function isLoginPage(html) {
+  return /<form[^>]+(?:id|class)=["'][^"']*new_user\b/i.test(String(html))
+    || /You need to log in to access this page/i.test(String(html));
+}
+
 export async function fetchBookmarks(page, username, pseud, noWebview = false) {
   let url;
   try {
@@ -26,6 +31,9 @@ export async function fetchBookmarks(page, username, pseud, noWebview = false) {
     const response = await ky.get(url, {
       headers: Object.assign({ Accept: 'text/html,application/xhtml+xml,*/*;q=0.8' }, sessionHeaders),
     }).text();
+    if (isLoginPage(response)) {
+      throw new Error('AO3 session was rejected while loading bookmarks');
+    }
     const doc = new DomParser().parseFromString(response, "text/html");
 
     const mainDiv = doc.getElementById("main");
@@ -75,6 +83,9 @@ export async function bookmark(work) {
     }
 
     const html = await pageResponse.text();
+    if (isLoginPage(html)) {
+      throw new Error('AO3 session was rejected while loading the bookmark form');
+    }
     const { token, pseudId } = parseBookmarkForm(html);
 
     if (!token || !pseudId) {
@@ -100,6 +111,10 @@ export async function bookmark(work) {
       },
     });
 
+    const postHtml = await postResponse.text();
+    if (isLoginPage(postHtml)) {
+      throw new Error('AO3 session was rejected while creating the bookmark');
+    }
     if (postResponse.ok || postResponse.status === 302) {
       console.log('Bookmarked successfully!');
       return true;

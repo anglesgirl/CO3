@@ -953,21 +953,32 @@ func loadECHConfig(host, echB64, doh, cachePath string) ([]byte, string, error) 
 		if err != nil { return nil, "", fmt.Errorf("ech base64: %w", err) }
 		return b, "flag", nil
 	}
-	// Prefer a fresh public DNS record. This keeps config rotation fast while
-	// making the cache a resilient shared base when DoH is temporarily blocked.
+	// Use a still-valid cached ConfigList first. This avoids the normal startup
+	// path needing a connection-triggered ECH rejection/retry, while DNS is used
+	// only to bootstrap a missing/expired cache or rotate it at the next refresh.
+	if cached, ok := loadPublicECHCache(cachePath, host); ok {
+		// Refresh outside the connection path. Existing connections use the known
+		// good cache immediately; a rotated DNS ConfigList is ready before the
+		// next proxy start rather than being discovered through ECH retry_configs.
+		if strings.TrimSpace(doh) != "" && strings.TrimSpace(cachePath) != "" {
+			go func() {
+				if fresh, err := FetchECHConfig(doh, host); err == nil && len(fresh) > 0 {
+					storePublicECHCache(cachePath, host, fresh)
+				}
+			}()
+		}
+		return cached, "public cache (background DoH refresh)", nil
+	}
 	if strings.TrimSpace(doh) != "" {
 		if b, err := fetchECHViaDoH(host, doh); err == nil && len(b) > 0 {
 			storePublicECHCache(cachePath, host, b)
-			return b, "DoH (cached)", nil
-		} else if cached, ok := loadPublicECHCache(cachePath, host); ok {
-			return cached, fmt.Sprintf("public cache (DoH failed: %v)", err), nil
+			return b, "DoH (bootstrapped and cached)", nil
 		} else if err != nil {
 			b2, e2 := base64.StdEncoding.DecodeString(fallbackECH)
 			if e2 != nil { return nil, "", e2 }
 			return b2, fmt.Sprintf("baked-in-fallback (DoH failed: %v)", err), nil
 		}
 	}
-	if cached, ok := loadPublicECHCache(cachePath, host); ok { return cached, "public cache", nil }
 	b, err := base64.StdEncoding.DecodeString(fallbackECH)
 	if err != nil { return nil, "", err }
 	return b, "baked-in-fallback", nil
