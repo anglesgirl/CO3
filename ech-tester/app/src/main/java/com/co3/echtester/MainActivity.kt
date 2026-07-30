@@ -108,7 +108,10 @@ class MainActivity : Activity() {
             val cache = File(cacheDir, "ech-probe-${System.currentTimeMillis()}.json")
             try {
                 Echproxy.stop()
-                Echproxy.start("127.0.0.1:$port", target, configuredEch, doh, "", cache.absolutePath, false)
+                // Strict mode refuses server retry_configs. Otherwise a wrong
+                // public_name could be rejected, silently replaced by the
+                // server's Cloudflare config, and falsely look successful.
+                Echproxy.startStrict("127.0.0.1:$port", target, configuredEch, doh, "", cache.absolutePath, false)
                 val url = java.net.URL("http://127.0.0.1:$port/works")
                 val c = url.openConnection() as java.net.HttpURLConnection
                 c.connectTimeout = 30000; c.readTimeout = 30000
@@ -116,10 +119,10 @@ class MainActivity : Activity() {
                 val code = c.responseCode
                 val body = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() }.orEmpty()
                 val status = Echproxy.lastStatus()
-                val outcome = if (status.contains("ECHAccepted=true") && code == 200) "\n\nRESULT: SUCCESS — ECHAccepted=true + HTTP 200" else "\n\nRESULT: NOT CONFIRMED"
-                showLog("Standalone ECH probe\nTarget: $target\nConfigured ECH public_name: $publicName\nConfig source: hard-coded test ConfigList with public_name replacement (cache-bypass)\nHTTP: $code; body bytes: ${body.length}\n\n$status$outcome")
+                val outcome = if (status.contains("ECHAccepted=true") && code == 200) "\n\nRESULT: SUCCESS — supplied public_name accepted on first handshake" else "\n\nRESULT: REJECTED OR NOT CONFIRMED — strict mode does not accept server retry_configs"
+                showLog("Standalone ECH probe (STRICT public_name mode)\nTarget: $target\nConfigured ECH public_name: $publicName\nConfig source: hard-coded test ConfigList with public_name replacement (cache-bypass)\nServer retry_configs: refused\nHTTP: $code; body bytes: ${body.length}\n\n$status$outcome")
             } catch (t: Throwable) {
-                showLog("Standalone ECH probe\nTarget: $target\nConfigured ECH public_name: $publicName\nConfig source: hard-coded test ConfigList with public_name replacement (cache-bypass)\n\nERROR: ${t.message}\n\n${runCatching { Echproxy.lastStatus() }.getOrDefault("status unavailable")}")
+                showLog("Standalone ECH probe (STRICT public_name mode)\nTarget: $target\nConfigured ECH public_name: $publicName\nConfig source: hard-coded test ConfigList with public_name replacement (cache-bypass)\nServer retry_configs: refused\n\nERROR: ${t.message}\n\n${runCatching { Echproxy.lastStatus() }.getOrDefault("status unavailable")}")
             } finally {
                 runCatching { Echproxy.stop() }; cache.delete()
                 runOnUiThread { running = false; testButton.isEnabled = true; publicNameInput.isEnabled = true }

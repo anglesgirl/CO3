@@ -138,6 +138,18 @@ func orNone(s string) string {
 // anycast, any edge IP serves the site — the SNI and the ECH config are
 // unaffected, so a custom IP changes only the route, never the encryption.
 func Start(listen, target, echB64, doh, ipList, cachePath string, insecure bool) error {
+	return start(listen, target, echB64, doh, ipList, cachePath, insecure, true)
+}
+
+// StartStrict is for the standalone ECH test tool. Unlike Start, it never
+// accepts a server-provided retry_configs list: a successful request therefore
+// proves that the supplied ConfigList (including its public_name) was accepted
+// by the server on the first handshake.
+func StartStrict(listen, target, echB64, doh, ipList, cachePath string, insecure bool) error {
+	return start(listen, target, echB64, doh, ipList, cachePath, insecure, false)
+}
+
+func start(listen, target, echB64, doh, ipList, cachePath string, insecure, allowRetry bool) error {
 	mu.Lock()
 	if server != nil {
 		mu.Unlock()
@@ -192,7 +204,7 @@ func Start(listen, target, echB64, doh, ipList, cachePath string, insecure bool)
 	client := &http.Client{
 		// Route each request to a transport built for its own host, so the proxy
 		// can also front other services (e.g. a translation API) over DoH+ECH.
-		Transport: &hostRouter{primary: target, primaryTransport: newECHTransport(target, echList, cachePath, insecure)},
+		Transport: &hostRouter{primary: target, primaryTransport: newECHTransport(target, echList, cachePath, insecure, allowRetry)},
 		Jar:       jar,
 		Timeout:   60 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -460,9 +472,9 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 
 // --- ECH transport --------------------------------------------------------
 
-func newECHTransport(sni string, echList []byte, cachePath string, insecure bool) *http.Transport {
+func newECHTransport(sni string, echList []byte, cachePath string, insecure, allowRetry bool) *http.Transport {
 	return &http.Transport{
-		DialTLSContext:        echDialContext(sni, echList, cachePath, insecure),
+		DialTLSContext:        echDialContext(sni, echList, cachePath, insecure, allowRetry),
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          20,
 		IdleConnTimeout:       90 * time.Second,
@@ -508,7 +520,7 @@ func dialCandidates(addr string) []string {
 }
 
 // echDialContext dials the upstream and performs a TLS 1.3 handshake with ECH.
-func echDialContext(sni string, echList []byte, cachePath string, insecure bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
+func echDialContext(sni string, echList []byte, cachePath string, insecure, allowRetry bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	var logged sync.Once
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		d := &net.Dialer{Timeout: dialTimeout}
@@ -541,6 +553,12 @@ func echDialContext(sni string, echList []byte, cachePath string, insecure bool)
 			// A server-provided retry config is the only ECH retry on this edge.
 			// Persist it and also use it for later candidate IPs in this attempt.
 			var rej *tls.ECHRejectionError
+			if errors.As(err, &rej) && len(rej.RetryConfigList) > 0 && !allowRetry {
+				raw.Close()
+				setStatus("ECH rejected via %s; strict test refused server retry_configs (%d bytes)", dialed, len(rej.RetryConfigList))
+				lastErr = fmt.Errorf("ECH config rejected (strict mode)")
+				continue
+			}
 			if errors.As(err, &rej) && len(rej.RetryConfigList) > 0 {
 				raw.Close()
 				setStatus("ECH rejected via %s; retrying with server retry_configs (%d bytes)", dialed, len(rej.RetryConfigList))
