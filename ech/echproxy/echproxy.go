@@ -733,6 +733,16 @@ func FetchTxt(doh, name string) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
+// FetchECHConfig fetches the public ECHConfigList published in the HTTPS
+// record for host. It is exported for the standalone tester so the tester can
+// prove which host supplied the configuration before reusing it elsewhere.
+func FetchECHConfig(doh, host string) ([]byte, error) {
+	if strings.TrimSpace(host) == "" {
+		return nil, errors.New("no ECH config host given")
+	}
+	return fetchECHViaDoH(host, doh)
+}
+
 var echParamRe = regexp.MustCompile(`ech="?([A-Za-z0-9+/=]+)"?`)
 
 // fetchECHViaDoH queries the HTTPS (type 65) record and pulls the ech= SvcParam.
