@@ -44,11 +44,10 @@ const (
 	publicECHCacheTTL = 12 * time.Hour
 )
 
-// Last-resort baked-in ECHConfigList for archiveofourown.org (public_name
-// cloudflare-ech.com). Cloudflare ROTATES these, so it WILL go stale — it only
-// exists so the proxy still starts when DoH is blocked. The retry_configs
-// self-heal path fixes a stale value automatically when the handshake is allowed.
-const fallbackECH = "AEX+DQBBEgAgACCCqb/I3qllxRj0GsvaltwQOKEVxT3s7r9QsejF510DIgAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA="
+// TEST BUILD: ECHConfigList for public.tls-ech.dev (public_name
+// public.tls-ech.dev). This is intentionally used only for the user-requested
+// compatibility test; it is not expected to work against AO3/Cloudflare.
+const fallbackECH = "AEn+DQBFKwAgACABWIHUGj4u+PIggYXcR5JF0gYk3dCRioBW8uJq9H4mKAAIAAEAAQABAANAEnB1YmxpYy50bHMtZWNoLmRldgAA"
 
 var (
 	mu          sync.Mutex
