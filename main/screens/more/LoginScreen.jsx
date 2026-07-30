@@ -10,7 +10,7 @@ import {
   View,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
-import login, { validateCookie } from '../../web/account/login';
+import login, { resolveAuthenticatedUsername, validateCookie } from '../../web/account/login';
 import AccountSetupModal from '../../components/Account/AccountSetupModal';
 import {
   deleteCredsPasswd,
@@ -146,12 +146,19 @@ const LoginScreen = ({ route }) => {
 
       if (sessionToken) {
         await setCredsToken(sessionToken);
+        // AO3 accepts an email for login, but user/bookmark URLs use the
+        // canonical AO3 username. Keep the login identifier for credentials,
+        // and store the resolved username separately for account routes.
+        const canonicalUsername = await resolveAuthenticatedUsername(sessionToken);
+        const accountUsername = canonicalUsername || username;
+        // Always persist this separately: remembered credentials retain the
+        // email/login identifier, while bookmarks use this canonical value.
+        await setUsernameOnly(accountUsername);
 
         if (rememberPassword) {
           await setCredsPasswd(username, password);
         } else {
           await deleteCredsPasswd();
-          await setUsernameOnly(username);
         }
 
         setIsLoggedIn(true);

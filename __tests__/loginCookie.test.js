@@ -9,7 +9,7 @@ jest.mock('../main/web/echKy', () => ({
   echUrl: jest.fn(async () => 'http://127.0.0.1:12345/'),
 }));
 
-import { validateCookie } from '../main/web/account/login';
+import { parseAuthenticatedUsername, validateCookie } from '../main/web/account/login';
 import { echUrl } from '../main/web/echKy';
 
 describe('validateCookie', () => {
@@ -17,6 +17,14 @@ describe('validateCookie', () => {
     global.fetch = jest.fn(async () => ({
       headers: { get: jest.fn(() => null) },
     }));
+  });
+
+  it('extracts only the signed-in AO3 username, not an arbitrary profile link', () => {
+    expect(parseAuthenticatedUsername(`
+      <a href="/users/someone_else">Other user</a>
+      <div id="greeting"><a href="/users/Actual_User">Hi</a></div>
+    `)).toBe('Actual_User');
+    expect(parseAuthenticatedUsername('<a href="/users/someone_else">Other user</a>')).toBeNull();
   });
 
   it('validates the session through the ECH URL with a timeout signal', async () => {

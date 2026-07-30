@@ -60,12 +60,11 @@ export async function getCredsPasswd() {
 }
 
 
+// The password credential's username is the login identifier (email or AO3
+// username). The separate username_only entry is reserved for AO3's canonical
+// profile name, which is required in /users/:username URLs.
 export async function setCredsPasswd(usrname, passwd) {
   try {
-    await Keychain.setGenericPassword(usrname, 'placeholder', {
-      service: 'username_only',
-    });
-
     await Keychain.setGenericPassword(usrname, passwd, {
       service: 'creds_passwd',
       accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_ANY_OR_DEVICE_PASSCODE,
