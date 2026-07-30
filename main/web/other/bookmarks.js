@@ -67,11 +67,15 @@ export async function fetchBookmarks(page, username, pseud, noWebview = false) {
 export async function bookmark(work) {
   try {
     const workId = work.id;
+    if (!workId || !/^\d+$/.test(String(workId))) {
+      throw new Error(`Cannot bookmark this work: invalid work id (${String(workId)})`);
+    }
     const url = `https://archiveofourown.org/works/${workId}/bookmarks/new`;
     const sessionHeaders = await getSessionHeaders();
 
     // Do not claim to be Chrome: TLS is performed by Go, and an artificial
     // browser UA creates a TLS/UA mismatch that Cloudflare can reject.
+    console.log('[AO3 bookmark] loading form', url);
     const pageResponse = await fetch(await echUrl(url), {
       credentials: 'include',
       headers: { Accept: 'text/html,application/xhtml+xml,*/*;q=0.8', ...sessionHeaders },
@@ -83,10 +87,12 @@ export async function bookmark(work) {
     }
 
     const html = await pageResponse.text();
+    console.log('[AO3 bookmark] form response', pageResponse.status, pageResponse.url);
     if (isLoginPage(html)) {
       throw new Error('AO3 session was rejected while loading the bookmark form');
     }
     const { token, pseudId } = parseBookmarkForm(html);
+    console.log('[AO3 bookmark] parsed form', { hasToken: !!token, pseudId });
 
     if (!token || !pseudId) {
       throw new Error(`Extraction failed. Token: ${!!token}, Pseud: ${!!pseudId}`);
@@ -110,6 +116,8 @@ export async function bookmark(work) {
         ...sessionHeaders,
       },
     });
+
+    console.log('[AO3 bookmark] POST response', postResponse.status, postResponse.url);
 
     const postHtml = await postResponse.text();
     if (isLoginPage(postHtml)) {

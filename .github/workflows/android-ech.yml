@@ -31,7 +31,7 @@ jobs:
       - name: Install NPM dependencies
         run: npm ci
 
-      - name: Run tests
+      - name: Run targeted JavaScript regression tests
         run: >-
           npm test -- --config jest.features.config.js --runInBand
           __tests__/loginCookie.test.js
@@ -45,6 +45,7 @@ jobs:
           __tests__/bookmarkAuth.test.js
           __tests__/androidIdentity.test.js
           __tests__/readerImageProxy.test.js
+          __tests__/imageAndSessionIdentity.test.js
 
       - name: Setup Go 1.24
         uses: actions/setup-go@v5

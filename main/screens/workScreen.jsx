@@ -435,7 +435,11 @@ const ChapterInfoScreen = ({ route }) => {
   const showToast = (message, type = 'error') => {
     Toast.show({
       type: type,
-      text1: type === 'success' ? t('general_success') : t('general_error'),
+      text1: type === 'success'
+        ? t('general_success')
+        : type === 'info'
+          ? t('general_loading')
+          : t('general_error'),
       text2: message,
       position: 'bottom',
       bottomOffset: 80,
@@ -686,6 +690,7 @@ const ChapterInfoScreen = ({ route }) => {
 
   const handleBookmark = async () => {
     setMenuVisible(false);
+    showToast(t('screen_work_bookmark'), 'info');
     bookmark(work).then(() => {
       showToast(t('screen_work_toast_added_to_bookmarks'), 'success');
     }) .catch(error => {

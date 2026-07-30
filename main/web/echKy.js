@@ -111,6 +111,11 @@ function getEchBase() {
   return echBasePromise || startProxy();
 }
 
+// Exposed for WebView subresources that cannot attach X-Ech-Target headers.
+export async function getEchBaseUrl() {
+  return requireEchBase();
+}
+
 async function requireEchBase() {
   let base = await getEchBase();
   if (base || Platform.OS !== 'android') return base;

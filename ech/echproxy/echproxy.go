@@ -338,6 +338,11 @@ type proxyHandler struct {
 	client *http.Client
 }
 
+// WebView image requests cannot carry X-Ech-Target. They are rewritten to a
+// loopback URL with this prefix, and the target host is validated before the
+// request is sent upstream.
+const localRoutePrefix = "/__ech__/"
+
 var hopByHop = map[string]bool{
 	"Connection": true, "Proxy-Connection": true, "Keep-Alive": true,
 	"Proxy-Authenticate": true, "Proxy-Authorization": true, "Te": true,
@@ -348,15 +353,27 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// X-Ech-Target lets the app route other hosts (e.g. a translation API)
 	// through the same DoH + ECH path instead of the poisoned system resolver.
 	target := h.target
-	if t := strings.TrimSpace(r.Header.Get("X-Ech-Target")); t != "" {
+	t := strings.TrimSpace(r.Header.Get("X-Ech-Target"))
+	if t != "" {
 		if !isTargetHost(t) {
 			http.Error(w, "echproxy: invalid target host", http.StatusBadRequest)
 			return
 		}
 		target = strings.ToLower(t)
 	}
+	path := r.URL.Path
+	if t == "" && strings.HasPrefix(path, localRoutePrefix) {
+		rest := strings.TrimPrefix(path, localRoutePrefix)
+		parts := strings.SplitN(rest, "/", 2)
+		if len(parts) != 2 || !isTargetHost(parts[0]) {
+			http.Error(w, "echproxy: invalid local route", http.StatusBadRequest)
+			return
+		}
+		target = strings.ToLower(parts[0])
+		path = "/" + parts[1]
+	}
 
-	outURL := &url.URL{Scheme: "https", Host: target, Path: r.URL.Path, RawQuery: r.URL.RawQuery}
+	outURL := &url.URL{Scheme: "https", Host: target, Path: path, RawQuery: r.URL.RawQuery}
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, outURL.String(), r.Body)
 	if err != nil {
 		http.Error(w, "echproxy: bad request: "+err.Error(), http.StatusBadGateway)
@@ -469,9 +486,17 @@ func transportFor(host string) (*http.Transport, error) {
 	} else {
 		log.Printf("echproxy: DoH resolve for %s failed: %v (falling back to system DNS)", host, err)
 	}
-	// ECH is optional here — most non-Cloudflare hosts don't publish it.
+	// ECH is normally learned from the host's HTTPS record. Cloudflare-fronted
+	// images.weserv.nl currently does not expose the shared ConfigList in its
+	// own record, but the edge accepts Cloudflare's shared public config. Use
+	// that same verified config rather than silently dropping to ordinary TLS.
 	if b, err := fetchECHViaDoH(host, doh); err == nil && len(b) > 0 {
 		hc.ech = b
+	} else if host == "images.weserv.nl" {
+		if b, decodeErr := base64.StdEncoding.DecodeString(fallbackECH); decodeErr == nil {
+			hc.ech = b
+			log.Printf("echproxy: using shared Cloudflare ECH config for %s (HTTPS record omitted ech=)", host)
+		}
 	}
 	hc.transport = &http.Transport{
 		DialTLSContext:        hostDialContext(host, hc, insecure),
@@ -489,15 +514,22 @@ func transportFor(host string) (*http.Transport, error) {
 	return hc.transport, nil
 }
 
-// hostDialContext dials a secondary host over its DoH-resolved addresses,
-// enabling ECH only when that host actually publishes a config.
+// hostDialContext dials a secondary host over its DoH-resolved addresses.
+// It enables ECH from the host's published configuration or, for the explicit
+// Cloudflare image route, Cloudflare's shared edge configuration.
 func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		_, port, err := net.SplitHostPort(addr)
 		if err != nil || port == "" {
 			port = "443"
 		}
-		cands := make([]string, 0, len(hc.ips)+1)
+		mu.Lock()
+		custom := append([]string(nil), customIPs...)
+		mu.Unlock()
+		cands := make([]string, 0, len(custom)+len(hc.ips)+1)
+		for _, ip := range custom {
+			cands = append(cands, net.JoinHostPort(ip, port))
+		}
 		for _, ip := range hc.ips {
 			cands = append(cands, net.JoinHostPort(ip, port))
 		}
@@ -505,9 +537,11 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 
 		d := &net.Dialer{Timeout: dialTimeout}
 		var raw net.Conn
-		for _, c := range cands {
-			raw, err = d.DialContext(ctx, "tcp", c)
+		var dialed string
+		for _, candidate := range cands {
+			raw, err = d.DialContext(ctx, "tcp", candidate)
 			if err == nil {
+				dialed = candidate
 				break
 			}
 		}
@@ -533,7 +567,10 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 			var rej *tls.ECHRejectionError
 			if errors.As(err, &rej) && len(rej.RetryConfigList) > 0 {
 				raw.Close()
-				raw2, derr := d.DialContext(ctx, "tcp", cands[0])
+				// Retry on the edge that actually supplied retry_configs. Using
+				// cands[0] here could switch back to an already-failed preferred
+				// IP, making a valid Cloudflare retry look like a broken image route.
+				raw2, derr := d.DialContext(ctx, "tcp", dialed)
 				if derr != nil {
 					return nil, derr
 				}

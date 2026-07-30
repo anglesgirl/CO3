@@ -1,4 +1,5 @@
 const IMAGE_PROXY_PREFIX = 'https://images.weserv.nl/?url=';
+const IMAGE_PROXY_HOST = 'images.weserv.nl';
 const READER_BASE_URL = 'https://archiveofourown.org/';
 
 export function proxiedImageUrl(rawUrl, baseUrl = READER_BASE_URL) {
@@ -15,7 +16,13 @@ export function proxiedImageUrl(rawUrl, baseUrl = READER_BASE_URL) {
 
 export const IMAGE_PROXY_SCRIPT = `
 (function () {
-  const prefix = '${IMAGE_PROXY_PREFIX}';
+  // Replaced by React Native with the local ECH proxy base URL. The upstream
+  // service is Cloudflare-fronted; route it through the same shared ECH
+  // configuration and configured AS13335 edge IPs as AO3.
+  const loopback = '__CO3_ECH_BASE__';
+  const prefix = loopback !== '__CO3_ECH_BASE__'
+    ? loopback + '/__ech__/${IMAGE_PROXY_HOST}/?url='
+    : '';
   const baseUrl = '${READER_BASE_URL}';
 
   function proxyUrl(rawUrl) {
@@ -23,7 +30,12 @@ export const IMAGE_PROXY_SCRIPT = `
     try {
       const resolved = new URL(rawUrl, baseUrl);
       if (!/^https?:$/.test(resolved.protocol)) return rawUrl;
-      if (resolved.hostname.toLowerCase() === 'images.weserv.nl') return rawUrl;
+      if (!prefix) return rawUrl;
+      // Re-route already proxied images too; otherwise a cached/rendered
+      // weserv URL would bypass the loopback ECH path.
+      if (resolved.hostname.toLowerCase() === '${IMAGE_PROXY_HOST}') {
+        return loopback + '/__ech__/${IMAGE_PROXY_HOST}' + resolved.pathname + resolved.search;
+      }
       return prefix + encodeURIComponent(resolved.href);
     } catch (_) {
       return rawUrl;

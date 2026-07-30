@@ -26,7 +26,8 @@ describe('reader image proxy', () => {
   it('injects rewriting before reader content loads', () => {
     const reader = read('main/screens/chapterReader.jsx');
     const helper = read('main/web/imageProxy.js');
-    expect(reader).toContain('injectedJavaScriptBeforeContentLoaded={IMAGE_PROXY_SCRIPT}');
+    expect(reader).toContain("getEchBaseUrl");
+    expect(reader).toContain("IMAGE_PROXY_SCRIPT.replace('__CO3_ECH_BASE__', echBaseUrl)");
     expect(helper).toContain("querySelectorAll('img')");
     expect(helper).toContain("removeAttribute('srcset')");
     expect(helper).toContain('MutationObserver');

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
   Linking,
   Modal,
@@ -22,6 +23,7 @@ import { useTranslation } from 'react-i18next';
 import { translateHtmlCached } from '../web/translate';
 import { userErrorMessage } from '../utils/userError';
 import { IMAGE_PROXY_SCRIPT } from '../web/imageProxy';
+import { getEchBaseUrl } from '../web/echKy';
 
 const PULL_THRESHOLD = 150;
 const PROGRESS_SAVE_DEBOUNCE = 1000;
@@ -100,6 +102,10 @@ const ChapterReader = ({
   const [initialScrollAttempted, setInitialScrollAttempted] = useState(false);
   const [size, setSize] = useState(1);
   const [jsonSettings, setJsonSettings] = useState();
+  // Do not mount the reader WebView on Android until its image proxy route is
+  // ready. Otherwise images begin loading directly before injected JS can
+  // rewrite them through the local ECH proxy.
+  const [echBaseUrl, setEchBaseUrl] = useState(Platform.OS === 'android' ? null : '');
 
   // Translation state: translatedHtml holds the rendered translation, and
   // showTranslated toggles between it and the original.
@@ -158,6 +164,14 @@ const ChapterReader = ({
 
     loadSettings();
   }, [settingsDAO]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    getEchBaseUrl().then(setEchBaseUrl).catch(error => {
+      console.error('ECH image proxy is unavailable:', error);
+      setEchBaseUrl(false);
+    });
+  }, []);
 
   // Load initial progress when chapterID changes and not in incognito
   useEffect(() => {
@@ -686,6 +700,12 @@ const ChapterReader = ({
           backgroundColor={currentTheme.backgroundColor}
         />
 
+        {echBaseUrl === null && (
+          <View style={[styles.webView, styles.readerLoading]}>
+            <ActivityIndicator size="large" color={currentTheme.primaryColor} />
+          </View>
+        )}
+        {echBaseUrl !== null && echBaseUrl !== false && (
         <WebView
           ref={webViewRef}
           originWhitelist={['*']}
@@ -696,7 +716,11 @@ const ChapterReader = ({
               `<p>${t('reader_error_fallback')}</p>`,
           }}
           style={styles.webView}
-          injectedJavaScriptBeforeContentLoaded={IMAGE_PROXY_SCRIPT}
+          injectedJavaScriptBeforeContentLoaded={
+            Platform.OS === 'android'
+              ? IMAGE_PROXY_SCRIPT.replace('__CO3_ECH_BASE__', echBaseUrl)
+              : IMAGE_PROXY_SCRIPT
+          }
           injectedJavaScript={injectedJavaScript}
           onMessage={handleMessage}
           showsVerticalScrollIndicator={false}
@@ -722,6 +746,14 @@ const ChapterReader = ({
             return false;
           }}
         />
+        )}
+        {echBaseUrl === false && (
+          <View style={styles.webView}>
+            <Text style={{ color: currentTheme.textColor, padding: 20 }}>
+              {userErrorMessage({ code: 'ECH_REQUIRED' }, t)}
+            </Text>
+          </View>
+        )}
         {renderPullIndicator()}
         {renderTopBar()}
         {renderBottomBar()}
@@ -753,6 +785,10 @@ const styles = StyleSheet.create({
   webView: {
     flex: 1,
     backgroundColor: 'transparent',
+  },
+  readerLoading: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   topBar: {
     position: 'absolute',

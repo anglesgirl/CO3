@@ -102,10 +102,25 @@ const LoginScreen = ({ route }) => {
   const showSessionInfo = async () => {
     try {
       const storedCreds = await getCredsPasswd();
+      // The session panel must show AO3's canonical profile name. The stored
+      // password username may intentionally be an email login identifier.
+      let canonicalUsername = await getUsername();
+      const sessionToken = await getCredsToken();
+      if (sessionToken) {
+        try {
+          const liveUsername = await resolveAuthenticatedUsername(sessionToken);
+          if (liveUsername) {
+            canonicalUsername = liveUsername;
+            await setUsernameOnly(liveUsername);
+          }
+        } catch (error) {
+          console.warn('Could not refresh current AO3 username:', error?.message ?? error);
+        }
+      }
       if (storedCreds) {
         setSessionInfo({
           visible: true,
-          username: storedCreds.username,
+          username: canonicalUsername || storedCreds.username,
           password: formatStoredPassword(storedCreds.password),
           hasStoredPassword: true,
         });
