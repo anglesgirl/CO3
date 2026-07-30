@@ -32,9 +32,7 @@ jobs:
         run: npm ci
 
       - name: Run tests
-        run: >-
-          npm test -- --config jest.features.config.js --runInBand
-          __tests__/cleanEchCoverage.test.js
+        run: npm test -- --runInBand __tests__/cleanEchCoverage.test.js
 
       - name: Setup Go 1.24
         uses: actions/setup-go@v5
