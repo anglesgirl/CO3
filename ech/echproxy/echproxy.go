@@ -584,31 +584,48 @@ type dohResp struct {
 
 // dohQuery performs a DoH JSON query and returns the answer records.
 func dohQuery(endpoint, name, qtype string) (*dohResp, error) {
-	q := endpoint
-	if strings.Contains(q, "?") {
-		q += "&"
-	} else {
-		q += "?"
+	var lastErr error
+	for _, base := range strings.Split(endpoint, ",") {
+		base = strings.TrimSpace(base)
+		if base == "" {
+			continue
+		}
+		q := base
+		if strings.Contains(q, "?") {
+			q += "&"
+		} else {
+			q += "?"
+		}
+		q += "name=" + url.QueryEscape(name) + "&type=" + qtype
+		req, err := http.NewRequest("GET", q, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("accept", "application/dns-json")
+		resp, err := (&http.Client{Timeout: dialTimeout}).Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode != 200 {
+			lastErr = fmt.Errorf("DoH HTTP %d via %s", resp.StatusCode, base)
+			resp.Body.Close()
+			continue
+		}
+		var dr dohResp
+		err = json.NewDecoder(resp.Body).Decode(&dr)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return &dr, nil
 	}
-	q += "name=" + url.QueryEscape(name) + "&type=" + qtype
-	req, err := http.NewRequest("GET", q, nil)
-	if err != nil {
-		return nil, err
+	if lastErr == nil {
+		lastErr = errors.New("no DoH endpoint configured")
 	}
-	req.Header.Set("accept", "application/dns-json")
-	resp, err := (&http.Client{Timeout: dialTimeout}).Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("DoH HTTP %d", resp.StatusCode)
-	}
-	var dr dohResp
-	if err := json.NewDecoder(resp.Body).Decode(&dr); err != nil {
-		return nil, err
-	}
-	return &dr, nil
+	return nil, lastErr
 }
 
 // resolveViaDoH returns the upstream IPs (IPv4 first) for host, using DoH so the

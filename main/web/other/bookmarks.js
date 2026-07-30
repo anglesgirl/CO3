@@ -1,6 +1,7 @@
 import { getUsername } from '../../storage/Credentials';
 import { parseWorkElements } from '../browse/fetchWorks';
 import ky from '../echKy';
+import { getEchStatus } from '../echKy';
 import { echUrl } from '../echKy';
 import { parseBookmarkForm } from '../ao3FormParser';
 import { getSessionHeaders } from '../sessionHeaders';
@@ -22,7 +23,9 @@ export async function fetchBookmarks(page, username, pseud, noWebview = false) {
     // AO3 session to bookmark reads, otherwise AO3 silently serves a login page
     // and the UI appears as an empty/unresponsive bookmark screen.
     const sessionHeaders = await getSessionHeaders();
-    const response = await ky.get(url, { headers: sessionHeaders }).text();
+    const response = await ky.get(url, {
+      headers: Object.assign({ Accept: 'text/html,application/xhtml+xml,*/*;q=0.8' }, sessionHeaders),
+    }).text();
     const doc = new DomParser().parseFromString(response, "text/html");
 
     const mainDiv = doc.getElementById("main");
@@ -63,10 +66,13 @@ export async function bookmark(work) {
     // browser UA creates a TLS/UA mismatch that Cloudflare can reject.
     const pageResponse = await fetch(await echUrl(url), {
       credentials: 'include',
-      headers: { Accept: 'text/html,application/xhtml+xml,*/*;q=0.8', ...sessionHeaders }
+      headers: { Accept: 'text/html,application/xhtml+xml,*/*;q=0.8', ...sessionHeaders },
     });
 
-    if (!pageResponse.ok) throw new Error(`Bookmark form failed: ${pageResponse.status}`);
+    if (!pageResponse.ok) {
+      const status = await getEchStatus();
+      throw new Error(`Bookmark form failed: HTTP ${pageResponse.status}; ECH: ${status}`);
+    }
 
     const html = await pageResponse.text();
     const { token, pseudId } = parseBookmarkForm(html);
@@ -91,7 +97,7 @@ export async function bookmark(work) {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Referer': url,
         ...sessionHeaders,
-      }
+      },
     });
 
     if (postResponse.ok || postResponse.status === 302) {
@@ -99,7 +105,8 @@ export async function bookmark(work) {
       return true;
     }
 
-    throw new Error(`Post failed with status: ${postResponse.status}`);
+    const status = await getEchStatus();
+    throw new Error(`Bookmark post failed: HTTP ${postResponse.status}; ECH: ${status}`);
 
   } catch (error) {
     console.error('Error bookmarking:', error);
