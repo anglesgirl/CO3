@@ -57,7 +57,12 @@ export default async function getUrl(url, noWebview = false) {
               onPress: async () => {
                 if (await hasStoredPassword()) {
                   try {
-                    await handleLogin(await getUsername(), await getCredsPasswd());
+                    // The saved credential may be an email, while getUsername()
+                    // is the canonical AO3 profile name used for /users URLs.
+                    // Re-login must use the original login identifier instead.
+                    const savedCreds = await getCredsPasswd();
+                    if (!savedCreds) throw new Error('Saved login is unavailable');
+                    await handleLogin(savedCreds.username, savedCreds.password);
                   } catch (e) {
                     Toast.show({
                       type: 'error',

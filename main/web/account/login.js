@@ -23,12 +23,17 @@ export const handleLogin = async (username, password) => {
 
     if (sessionToken) {
       await setCredsToken(sessionToken);
+      // Login accepts email, but all authenticated AO3 user routes require the
+      // canonical username. Store that identity separately from the credential.
+      const canonicalUsername = await resolveAuthenticatedUsername(sessionToken);
+      const accountUsername = canonicalUsername || username;
+      if (canonicalUsername) await setUsernameOnly(canonicalUsername);
 
       if (await hasStoredPassword()) {
         await setCredsToken(sessionToken);
       } else {
         await deleteCredsPasswd();
-        await setUsernameOnly(username);
+        await setUsernameOnly(accountUsername);
       }
 
       await setLastLogin();
@@ -46,6 +51,30 @@ export const handleLogin = async (username, password) => {
   }
 };
 
+
+// AO3 accepts an email as user[login], but account URLs require the
+// canonical AO3 username. Resolve it from the authenticated home page after
+// login instead of persisting the email as the path component.
+export function parseAuthenticatedUsername(html) {
+  // Prefer AO3's signed-in greeting. A generic page can contain links to other
+  // users, so those must never be used as the current account identity.
+  const greeting = String(html).match(/<[^>]+(?:id|class)=["'][^"']*\bgreeting\b[^"']*["'][^>]*>[\s\S]*?href=["']\/users\/([^\/'"?#]+)[\/'"]/i);
+  if (greeting?.[1]) return decodeURIComponent(greeting[1]);
+  const accountMenu = String(html).match(/<[^>]+(?:id|class)=["'][^"']*(?:user-menu|logged-in)[^"']*["'][^>]*>[\s\S]*?href=["']\/users\/([^\/'"?#]+)[\/'"]/i);
+  return accountMenu?.[1] ? decodeURIComponent(accountMenu[1]) : null;
+}
+
+export async function resolveAuthenticatedUsername(sessionToken) {
+  if (!sessionToken) return null;
+  const response = await fetch(await echUrl('https://archiveofourown.org/'), {
+    headers: {
+      Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
+      Cookie: `user_credentials=1; _otwarchive_session=${sessionToken}`,
+    },
+  });
+  if (!response.ok) return null;
+  return parseAuthenticatedUsername(await response.text());
+}
 
 export default async function login(username, password) {
   try {
