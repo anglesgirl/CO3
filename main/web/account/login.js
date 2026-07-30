@@ -27,13 +27,14 @@ export const handleLogin = async (username, password) => {
       // canonical username. Store that identity separately from the credential.
       const canonicalUsername = await resolveAuthenticatedUsername(sessionToken);
       const accountUsername = canonicalUsername || username;
-      if (canonicalUsername) await setUsernameOnly(canonicalUsername);
+      // Keep the route identity independently even when a password credential
+      // already exists. That credential may deliberately be an email address.
+      await setUsernameOnly(accountUsername);
 
       if (await hasStoredPassword()) {
         await setCredsToken(sessionToken);
       } else {
         await deleteCredsPasswd();
-        await setUsernameOnly(accountUsername);
       }
 
       await setLastLogin();
