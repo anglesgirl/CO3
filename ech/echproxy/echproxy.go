@@ -545,7 +545,7 @@ func echDialContext(sni string, echList []byte, cachePath string, insecure bool)
 				raw.Close()
 				setStatus("ECH rejected via %s; retrying with server retry_configs (%d bytes)", dialed, len(rej.RetryConfigList))
 				echList = rej.RetryConfigList
-				storePublicECHCache(cachePath, sni, echList)
+				storePublicECHCache(cachePath, sni, rej.RetryConfigList)
 				raw, err = d.DialContext(ctx, "tcp", dialed)
 				if err == nil {
 					cfg.EncryptedClientHelloConfigList = echList
