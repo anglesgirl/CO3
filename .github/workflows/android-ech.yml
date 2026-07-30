@@ -48,7 +48,8 @@ jobs:
           need('main/web/account/login.js', "fetch(await echUrl('https://archiveofourown.org/users/login')");
           need('main/web/other/bookmarks.js', 'Array.from(olElements).flatMap');
           need('main/web/other/bookmarks.js', 'await getSessionHeaders()');
-          need('main/web/imageProxy.js', '/__ech__/images.weserv.nl/');
+          need('main/web/imageProxy.js', "const IMAGE_PROXY_HOST = 'images.weserv.nl'");
+          need('main/web/imageProxy.js', "'/__ech__/${IMAGE_PROXY_HOST}/'");
           need('ech/echproxy/echproxy.go', 'host == "images.weserv.nl"');
           console.log('Static integration contracts passed.');
           NODE
