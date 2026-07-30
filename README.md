@@ -1,67 +1,66 @@
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/c168f8ee-cd36-4896-b591-87be5d3ad0fe" alt="Logo for the CO3 project">
-</p>
-<p align="center">
-  <a href="https://github.com/tbvns/CO3/actions/workflows/android-build.yml">
-    <img src="https://github.com/tbvns/CO3/actions/workflows/android-build.yml/badge.svg" alt="Build Android APK">
-  </a>
-  <a href="https://github.com/tbvns/CO3/actions/workflows/ios-build.yml">
-    <img src="https://github.com/tbvns/CO3/actions/workflows/ios-build.yml/badge.svg" alt="Build iOS IPA (Unsigned)" border="0">
-  </a>
-</p>
-<p align="center">
-  <a href="https://tbvns.xyz/discord">
-    <img src="https://img.shields.io/badge/-CO3%20Discord%20Server-%237289DA?style=flat&logo=discord&logoColor=white" alt="Build Android APK">
-  </a>
-</p>
+# CO3 ECH Edition
 
-# Client of our own
-CO3 is a free reader app for **Archive of Our Own** (AO3). We built it because other AO3 apps charge money for features that should be free. </br>
-The goal is to give you a better reading experience on your phone with features like native AMOLED support, local reading history, and custom categories to organize your stories.
+CO3 ECH Edition is an Android reader for [Archive of Our Own (AO3)](https://archiveofourown.org/), maintained in this repository for users who need protected AO3 connectivity.
 
-> [!TIP]
-> Looking for download links? Go [here](#download).
+This repository is based on the upstream CO3 project and contains the current ECH/DoH-enabled Android work, including the reader, local library, bookmarks, offline chapters, and direct file export.
 
-## Features:
-- **Custom library** - Save your favorite works in one place
-- **Category management** - Organize your stories however you want (without paying for it)
-- **History with filters** - Find works you've read by date
-- **Completely free** - No subscriptions, no ads, ever
-- **Auto Updates** - Automatically fetch and notify you of update on your saved works
-- **Statistics** - See what are you favorite tags and authors, how many works you started and how many chapter you've read
-- **Enhanced downloads** - Enable full work-style download support, with multiple auto-download features
+## Current Build
 
-> [!NOTE]
-> Need help or want to chat? Join our [Discord](https://discord.gg/3wMGWu2xMF).
+- Android architecture: `arm64-v8a`
+- Latest stable release: [CO3 ECH 下载与图片速度修复](https://github.com/anglesgirl/CO3/releases/tag/ech-download-image-speed-fix-d3d8776)
+- Build workflow: [Android ECH build](https://github.com/anglesgirl/CO3/actions/workflows/android-ech.yml)
+- Download delivery: the Release page provides the APK, an installation ZIP, and SHA-256 checksums
 
-# Download
-We recommend you use F-Droid to install the client, this will allow for auto-updates and alert you if any vulnerabilities are found.
+Download the ZIP from Releases, extract the APK, and install it on an Android arm64 device. Telegram delivery uses the ZIP because APK files are restricted by the delivery channel.
 
-<p align="center">
-  <a href="https://f-droid.org/packages/com.co3/">
-    <img src="https://f-droid.org/badge/get-it-on.png" alt="Get CO3 from F-Droid" width="220">
-  </a>
-  <a href="https://github.com/tbvns/CO3/releases">
-    <img src="https://user-images.githubusercontent.com/663460/26973090-f8fdc986-4d14-11e7-995a-e7c5e79ed925.png" alt="Get CO3 APK from GitHub" width="220" />
-  </a>
-</p>
+## Main Features
 
-> [!CAUTION]
-> Since the dev team doesn't own any Apple device, we are not able to provide proper testing to the platform. Hence, we would really appreciate any feedback for this platform. Some unexpected bug and crashes can appear on this platform, but multiple users reported it working properly.
+- AO3 login with either username or email
+- Canonical AO3 username resolution for profile and bookmark routes
+- Library, categories, reading history, and progress tracking
+- Offline chapter downloads stored in app-private storage
+- Downloaded chapter status reconciliation and visible failure reasons
+- Native AO3 work export as `EPUB`, `PDF`, `MOBI`, `AZW3`, or `HTML`
+- Reader image routing through the local ECH proxy
+- Cloudflare Zero Trust DoH failover and configured Cloudflare edge IPs
+- ECH status and protected connection diagnostics
+- Chapter-opening loading lock to prevent duplicate reader pages from repeated taps
+- No subscription and no advertising added by this repository
 
-You can get releases [here](https://github.com/tbvns/CO3/releases). </br>
-You can get android dev builds [here](https://github.com/tbvns/CO3/actions/workflows/android-build.yml). </br>
-You can get IOS dev builds [here](https://github.com/tbvns/CO3/actions/workflows/ios-build.yml).
+## ECH / DoH
 
-# Logo and name usage
-The name "CO3" or "Client Of Our Own" and the project logo are copyright © Tbvns and are not covered by the GPL license. You may not publish this application or any derivative under the same name or logo on the Google Play Store, Apple App Store, or any other proprietary app store. Redistribution via F-Droid or direct APK sideloading is permitted.
+The Android build routes protected AO3 requests through the bundled local proxy. The proxy obtains ECH configuration through the configured remote TXT record and uses the configured Cloudflare DoH endpoints with failover.
 
-# License
-Copyright (C) 2026 Tbvns
+ECH is used to protect the AO3 connection. It does not make the outer SNI an arbitrary website name; the deployed ECH configuration and its public name must match the server configuration.
 
-This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+The ECH configuration domain and DoH settings are managed in the app's ECH preferences. Do not put private Zero Trust credentials or tokens in this repository.
 
-This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+## Verification
 
-You should have received a copy of the GNU General Public License along with this program. If not, see <https://www.gnu.org/licenses/>. 
+The current release was built by GitHub Actions for `arm64-v8a`. The focused JavaScript regression suite for the current fixes passed with 4 suites and 21 tests. Release checksums are published in `SHA256SUMS.txt`.
 
+## Important Limitations
+
+- This build is currently intended for Android arm64 devices.
+- AO3 availability, rate limiting, Cloudflare challenges, and ECH support can vary by network.
+- If a download displays an error icon, tap it again to view the recorded failure reason.
+- Database and file export use Android's public Downloads integration; Android may still apply device-specific storage policies.
+- iOS is not the target of the ECH work in this repository and is not included in the current release process.
+
+## Development
+
+Large Android, Go, and NDK builds are run in GitHub Actions. The local JavaScript regression command is:
+
+```bash
+npm test -- --runInBand --config jest.features.config.js
+```
+
+The ECH proxy and Android release workflow is defined in `.github/workflows/android-ech.yml`.
+
+## Upstream
+
+The upstream project is [tbvns/CO3](https://github.com/tbvns/CO3). This repository keeps its own build, release, and ECH-specific documentation so that installation and behavior match the binaries published here.
+
+## License
+
+The project remains licensed under the GNU General Public License as described in [LICENSE](LICENSE). Upstream name, logo, and branding terms remain applicable to the original project.
