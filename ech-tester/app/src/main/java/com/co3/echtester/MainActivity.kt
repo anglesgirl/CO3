@@ -34,7 +34,9 @@ class MainActivity : Activity() {
     // jsdelivr.com itself publishes the ECH record used by this experiment.
     // Do not substitute cdn.jsdelivr.net: it is a different hostname/CDN path.
     private val configHost = "jsdelivr.com"
-    private val doh = "https://cloudflare-dns.com/dns-query"
+    // Ordered private Cloudflare Zero Trust resolvers. The public resolver is
+    // reset on the user's network, so never make it the tester's only path.
+    private val doh = "https://pieqllv9i7.cloudflare-gateway.com/dns-query,https://m2b4x7vw98.cloudflare-gateway.com/dns-query,https://dz1598pphb.cloudflare-gateway.com/dns-query"
     private var sharedConfigB64: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -107,9 +109,9 @@ class MainActivity : Activity() {
                 val body = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() }.orEmpty()
                 val status = Echproxy.lastStatus()
                 val outcome = if (status.contains("ECHAccepted=true") && code == 200) "\n\nRESULT: SUCCESS — first-handshake ECH accepted" else "\n\nRESULT: REJECTED OR NOT CONFIRMED — retry_configs refused"
-                showLog("Standalone ECH probe (STRICT, no retry)\nConfig obtained from HTTPS record: $configHost\nTarget: $testTarget\nShared config reused: ${testTarget != configHost}\nHTTP: $code; body bytes: ${body.length}\n\n$status$outcome")
+                showLog("Standalone ECH probe (STRICT, no retry)\nConfig obtained from HTTPS record: $configHost\nDoH: private Zero Trust resolver pool (ordered failover)\nTarget: $testTarget\nHTTP: $code; body bytes: ${body.length}\n\n$status$outcome")
             } catch (t: Throwable) {
-                showLog("Standalone ECH probe (STRICT, no retry)\nConfig obtained from HTTPS record: $configHost\nTarget: $testTarget\n\nERROR: ${t.message}\n\n${runCatching { Echproxy.lastStatus() }.getOrDefault("status unavailable")}")
+                showLog("Standalone ECH probe (STRICT, no retry)\nConfig source: HTTPS record for $configHost\nDoH: private Zero Trust resolver pool (ordered failover)\nTarget: $testTarget\n\nERROR: ${t.message}\n\n${runCatching { Echproxy.lastStatus() }.getOrDefault("status unavailable")}")
             } finally {
                 runCatching { Echproxy.stop() }; cache.delete()
                 runOnUiThread { running = false; testButton.isEnabled = true; ao3Button.isEnabled = sharedConfigB64 != null }
