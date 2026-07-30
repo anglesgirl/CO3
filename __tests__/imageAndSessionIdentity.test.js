@@ -15,6 +15,8 @@ describe('image route and current-session identity', () => {
     expect(proxy).toContain('for _, ip := range custom');
     expect(proxy).toContain('fetchECHViaDoH(host, doh)');
     expect(proxy).toContain('using shared Cloudflare ECH config');
+    expect(imageProxy).toContain("resolved.hostname.toLowerCase() === 'archiveofourown.org'");
+    expect(imageProxy).toContain("resolved.origin === new URL(loopback).origin");
   });
 
   it('shows the canonical AO3 username in the current-session panel', () => {

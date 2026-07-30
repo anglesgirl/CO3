@@ -31,5 +31,7 @@ describe('reader image proxy', () => {
     expect(helper).toContain("querySelectorAll('img')");
     expect(helper).toContain("removeAttribute('srcset')");
     expect(helper).toContain('MutationObserver');
+    expect(helper).toContain("resolved.hostname.toLowerCase() === 'archiveofourown.org'");
+    expect(helper).toContain("resolved.origin === new URL(loopback).origin");
   });
 });

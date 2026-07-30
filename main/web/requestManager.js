@@ -10,6 +10,7 @@ import {
   getUsername,
   hasStoredPassword,
 } from '../storage/Credentials';
+import { getSessionHeaders } from './sessionHeaders';
 import Toast from 'react-native-toast-message';
 import {
   createNavigationContainerRef,
@@ -99,7 +100,13 @@ export default async function getUrl(url, noWebview = false) {
   }
 
   try {
-    const html = await ky.get(url).text();
+    // The native proxy's cookie jar is intentionally not trusted: after a
+    // proxy restart it is empty. Queue downloads use this path without a
+    // WebView, so attach the stored AO3 session explicitly or AO3 may return
+    // the login page and the downloader will mark the chapter as failed.
+    const html = await ky.get(url, {
+      headers: await getSessionHeaders(false),
+    }).text();
 
     if (isCFChallenge(html)) {
       return protectedWebView(url, noWebview);

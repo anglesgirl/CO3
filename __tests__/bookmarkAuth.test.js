@@ -46,6 +46,14 @@ describe('ECH authenticated actions', () => {
     expect(source.match(/\.\.\.sessionHeaders/g)).toHaveLength(2);
   });
 
+  it('attaches the stored session to background chapter downloads', () => {
+    const requestManager = read('main/web/requestManager.js');
+    const chapters = read('main/web/worksScreen/fetchChapter.js');
+    expect(requestManager).toContain("import { getSessionHeaders } from './sessionHeaders'");
+    expect(requestManager).toContain('headers: await getSessionHeaders(false)');
+    expect(chapters).toContain('AO3 session was rejected while loading the chapter');
+  });
+
   it('parses bookmark fields without depending on attribute order', () => {
     const source = read('main/web/ao3FormParser.js');
     expect(source).toContain('DomParser');

@@ -31,6 +31,18 @@ export const IMAGE_PROXY_SCRIPT = `
       const resolved = new URL(rawUrl, baseUrl);
       if (!/^https?:$/.test(resolved.protocol)) return rawUrl;
       if (!prefix) return rawUrl;
+      // The MutationObserver sees attributes changed by this script too. Do
+      // not wrap our own loopback URL in Weserv on the next mutation, or one
+      // image can turn into an ever-growing chain of proxy requests.
+      if (resolved.origin === new URL(loopback).origin) return rawUrl;
+      // AO3-hosted images can go directly through the local ECH proxy. This
+      // avoids the extra image-fetch hop through Weserv and is substantially
+      // faster for the common case.
+      if (resolved.hostname.toLowerCase() === 'archiveofourown.org'
+          || resolved.hostname.toLowerCase() === 'www.archiveofourown.org') {
+        return loopback + '/__ech__/' + resolved.hostname.toLowerCase()
+          + resolved.pathname + resolved.search;
+      }
       // Re-route already proxied images too; otherwise a cached/rendered
       // weserv URL would bypass the loopback ECH path.
       if (resolved.hostname.toLowerCase() === '${IMAGE_PROXY_HOST}') {

@@ -3,6 +3,11 @@ import getUrl from '../requestManager';
 
 let DomParser = require('react-native-html-parser').DOMParser;
 
+function isLoginPage(html) {
+  return /<form[^>]+(?:id|class)=["'][^"']*new_user\b/i.test(String(html))
+    || /You need to log in to access this page/i.test(String(html));
+}
+
 export async function fetchChapter(workId, chapterId, noWebview = false) {
   let url;
   if (!chapterId || String(chapterId) === String(workId)) {
@@ -13,6 +18,9 @@ export async function fetchChapter(workId, chapterId, noWebview = false) {
 
   console.log(`Fetching chapter from: ${url}`);
   const response = await getUrl(url, noWebview);
+  if (isLoginPage(response)) {
+    throw new Error('AO3 session was rejected while loading the chapter');
+  }
   const doc = new DomParser().parseFromString(response, 'text/html');
 
   let chapterDiv = doc.getElementById('workskin');
