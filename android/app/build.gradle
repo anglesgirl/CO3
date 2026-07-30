@@ -7,6 +7,12 @@ react {
     autolinkLibrariesWithApp()
 }
 
+// The ECH transport is compiled by the GitHub Actions workflow with gomobile
+// and written here as echproxy.aar before Gradle runs.
+repositories {
+    flatDir { dirs "$projectDir/libs" }
+}
+
 def enableProguardInReleaseBuilds = false
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
@@ -78,6 +84,7 @@ dependencies {
     implementation "com.facebook.react:react-android"
     implementation "androidx.work:work-runtime:2.9.0"
     implementation "androidx.lifecycle:lifecycle-process:2.8.7"
+    implementation(name: 'echproxy', ext: 'aar')
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

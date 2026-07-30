@@ -3,6 +3,7 @@ import { initReactI18next } from 'react-i18next';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import en from '../../languages/en.json';
 import fr from '../../languages/fr.json';
+import zh from '../../languages/zh.json';
 
 export const availableLanguages = [
   {
@@ -16,6 +17,12 @@ export const availableLanguages = [
     label: 'Français',
     flag: 'FR',
     translation: fr,
+  },
+  {
+    code: 'zh',
+    label: '中文',
+    flag: 'CN',
+    translation: zh,
   },
 ];
 

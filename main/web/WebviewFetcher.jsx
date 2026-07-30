@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import WebView from 'react-native-webview';
+import { echUrl } from './echKy';
 
 // --- Queue ---
 
@@ -67,16 +68,24 @@ export default function WebviewFetcher() {
   const currentRef = useRef(null);
   const httpErrorRef = useRef(null);
 
-  const loadCurrent = () => {
-    setVisible(false);
-    setSource({ uri: currentRef.current.url });
+  const loadCurrent = async () => {
+    const item = currentRef.current;
+    if (!item) return;
+    try {
+      const uri = await echUrl(item.url);
+      if (currentRef.current !== item) return;
+      setVisible(false);
+      setSource({ uri });
+    } catch (error) {
+      if (currentRef.current === item) settle(null, error);
+    }
   };
 
   const processNext = () => {
     if (currentRef.current || queue.length === 0) return;
     currentRef.current = queue.shift();
     httpErrorRef.current = null;
-    loadCurrent();
+    void loadCurrent();
   };
 
   useEffect(() => {
@@ -86,7 +95,7 @@ export default function WebviewFetcher() {
 
   const onWarningDismiss = () => {
     setShowCFWarning(false);
-    loadCurrent();
+    void loadCurrent();
   };
 
   const settle = (value, error) => {
@@ -124,6 +133,24 @@ export default function WebviewFetcher() {
       nativeEvent.description ?? 'Network error',
       nativeEvent.url,
     ));
+  };
+
+  // Keep AO3 navigations inside the loopback ECH route. Links to other sites
+  // retain the upstream WebView behaviour rather than turning this component
+  // into a general-purpose proxy.
+  const protectNavigation = request => {
+    if (!/^https?:\/\/(?:www\.)?archiveofourown\.org(?:\/|$)/i.test(request.url)) {
+      return true;
+    }
+    const item = currentRef.current;
+    echUrl(request.url)
+      .then(uri => {
+        if (currentRef.current === item) setSource({ uri });
+      })
+      .catch(error => {
+        if (currentRef.current === item) settle(null, error);
+      });
+    return false;
   };
 
   const onMessage = ({ nativeEvent }) => {
@@ -183,6 +210,7 @@ export default function WebviewFetcher() {
             onHttpError={onHttpError}
             onError={onError}
             onMessage={onMessage}
+            onShouldStartLoadWithRequest={protectNavigation}
             javaScriptEnabled
             domStorageEnabled
             sharedCookiesEnabled

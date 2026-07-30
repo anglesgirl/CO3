@@ -1,4 +1,5 @@
 import ky, { TimeoutError } from 'ky';
+import echKy from './echKy';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fetchViaWebView } from './WebviewFetcher';
 import { Platform } from 'react-native';
@@ -57,7 +58,7 @@ const cloudflareErrorCodes = [
   503, //Used for CF challenges
 ]
 
-export default async function getUrl(url, noWebview = false) {
+export default async function getUrl(url, noWebview = false, headers = {}) {
   const { hostname } = new URL(url);
 
   if (noWebview) {
@@ -116,7 +117,12 @@ export default async function getUrl(url, noWebview = false) {
   }
 
   try {
-    const html = await ky.get(url).text();
+    // AO3 goes through the protected ECH client; other sites retain the
+    // upstream application's normal request behaviour.
+    const client = hostname === 'archiveofourown.org' || hostname.endsWith('.archiveofourown.org')
+      ? echKy
+      : ky;
+    const html = await client.get(url, { headers }).text();
 
     if (isCFChallenge(html)) {
       console.log(`isCfChalenged fiered with ${html}`);

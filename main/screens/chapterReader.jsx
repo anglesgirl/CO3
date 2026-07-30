@@ -19,6 +19,8 @@ import { CommentsScreen } from '../components/Reader/commentsScreen';
 import { getJsonSettings } from '../storage/jsonSettings';
 import Toast from 'react-native-toast-message';
 import { useTranslation } from 'react-i18next';
+import { imageProxyScript } from '../web/imageProxy';
+import { getEchBaseUrl } from '../web/echKy';
 
 const PULL_THRESHOLD = 150;
 const PROGRESS_SAVE_DEBOUNCE = 1000;
@@ -97,6 +99,10 @@ const ChapterReader = ({
   const [initialScrollAttempted, setInitialScrollAttempted] = useState(false);
   const [size, setSize] = useState(1);
   const [jsonSettings, setJsonSettings] = useState();
+  // Do not render chapter images until their loopback ECH route is ready. An
+  // empty route would make WebView fetch images directly and leak the image
+  // host's SNI.
+  const [echBaseUrl, setEchBaseUrl] = useState(null);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const webViewRef = useRef(null);
@@ -118,6 +124,10 @@ const ChapterReader = ({
 
     loadSettings();
   }, [settingsDAO]);
+
+  useEffect(() => {
+    getEchBaseUrl().then(setEchBaseUrl).catch(() => setEchBaseUrl(''));
+  }, []);
 
   // Load initial progress when chapterID changes and not in incognito
   useEffect(() => {
@@ -629,6 +639,7 @@ const ChapterReader = ({
           backgroundColor={currentTheme.backgroundColor}
         />
 
+        {echBaseUrl !== null && (
         <WebView
           ref={webViewRef}
           originWhitelist={['*']}
@@ -636,6 +647,7 @@ const ChapterReader = ({
           source={{ html: htmlContent || `<p>${t('reader_error_fallback')}</p>` }}
           style={styles.webView}
           injectedJavaScript={injectedJavaScript}
+          injectedJavaScriptBeforeContentLoaded={imageProxyScript(echBaseUrl)}
           onMessage={handleMessage}
           showsVerticalScrollIndicator={false}
           bounces={false}
@@ -660,6 +672,7 @@ const ChapterReader = ({
             return false;
           }}
         />
+        )}
         {renderPullIndicator()}
         {renderTopBar()}
         {renderBottomBar()}

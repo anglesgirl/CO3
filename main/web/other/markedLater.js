@@ -1,6 +1,8 @@
 import { getUsername } from '../../storage/Credentials';
 import { parseWorkElements } from '../browse/fetchWorks';
 import getUrl from '../requestManager';
+import { echUrl } from '../echKy';
+import { getSessionHeaders } from '../sessionHeaders';
 
 let DomParser = require('react-native-html-parser').DOMParser;
 
@@ -21,10 +23,12 @@ export async function markForLater(work) {
     const workId = work.id;
     const url = `https://archiveofourown.org/works/${workId}`;
 
-    const pageResponse = await fetch(url, {
+    const sessionHeaders = await getSessionHeaders();
+    const pageResponse = await fetch(await echUrl(url), {
       credentials: 'include',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        ...sessionHeaders,
       }
     });
 
@@ -54,7 +58,7 @@ export async function markForLater(work) {
     formData.append('authenticity_token', token);
     formData.append('_method', 'patch');
 
-    const response = await fetch(markUrl, {
+    const response = await fetch(await echUrl(markUrl), {
       method: 'POST',
       body: formData,
       credentials: 'include',
@@ -62,6 +66,7 @@ export async function markForLater(work) {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Referer': url,
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        ...sessionHeaders,
       }
     });
 

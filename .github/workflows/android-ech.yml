@@ -1,0 +1,110 @@
+name: "Build Android APK (ECH)"
+
+# Builds the ECH-enabled APK: compiles the Go ECH proxy into an Android AAR with
+# gomobile, then builds the React Native app that loads it.
+on:
+  push:
+    branches: [ech-clean]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  NDK_VERSION: "27.1.12297006"
+
+jobs:
+  build-ech-apk:
+    name: Build ECH Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install NPM dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: >-
+          npm test -- --config jest.features.config.js --runInBand
+          __tests__/cleanEchCoverage.test.js
+
+      - name: Setup Go 1.24
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Test ECH proxy
+        run: |
+          cd ech
+          go test ./echproxy
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install pinned NDK
+        run: |
+          sdkmanager --install "ndk;${NDK_VERSION}" "platforms;android-36" "build-tools;35.0.0"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Build ECH proxy AAR (gomobile)
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          cd ech
+          # Add x/mobile as a module dependency (required by gomobile bind).
+          # NOTE: do not `go mod tidy` afterwards — it would strip this unused-by-source require.
+          go get golang.org/x/mobile/bind@latest
+          mkdir -p ../android/app/libs
+          gomobile bind -v -target=android/arm64 -androidapi 24 \
+            -o ../android/app/libs/echproxy.aar ./echproxy
+          ls -la ../android/app/libs
+
+      - name: Generate codegen artifacts
+        run: |
+          cd android
+          ./gradlew generateCodegenArtifactsFromSchema
+
+      - name: Build Release APK (arm64-v8a only)
+        run: |
+          cd android
+          ./gradlew assembleRelease -PBUILD_ABI=arm64-v8a -PreactNativeArchitectures=arm64-v8a
+        env:
+          BUILD_ABI: arm64-v8a
+
+      - name: Rename artifact
+        run: |
+          APK_DIR=android/app/build/outputs/apk/release
+          ls -la "$APK_DIR"
+          test -f "$APK_DIR/app-arm64-v8a-release.apk"
+          mv "$APK_DIR/app-arm64-v8a-release.apk" CO3-ECH-arm64-v8a.apk
+
+      - name: Verify arm64-v8a artifact
+        run: |
+          unzip -l CO3-ECH-arm64-v8a.apk > apk-files.txt
+          grep -q 'lib/arm64-v8a/' apk-files.txt
+          if grep -Eq 'lib/(armeabi-v7a|x86|x86_64)/' apk-files.txt; then
+            echo "Unexpected non-arm64 native libraries found"
+            exit 1
+          fi
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: CO3-ECH-${{ github.sha }}
+          path: CO3-ECH-arm64-v8a.apk
+          retention-days: 30

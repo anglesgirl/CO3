@@ -9,6 +9,7 @@ import {
 } from '../../storage/Credentials';
 import { navigationRef } from '../../app';
 import i18n from 'i18next';
+import { echUrl } from '../echKy';
 
 export const handleLogin = async (username, password) => {
   const t = i18n.t;
@@ -57,7 +58,7 @@ export default async function login(username, password) {
     formData.append('commit', 'Log in');
 
     // Send the login request
-    const response = await fetch('https://archiveofourown.org/users/login', {
+    const response = await fetch(await echUrl('https://archiveofourown.org/users/login'), {
       method: 'POST',
       body: formData,
       credentials: 'include', // Important for cookies
@@ -74,7 +75,7 @@ export default async function login(username, password) {
       //We just need to pray cloudflare will leave me alone
     });
 
-    if (response.url === 'https://archiveofourown.org/users/login') {
+    if (new URL(response.url).pathname === '/users/login') {
       throw new Error('Wrong username or password');
     }
 
@@ -101,7 +102,7 @@ export default async function login(username, password) {
     if (response.ok) {
       if (
         response.redirected ||
-        response.url !== 'https://archiveofourown.org/users/login'
+        new URL(response.url).pathname !== '/users/login'
       ) {
         console.log(
           'Login appears successful but session cookie not found in headers',
@@ -126,7 +127,7 @@ export default async function login(username, password) {
 export async function validateCookie(sessionToken) {
   try {
     // Send a request to the website with the provided cookies
-    const response = await fetch('https://archiveofourown.org/', {
+    const response = await fetch(await echUrl('https://archiveofourown.org/'), {
       method: 'GET',
       credentials: 'include', // Include cookies in the request
       headers: {

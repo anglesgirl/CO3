@@ -1,5 +1,6 @@
 import { fetchKudoAuthenticityToken } from '../account/fetchAuthenticityToken';
 import { getCredsToken } from '../../storage/Credentials';
+import { echUrl } from '../echKy';
 
 export default async function sendKudo(workId) {
   try {
@@ -14,7 +15,7 @@ export default async function sendKudo(workId) {
     formData.append('commit', 'Kudos ♥');
 
     // Send the kudos request
-    const response = await fetch('https://archiveofourown.org/kudos', {
+    const response = await fetch(await echUrl('https://archiveofourown.org/kudos'), {
       method: 'POST',
       body: formData,
       credentials: 'include',
