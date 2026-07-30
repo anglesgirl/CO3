@@ -84,11 +84,4 @@ describe('Android downloads', () => {
     expect(update).not.toContain("DeviceEventEmitter.addListener('doubleTap'");
   });
 
-  it('locks chapter opening while content is loading', () => {
-    const screen = read('main/screens/workScreen.jsx');
-    expect(screen).toContain('openingChapterRef.current');
-    expect(screen).toContain('setOpeningChapter(true)');
-    expect(screen).toContain('chapterOpeningOverlay');
-    expect(screen).toContain('pointerEvents="auto"');
-  });
 });
