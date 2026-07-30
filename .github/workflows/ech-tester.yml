@@ -44,14 +44,14 @@ jobs:
           cd ech-tester
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
-          cp app/build/outputs/apk/debug/app-debug.apk ../CO3-ECH-Tester-public-tls-ech-arm64-v8a.apk
+          cp app/build/outputs/apk/debug/app-debug.apk ../CO3-ECH-Tester-custom-public-name-arm64-v8a.apk
       - name: Verify arm64-only native payload
         run: |
-          unzip -l CO3-ECH-Tester-public-tls-ech-arm64-v8a.apk > apk-files.txt
+          unzip -l CO3-ECH-Tester-custom-public-name-arm64-v8a.apk > apk-files.txt
           grep -q 'lib/arm64-v8a/' apk-files.txt
           if grep -Eq 'lib/(armeabi-v7a|x86|x86_64)/' apk-files.txt; then exit 1; fi
       - uses: actions/upload-artifact@v4
         with:
           name: CO3-ECH-Tester-${{ github.sha }}
-          path: CO3-ECH-Tester-public-tls-ech-arm64-v8a.apk
+          path: CO3-ECH-Tester-custom-public-name-arm64-v8a.apk
           retention-days: 30
