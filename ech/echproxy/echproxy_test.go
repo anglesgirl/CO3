@@ -32,10 +32,10 @@ func TestPublicECHCacheRejectsWrongHostAndMalformedData(t *testing.T) {
 }
 
 func TestTargetHostValidation(t *testing.T) {
-	for _, host := range []string{"archiveofourown.org", "www.archiveofourown.org", "api-1.example.org"} {
+	for _, host := range []string{"archiveofourown.org", "www.archiveofourown.org", "download.archiveofourown.org", "images.weserv.nl"} {
 		if !isTargetHost(host) { t.Errorf("valid host rejected: %q", host) }
 	}
-	for _, host := range []string{"", "archiveofourown.org:443", "https://archiveofourown.org", "127.0.0.1", "[::1]", "-bad.example", "bad_.example", "user@host"} {
+	for _, host := range []string{"", "api-1.example.org", "archiveofourown.org:443", "https://archiveofourown.org", "127.0.0.1", "[::1]", "-bad.example", "bad_.example", "user@host"} {
 		if isTargetHost(host) { t.Errorf("invalid host accepted: %q", host) }
 	}
 }
