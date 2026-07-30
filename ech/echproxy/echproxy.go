@@ -22,6 +22,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -743,7 +744,44 @@ func FetchECHConfig(doh, host string) ([]byte, error) {
 	return fetchECHViaDoH(host, doh)
 }
 
-var echParamRe = regexp.MustCompile(`ech="?([A-Za-z0-9+/=]+)"?`)
+var echParamRe = regexp.MustCompile(`(?i)ech="?([A-Za-z0-9+/=]+)"?`)
+
+// echFromSvcbWire extracts SvcParamKey=5 (ech) from the RFC 9460 wire RDATA.
+// Some DNS-over-HTTPS JSON gateways present HTTPS records as RFC3597
+// "\\# <length> <hex>" instead of the usual human-readable `ech=base64` form.
+func echFromSvcbWire(data string) ([]byte, bool) {
+	i := strings.Index(data, "\\#")
+	if i < 0 {
+		return nil, false
+	}
+	fields := strings.Fields(data[i+2:])
+	if len(fields) < 2 {
+		return nil, false
+	}
+	hexText := strings.Join(fields[1:], "")
+	raw, err := hex.DecodeString(hexText)
+	if err != nil || len(raw) < 3 {
+		return nil, false
+	}
+	// SVCB RDATA: priority (2 bytes), target-name (DNS labels), then params.
+	off := 2
+	for {
+		if off >= len(raw) { return nil, false }
+		labelLen := int(raw[off]); off++
+		if labelLen == 0 { break }
+		if labelLen > 63 || off+labelLen > len(raw) { return nil, false }
+		off += labelLen
+	}
+	for off+4 <= len(raw) {
+		key := int(raw[off])<<8 | int(raw[off+1])
+		length := int(raw[off+2])<<8 | int(raw[off+3])
+		off += 4
+		if off+length > len(raw) { return nil, false }
+		if key == 5 && length > 0 { return append([]byte(nil), raw[off:off+length]...), true }
+		off += length
+	}
+	return nil, false
+}
 
 // fetchECHViaDoH queries the HTTPS (type 65) record and pulls the ech= SvcParam.
 func fetchECHViaDoH(host, endpoint string) ([]byte, error) {
@@ -762,8 +800,18 @@ func fetchECHViaDoH(host, endpoint string) ([]byte, error) {
 			}
 			return b, nil
 		}
+		if b, ok := echFromSvcbWire(a.Data); ok {
+			return b, nil
+		}
 	}
-	return nil, errors.New("no ech= parameter in HTTPS record")
+	var records []string
+	for _, a := range dr.Answer {
+		if a.Type == 65 { records = append(records, a.Data) }
+	}
+	if len(records) > 0 {
+		return nil, fmt.Errorf("no ECH parameter in HTTPS record (received: %s)", strings.Join(records, " | "))
+	}
+	return nil, errors.New("no HTTPS record returned")
 }
 
 type publicECHCache struct {
