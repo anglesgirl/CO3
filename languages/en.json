@@ -581,5 +581,10 @@
   "account_create_account": "Create account",
   "account_activate_hint": "AO3 has emailed you an activation link. Copy it the same way and paste it below to finish — or just tap it in your email app.",
   "account_activate_button": "Activate account",
-  "account_copy_link_tip": "Tip: some email apps won't open the link directly. Long-press the link and choose \"Copy link address\"; if long-press doesn't work, tap it and look for a \"Copy link\" button."
+  "account_copy_link_tip": "Tip: some email apps won't open the link directly. Long-press the link and choose \"Copy link address\"; if long-press doesn't work, tap it and look for a \"Copy link\" button.",
+  "onboard_notice_independent": "This is an independent, unofficial client. It is not affiliated with, endorsed by, or partnered with Archive of Our Own (AO3) or its operators. AO3 terms and availability are controlled by AO3.",
+  "onboard_notice_verification": "AO3 may require interactive browser verification on some networks. Complete it only in the protected in-app page when prompted.",
+  "onboard_link_upstream": "Upstream project: tbvns/CO3",
+  "onboard_link_modified": "This modified build: anglesgirl/CO3",
+  "onboard_link_blog": "Modifier blog: anglesya.win"
 }

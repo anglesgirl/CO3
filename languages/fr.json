@@ -545,5 +545,10 @@
   "account_create_account": "Créer le compte",
   "account_activate_hint": "AO3 vous a envoyé un lien d'activation. Copiez-le de la même façon et collez-le ci-dessous pour terminer, ou appuyez dessus dans votre messagerie.",
   "account_activate_button": "Activer le compte",
-  "account_copy_link_tip": "Astuce : certaines messageries n'ouvrent pas le lien directement. Appuyez longuement dessus et choisissez « Copier l'adresse du lien » ; sinon, appuyez dessus et cherchez un bouton « Copier le lien »."
+  "account_copy_link_tip": "Astuce : certaines messageries n'ouvrent pas le lien directement. Appuyez longuement dessus et choisissez « Copier l'adresse du lien » ; sinon, appuyez dessus et cherchez un bouton « Copier le lien ».",
+  "onboard_notice_independent": "Cette application est un client indépendant et non officiel. Elle n'est ni affiliée à, ni approuvée par Archive of Our Own (AO3) ou ses opérateurs.",
+  "onboard_notice_verification": "AO3 peut demander une vérification interactive du navigateur sur certains réseaux. Terminez-la uniquement dans la page protégée de l'application.",
+  "onboard_link_upstream": "Projet amont : tbvns/CO3",
+  "onboard_link_modified": "Cette version modifiée : anglesgirl/CO3",
+  "onboard_link_blog": "Blog du modificateur : anglesya.win"
 }

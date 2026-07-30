@@ -1,5 +1,6 @@
 import {
   Image,
+  Linking,
   ScrollView,
   StyleSheet,
   Text,
@@ -48,9 +49,26 @@ export default function Step1({ currentTheme, setScreen }) {
           ]}
         />
 
-        <Text style={[styles.body, { color: currentTheme.secondaryTextColor }]}>
-          {t('onboard_step1_ligne1') + '\n' + t('onboard_step1_ligne2')}
+        <Text style={[styles.body, { color: currentTheme.secondaryTextColor }]}>          {t('onboard_step1_ligne1') + '\n' + t('onboard_step1_ligne2')}
         </Text>
+
+        <View style={[styles.noticeBox, { backgroundColor: currentTheme.inputBackground, borderColor: currentTheme.borderColor }]}>
+          <Text style={[styles.noticeText, { color: currentTheme.secondaryTextColor }]}>
+            {t('onboard_notice_independent')}
+          </Text>
+          <Text style={[styles.noticeText, { color: currentTheme.secondaryTextColor }]}>
+            {t('onboard_notice_verification')}
+          </Text>
+          <TouchableOpacity onPress={() => Linking.openURL('https://github.com/tbvns/CO3')}>
+            <Text style={[styles.linkText, { color: currentTheme.primaryColor }]}>{t('onboard_link_upstream')}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => Linking.openURL('https://github.com/anglesgirl/CO3')}>
+            <Text style={[styles.linkText, { color: currentTheme.primaryColor }]}>{t('onboard_link_modified')}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => Linking.openURL('https://anglesya.win')}>
+            <Text style={[styles.linkText, { color: currentTheme.primaryColor }]}>{t('onboard_link_blog')}</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
 
       <View
@@ -120,6 +138,23 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 24,
     textAlign: 'center',
+  },
+  noticeBox: {
+    width: '100%',
+    marginTop: 24,
+    padding: 16,
+    borderWidth: 1,
+    borderRadius: 12,
+  },
+  noticeText: {
+    fontSize: 13,
+    lineHeight: 19,
+    marginBottom: 8,
+  },
+  linkText: {
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 22,
   },
   bottomSection: {
     paddingHorizontal: 32,

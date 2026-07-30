@@ -581,5 +581,10 @@
   "account_create_account": "创建账号",
   "account_activate_hint": "AO3 已给你发送激活邮件。用同样的方法复制里面的激活链接并粘贴到下方，即可完成激活；也可以直接在邮箱里点击它。",
   "account_activate_button": "激活账号",
-  "account_copy_link_tip": "提示：国内邮箱通常无法直接点开链接。请长按链接，选择「复制链接地址」；如果无法长按，点击后在页面里找到「复制链接」按钮。"
+  "account_copy_link_tip": "提示：国内邮箱通常无法直接点开链接。请长按链接，选择「复制链接地址」；如果无法长按，点击后在页面里找到「复制链接」按钮。",
+  "onboard_notice_independent": "本应用是独立的非官方客户端，与 Archive of Our Own（AO3）及其运营方没有隶属、认可或合作关系。AO3 的服务条款与可用性以 AO3 官方说明为准。",
+  "onboard_notice_verification": "部分网络下 AO3 可能要求完成浏览器安全验证；请在应用内提示的受保护页面中完成验证。",
+  "onboard_link_upstream": "上游项目：tbvns/CO3",
+  "onboard_link_modified": "本修改版：anglesgirl/CO3",
+  "onboard_link_blog": "修改者博客：anglesya.win"
 }

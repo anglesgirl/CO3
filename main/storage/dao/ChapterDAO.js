@@ -2,6 +2,9 @@ import { Chapter } from '../models/chapter';
 import { addToDownloadQueue } from '../../downloads/DownloadQueue';
 import { getJsonSettings } from '../jsonSettings';
 
+// Disabled until interactive AO3 verification can be handled safely here.
+const OFFLINE_CHAPTER_CACHE_ENABLED = false;
+
 export class ChapterDAO {
   constructor(db) {
     this.db = db;
@@ -67,7 +70,7 @@ export class ChapterDAO {
         ]);
 
         const jsonSetting = await getJsonSettings();
-        if (jsonSetting.downloadOnUpdate && downloadOnUpdate) {
+        if (OFFLINE_CHAPTER_CACHE_ENABLED && jsonSetting.downloadOnUpdate && downloadOnUpdate) {
           await addToDownloadQueue({
             workId: newChap.workId,
             chapterId: newChap.id,

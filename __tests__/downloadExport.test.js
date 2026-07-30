@@ -52,6 +52,24 @@ describe('Android downloads', () => {
     expect(chapterRequest).toContain("import getUrl from '../requestManager'");
   });
 
+  it('hides the unreliable chapter cache while keeping native file export', () => {
+    const screen = read('main/screens/workScreen.jsx');
+    const updates = read('main/components/Update/UpdateBookCard.jsx');
+    const queue = read('main/downloads/DownloadManager.js');
+    expect(screen).toContain('const OFFLINE_CHAPTER_CACHE_ENABLED = false');
+    expect(screen).toContain('setNativeDownloadModalVisible(true)');
+    expect(updates).toContain('const OFFLINE_CHAPTER_CACHE_ENABLED = false');
+    expect(queue).toContain('if (!OFFLINE_CHAPTER_CACHE_ENABLED || isProcessing) return;');
+  });
+
+  it('includes independent-project links in first-run onboarding', () => {
+    const onboard = read('main/onboard/Screens/Step1Screen.jsx');
+    expect(onboard).toContain('https://github.com/tbvns/CO3');
+    expect(onboard).toContain('https://github.com/anglesgirl/CO3');
+    expect(onboard).toContain('https://anglesya.win');
+    expect(onboard).toContain("t('onboard_notice_independent')");
+  });
+
   it('hides database export from the menu and navigator', () => {
     const menu = read('main/screens/More.jsx');
     const app = read('main/app.jsx');

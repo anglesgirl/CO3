@@ -52,6 +52,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { userErrorMessage } from '../utils/userError';
 
 const NATIVE_DOWNLOAD_FORMATS = ['azw3', 'epub', 'mobi', 'pdf', 'html'];
+// AO3 browser verification is interactive; the native chapter cache cannot
+// complete it reliably. Keep only the verified file-export path visible.
+const OFFLINE_CHAPTER_CACHE_ENABLED = false;
 
 const ITEM_HEIGHT_COMPACT = 56;
 const ITEM_HEIGHT_EXPANDED = 72;
@@ -231,14 +234,16 @@ const ChapterItem = React.memo(({ chapter, index, currentTheme, onPress, showDat
           </Text>
         )}
 
-        <TouchableOpacity
-          hitSlop={{ top: 20, bottom: 20, left: 10, right: 10 }}
-          onPress={handleDownloadPress}
-          disabled={isInQueue}
-          style={styles.downloadIconWrapper}
-        >
-          {renderDownloadIcon()}
-        </TouchableOpacity>
+        {OFFLINE_CHAPTER_CACHE_ENABLED && (
+          <TouchableOpacity
+            hitSlop={{ top: 20, bottom: 20, left: 10, right: 10 }}
+            onPress={handleDownloadPress}
+            disabled={isInQueue}
+            style={styles.downloadIconWrapper}
+          >
+            {renderDownloadIcon()}
+          </TouchableOpacity>
+        )}
 
         <Icon name="chevron-right" size={20} color={currentTheme.iconColor} style={styles.chevron} />
       </View>
@@ -305,7 +310,7 @@ export const ReaderWrapper = ({
         jsonSettings = await getJsonSettings(chapterData);
       }
 
-      if (jsonSettings?.downloadWhileReading && await libraryDAO.isInLibrary(chapterData.workId)) {
+      if (OFFLINE_CHAPTER_CACHE_ENABLED && jsonSettings?.downloadWhileReading && await libraryDAO.isInLibrary(chapterData.workId)) {
         for (let i = 0; i < jsonSettings?.downloadWhileReading; i++) {
           const index = chapterData.chapterIndex + 2 + i;
           if (chapterList.length <= index) break;
@@ -1322,7 +1327,7 @@ const ChapterInfoScreen = ({ route }) => {
         <Text style={[styles.headerTitle, { color: currentTheme.textColor }]} numberOfLines={1}>
           {work.title}
         </Text>
-        <TouchableOpacity onPress={() => setDownloadMenuVisible(true)} style={styles.menuButton}>
+        <TouchableOpacity onPress={() => setNativeDownloadModalVisible(true)} style={styles.menuButton}>
           <Icon name="download" size={24} color={currentTheme.iconColor} />
         </TouchableOpacity>
         <TouchableOpacity onPress={() => setMenuVisible(true)} style={styles.menuButton}>
@@ -1331,7 +1336,6 @@ const ChapterInfoScreen = ({ route }) => {
       </View>
 
       {renderHeaderMenu()}
-      {renderDownloadHeaderMenu()}
       {renderNativeDownloadModal()}
 
       <FlatList

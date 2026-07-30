@@ -7,6 +7,8 @@ import { downloadChapter, isDownloaded } from './Downloader';
 const FAILED_LIST_KEY = 'failedDownloads';
 const CHANNEL_ID = 'download_channel';
 const NOTIFICATION_ID = 'download_progress';
+// The native cache request cannot complete AO3's interactive browser check.
+const OFFLINE_CHAPTER_CACHE_ENABLED = false;
 
 let isProcessing = false;
 
@@ -61,7 +63,7 @@ async function downloadTask(item) {
 }
 
 export async function processQueue() {
-  if (isProcessing) return;
+  if (!OFFLINE_CHAPTER_CACHE_ENABLED || isProcessing) return;
   isProcessing = true;
 
   let failedCount = 0;

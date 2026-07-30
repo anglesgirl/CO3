@@ -54,6 +54,10 @@ const imageMappings = {
   },
 };
 
+// AO3's interactive browser verification cannot be completed by the native
+// chapter cache request. Hide this unreliable cache action; file export stays.
+const OFFLINE_CHAPTER_CACHE_ENABLED = false;
+
 const UpdateBookCard = ({ update, workDAO, theme, onPress }) => {
   const [work, setWork] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -303,9 +307,11 @@ const UpdateBookCard = ({ update, workDAO, theme, onPress }) => {
           </Text>
         </View>
 
-        <TouchableOpacity onPress={handleDownloadPress} style={{ right: 8}}>
-          {renderDownloadIcon()}
-        </TouchableOpacity>
+        {OFFLINE_CHAPTER_CACHE_ENABLED && (
+          <TouchableOpacity onPress={handleDownloadPress} style={{ right: 8 }}>
+            {renderDownloadIcon()}
+          </TouchableOpacity>
+        )}
       </View>
     </TouchableOpacity>
   );
