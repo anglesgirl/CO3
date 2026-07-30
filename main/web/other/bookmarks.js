@@ -1,6 +1,6 @@
 import { getUsername } from '../../storage/Credentials';
 import { parseWorkElements } from '../browse/fetchWorks';
-import getUrl from '../requestManager';
+import ky from '../echKy';
 import { echUrl } from '../echKy';
 import { parseBookmarkForm } from '../ao3FormParser';
 import { getSessionHeaders } from '../sessionHeaders';
@@ -18,7 +18,11 @@ export async function fetchBookmarks(page, username, pseud, noWebview = false) {
     }
 
     console.log(`Fetching bookmarks from: ${url}`);
-    const response = await getUrl(url, noWebview);
+    // A proxy restart has an empty native cookie jar. Always attach the stored
+    // AO3 session to bookmark reads, otherwise AO3 silently serves a login page
+    // and the UI appears as an empty/unresponsive bookmark screen.
+    const sessionHeaders = await getSessionHeaders();
+    const response = await ky.get(url, { headers: sessionHeaders }).text();
     const doc = new DomParser().parseFromString(response, "text/html");
 
     const mainDiv = doc.getElementById("main");
@@ -53,12 +57,13 @@ export async function bookmark(work) {
   try {
     const workId = work.id;
     const url = `https://archiveofourown.org/works/${workId}/bookmarks/new`;
-    const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
     const sessionHeaders = await getSessionHeaders();
 
+    // Do not claim to be Chrome: TLS is performed by Go, and an artificial
+    // browser UA creates a TLS/UA mismatch that Cloudflare can reject.
     const pageResponse = await fetch(await echUrl(url), {
       credentials: 'include',
-      headers: { 'User-Agent': userAgent, ...sessionHeaders }
+      headers: { Accept: 'text/html,application/xhtml+xml,*/*;q=0.8', ...sessionHeaders }
     });
 
     if (!pageResponse.ok) throw new Error(`Bookmark form failed: ${pageResponse.status}`);
@@ -85,7 +90,6 @@ export async function bookmark(work) {
       headers: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Referer': url,
-        'User-Agent': userAgent,
         ...sessionHeaders,
       }
     });
