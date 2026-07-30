@@ -1,0 +1,57 @@
+name: "Build standalone ECH Tester"
+
+on:
+  push:
+    branches: [ech-support]
+    paths:
+      - 'ech-tester/**'
+      - 'ech/echproxy/**'
+      - '.github/workflows/ech-tester.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NDK_VERSION: "27.1.12297006"
+
+jobs:
+  build:
+    name: Build standalone cache-free ECH tester
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.24' }
+      - uses: actions/setup-java@v4
+        with: { distribution: 'zulu', java-version: '17' }
+      - uses: android-actions/setup-android@v3
+      - name: Install Android NDK
+        run: |
+          sdkmanager --install "ndk;${NDK_VERSION}" "platforms;android-36" "build-tools;35.0.0"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+      - name: Build arm64 ECH proxy library
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          cd ech
+          go get golang.org/x/mobile/bind@latest
+          mkdir -p ../ech-tester/app/libs
+          gomobile bind -target=android/arm64 -androidapi 24 -o ../ech-tester/app/libs/echproxy.aar ./echproxy
+      - name: Build test APK
+        run: |
+          cd ech-tester
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk ../CO3-ECH-Tester-public-tls-ech-arm64-v8a.apk
+      - name: Verify arm64-only native payload
+        run: |
+          unzip -l CO3-ECH-Tester-public-tls-ech-arm64-v8a.apk > apk-files.txt
+          grep -q 'lib/arm64-v8a/' apk-files.txt
+          if grep -Eq 'lib/(armeabi-v7a|x86|x86_64)/' apk-files.txt; then exit 1; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CO3-ECH-Tester-${{ github.sha }}
+          path: CO3-ECH-Tester-public-tls-ech-arm64-v8a.apk
+          retention-days: 30
