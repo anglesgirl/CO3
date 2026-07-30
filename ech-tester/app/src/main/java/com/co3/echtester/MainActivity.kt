@@ -31,7 +31,9 @@ class MainActivity : Activity() {
     private var running = false
 
     private val target = "archiveofourown.org"
-    private val configHost = "cdn.jsdelivr.net"
+    // jsdelivr.com itself publishes the ECH record used by this experiment.
+    // Do not substitute cdn.jsdelivr.net: it is a different hostname/CDN path.
+    private val configHost = "jsdelivr.com"
     private val doh = "https://cloudflare-dns.com/dns-query"
     private var sharedConfigB64: String? = null
 
@@ -96,7 +98,7 @@ class MainActivity : Activity() {
                 } else sharedConfigB64 ?: throw IllegalStateException("请先获取 jsDelivr 配置")
                 Echproxy.stop()
                 Echproxy.startStrict("127.0.0.1:$port", testTarget, configB64, doh, "", cache.absolutePath, false)
-                val path = if (testTarget == configHost) "/npm/axios@latest/package.json" else "/works"
+                val path = if (testTarget == configHost) "/" else "/works"
                 val url = java.net.URL("http://127.0.0.1:$port$path")
                 val c = url.openConnection() as java.net.HttpURLConnection
                 c.connectTimeout = 30000; c.readTimeout = 30000
