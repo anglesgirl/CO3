@@ -36,7 +36,7 @@ class MainActivity : Activity() {
     private val configHost = "jsdelivr.com"
     // Ordered private Cloudflare Zero Trust resolvers. The public resolver is
     // reset on the user's network, so never make it the tester's only path.
-    private val doh = "https://pieqllv9i7.cloudflare-gateway.com/dns-query,https://m2b4x7vw98.cloudflare-gateway.com/dns-query,https://dz1598pphb.cloudflare-gateway.com/dns-query"
+    private val doh = "https://pieqllv9i7.cloudflare-gateway.com/dns-query,https://m2b4x7vw98.cloudflare-gateway.com/dns-query,https://dz1598pphb.cloudflare-gateway.com/dns-query,https://dns.google/resolve"
     private var sharedConfigB64: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {

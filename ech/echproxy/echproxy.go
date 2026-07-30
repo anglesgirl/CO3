@@ -741,7 +741,22 @@ func FetchECHConfig(doh, host string) ([]byte, error) {
 	if strings.TrimSpace(host) == "" {
 		return nil, errors.New("no ECH config host given")
 	}
-	return fetchECHViaDoH(host, doh)
+	// A resolver can validly return an HTTPS record but omit the ECH parameter.
+	// Treat that as an unsuccessful ECH lookup and continue to the next resolver;
+	// stopping at the first syntactically valid DNS response would hide ECH from
+	// clients behind such a resolver.
+	var lastErr error
+	for _, endpoint := range strings.Split(doh, ",") {
+		endpoint = strings.TrimSpace(endpoint)
+		if endpoint == "" { continue }
+		if config, err := fetchECHViaDoH(host, endpoint); err == nil {
+			return config, nil
+		} else {
+			lastErr = fmt.Errorf("%s: %w", endpoint, err)
+		}
+	}
+	if lastErr == nil { lastErr = errors.New("no DoH endpoint configured") }
+	return nil, lastErr
 }
 
 var echParamRe = regexp.MustCompile(`(?i)ech="?([A-Za-z0-9+/=]+)"?`)
