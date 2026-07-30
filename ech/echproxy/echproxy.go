@@ -44,10 +44,10 @@ const (
 	publicECHCacheTTL = 12 * time.Hour
 )
 
-// TEST BUILD: ECHConfigList for public.tls-ech.dev (public_name
-// public.tls-ech.dev). This is intentionally used only for the user-requested
-// compatibility test; it is not expected to work against AO3/Cloudflare.
-const fallbackECH = "AEn+DQBFKwAgACABWIHUGj4u+PIggYXcR5JF0gYk3dCRioBW8uJq9H4mKAAIAAEAAQABAANAEnB1YmxpYy50bHMtZWNoLmRldgAA"
+// Last-resort Cloudflare public ECHConfigList for archiveofourown.org.
+// Cloudflare rotates this value; retry_configs and the expiring public cache
+// refresh it automatically when the edge returns a newer configuration.
+const fallbackECH = "AEX+DQBBEgAgACCCqb/I3qllxRj0GsvaltwQOKEVxT3s7r9QsejF510DIgAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA="
 
 var (
 	mu          sync.Mutex
@@ -512,69 +512,64 @@ func echDialContext(sni string, echList []byte, cachePath string, insecure bool)
 	var logged sync.Once
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		d := &net.Dialer{Timeout: dialTimeout}
+		candidates := dialCandidates(addr)
+		var lastErr error
 
-		var raw net.Conn
-		var err error
-		var dialed string
-		for _, cand := range dialCandidates(addr) {
-			raw, err = d.DialContext(ctx, "tcp", cand)
-			if err == nil {
-				dialed = cand
-				break
+		// An edge can reset or reject an otherwise valid ECH connection. Try every
+		// configured edge before failing, but never downgrade this protected path to
+		// ordinary TLS (which would expose the real AO3 SNI).
+		for _, dialed := range candidates {
+			raw, err := d.DialContext(ctx, "tcp", dialed)
+			if err != nil {
+				lastErr = err
+				log.Printf("echproxy: dial %s failed: %v", dialed, err)
+				continue
 			}
-			log.Printf("echproxy: dial %s failed: %v", cand, err)
-		}
-		if raw == nil {
-			setShakeInfo("FAILED: could not connect to any upstream address: %v", err)
-			return nil, fmt.Errorf("dial failed: %w", err)
-		}
 
-		cfg := &tls.Config{
-			ServerName:                     sni,
-			MinVersion:                     tls.VersionTLS13, // ECH requires TLS 1.3
-			NextProtos:                     []string{"h2", "http/1.1"},
-			EncryptedClientHelloConfigList: echList,
-			InsecureSkipVerify:             insecure,
-		}
-		hctx, cancel := context.WithTimeout(ctx, dialTimeout)
-		defer cancel()
-
-		tc := tls.Client(raw, cfg)
-		err = tc.HandshakeContext(hctx)
-
-		// If the server rejected our (stale/GREASE) ECH config, it returns a fresh
-		// ECHConfigList in retry_configs. Redial once with it — self-heals against
-		// config rotation and a blocked DoH lookup.
-		var rej *tls.ECHRejectionError
-		if errors.As(err, &rej) && len(rej.RetryConfigList) > 0 {
-			raw.Close()
-			setStatus("ECH rejected; retrying with server retry_configs (%d bytes)", len(rej.RetryConfigList))
-			raw2, derr := d.DialContext(ctx, "tcp", dialed)
-			if derr != nil {
-				return nil, derr
+			cfg := &tls.Config{
+				ServerName:                     sni,
+				MinVersion:                     tls.VersionTLS13, // ECH requires TLS 1.3
+				NextProtos:                     []string{"h2", "http/1.1"},
+				EncryptedClientHelloConfigList: echList,
+				InsecureSkipVerify:             insecure,
 			}
-			cfg.EncryptedClientHelloConfigList = rej.RetryConfigList
-			storePublicECHCache(cachePath, sni, rej.RetryConfigList)
-			tc = tls.Client(raw2, cfg)
-			raw = raw2
+			hctx, cancel := context.WithTimeout(ctx, dialTimeout)
+			tc := tls.Client(raw, cfg)
 			err = tc.HandshakeContext(hctx)
-		}
-		if err != nil {
-			raw.Close()
-			if errors.As(err, &rej) {
-				setShakeInfo("FAILED via %s: server rejected ECH, %d bytes retry_configs "+
-					"(if 0, endpoint likely isn't a real ECH server)", dialed, len(rej.RetryConfigList))
-				return nil, fmt.Errorf("ECH handshake failed: rejected, %d bytes retry_configs", len(rej.RetryConfigList))
+			cancel()
+
+			// A server-provided retry config is the only ECH retry on this edge.
+			// Persist it and also use it for later candidate IPs in this attempt.
+			var rej *tls.ECHRejectionError
+			if errors.As(err, &rej) && len(rej.RetryConfigList) > 0 {
+				raw.Close()
+				setStatus("ECH rejected via %s; retrying with server retry_configs (%d bytes)", dialed, len(rej.RetryConfigList))
+				echList = rej.RetryConfigList
+				storePublicECHCache(cachePath, sni, echList)
+				raw, err = d.DialContext(ctx, "tcp", dialed)
+				if err == nil {
+					cfg.EncryptedClientHelloConfigList = echList
+					hctx, retryCancel := context.WithTimeout(ctx, dialTimeout)
+					tc = tls.Client(raw, cfg)
+					err = tc.HandshakeContext(hctx)
+					retryCancel()
+				}
 			}
-			setShakeInfo("FAILED via %s: %v", dialed, err)
-			return nil, fmt.Errorf("ECH handshake failed: %w", err)
+			if err != nil {
+				raw.Close()
+				lastErr = err
+				log.Printf("echproxy: ECH handshake via %s failed; trying next candidate: %v", dialed, err)
+				continue
+			}
+			st := tc.ConnectionState()
+			logged.Do(func() {
+				setShakeInfo("ok via %s ECHAccepted=%v TLS=%s ALPN=%q",
+					dialed, st.ECHAccepted, tlsVersionName(st.Version), st.NegotiatedProtocol)
+			})
+			return tc, nil
 		}
-		st := tc.ConnectionState()
-		logged.Do(func() {
-			setShakeInfo("ok via %s ECHAccepted=%v TLS=%s ALPN=%q",
-				dialed, st.ECHAccepted, tlsVersionName(st.Version), st.NegotiatedProtocol)
-		})
-		return tc, nil
+		setShakeInfo("FAILED after %d ECH candidate(s): %v", len(candidates), lastErr)
+		return nil, fmt.Errorf("ECH handshake failed after %d candidate(s): %w", len(candidates), lastErr)
 	}
 }
 
