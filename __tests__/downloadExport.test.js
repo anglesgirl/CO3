@@ -25,6 +25,14 @@ describe('Android downloads', () => {
     expect(module).toContain('fun openFile(');
   });
 
+  it('exports the database through the Android MediaStore bridge', () => {
+    const manager = read('main/storage/DatabaseManager.js');
+    expect(manager).toContain("NativeModules.FileExport");
+    expect(manager).toContain("/data/data/com.ao3.xyz/databases/library.db");
+    expect(manager).toContain('saveToDownloads');
+    expect(manager).not.toContain('RNFS.DownloadDirectoryPath');
+  });
+
   it('shows the exact folder and offers to open a manual download', () => {
     const screen = read('main/screens/workScreen.jsx');
     const exporter = read('main/storage/FileExport.js');
@@ -56,5 +64,13 @@ describe('Android downloads', () => {
     const update = read('main/screens/Update.jsx');
     expect(update).not.toContain("t('screen_update_not_available')");
     expect(update).not.toContain("DeviceEventEmitter.addListener('doubleTap'");
+  });
+
+  it('locks chapter opening while content is loading', () => {
+    const screen = read('main/screens/workScreen.jsx');
+    expect(screen).toContain('openingChapterRef.current');
+    expect(screen).toContain('setOpeningChapter(true)');
+    expect(screen).toContain('chapterOpeningOverlay');
+    expect(screen).toContain('pointerEvents="auto"');
   });
 });

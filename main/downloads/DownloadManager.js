@@ -40,6 +40,18 @@ async function downloadTask(item) {
   } catch (e) {
     console.error(`Error downloading ${item.chapterId}:`, e);
 
+    // A write can finish before a later verification/cleanup step throws.
+    // Reconcile the filesystem before reporting failure so an actually
+    // usable chapter is never left with a red error state.
+    if (await isDownloaded(item.workId, item.chapterId)) {
+      console.warn(`Download raised after files were saved; treating ${item.chapterId} as complete`);
+      DeviceEventEmitter.emit('download_completed', {
+        chapterId: String(item.chapterId),
+        success: true,
+      });
+      return true;
+    }
+
     DeviceEventEmitter.emit('download_completed', {
       chapterId: String(item.chapterId),
       success: false,

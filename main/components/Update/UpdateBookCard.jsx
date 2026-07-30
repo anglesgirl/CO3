@@ -165,6 +165,14 @@ const UpdateBookCard = ({ update, workDAO, theme, onPress }) => {
     if (hasFailed) {
       const failedJson = await AsyncStorage.getItem('failedDownloads');
       const failedList = failedJson ? JSON.parse(failedJson) : [];
+      const failure = failedList.find(f => String(f.chapterId) === String(update.chapterID));
+      if (failure?.reason) {
+        Toast.show({
+          type: 'error',
+          text1: t('component_update_bookcard_download_failed'),
+          text2: String(failure.reason).slice(0, 180),
+        });
+      }
       const newList = failedList.filter(f => String(f.chapterId) !== String(update.chapterID));
       await AsyncStorage.setItem('failedDownloads', JSON.stringify(newList));
       setHasFailed(false);

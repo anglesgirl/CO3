@@ -287,7 +287,7 @@ export async function exportDb(db) {
       await db.close();
     }
 
-    if (Platform.OS === 'ios' || Platform.OS === 'android') {
+    if (Platform.OS === 'ios') {
       const dbFileName = 'library.db';
       const exportFileName = 'CO3-DatabaseManager-Export.db';
 
@@ -296,23 +296,27 @@ export async function exportDb(db) {
         ios: `${RNFS.LibraryDirectoryPath}/LocalDatabase/${dbFileName}`,
       });
 
-      const exportPath = Platform.select({
-        android: `${RNFS.DownloadDirectoryPath}/${exportFileName}`,
-        ios: `${RNFS.DocumentDirectoryPath}/${exportFileName}`,
-      });
-
-      const exportDir = Platform.select({
-        android: RNFS.DownloadDirectoryPath,
-        ios: RNFS.DocumentDirectoryPath,
-      });
-
-      await RNFS.mkdir(exportDir, { NSURLIsExcludedFromBackupKey: false });
+      const exportPath = `${RNFS.DocumentDirectoryPath}/${exportFileName}`;
       await RNFS.copyFile(dbPath, exportPath);
 
       if (dbWasOpen) {
         await db.open();
       }
 
+      return exportPath;
+    } else if (Platform.OS === 'android') {
+      const nativeModule = require('react-native').NativeModules.FileExport;
+      if (!nativeModule?.saveToDownloads) throw new Error('File export module unavailable');
+      // SQLite keeps the database in the app-private databases directory.
+      // The destination is public, so copy it through FileExport/MediaStore
+      // instead of asking RNFS to write directly into Downloads.
+      const dbPath = '/data/data/com.ao3.xyz/databases/library.db';
+      const exportPath = await nativeModule.saveToDownloads(
+        dbPath,
+        'CO3-DatabaseManager-Export.db',
+        'application/octet-stream',
+      );
+      if (dbWasOpen) await db.open();
       return exportPath;
     } else {
       throw new Error('Desktop export not implemented yet');
