@@ -34,14 +34,12 @@ describe('ECH authenticated actions', () => {
     expect(source).toContain('headers: await getSessionHeaders()');
   });
 
-  it('recognizes an AO3 create redirect or its followed Show Bookmark page as success', () => {
+  it('uses the established AO3 browser-shaped bookmark request', () => {
     const source = read('main/web/other/bookmarks.js');
-    expect(source).toContain("redirect: 'manual'");
-    expect(source).toContain('postResponse.status >= 300 && postResponse.status < 400');
-    expect(source).toContain('function isBookmarkShowPage(html)');
-    expect(source).toContain('function bookmarkShowPageMatchesWork(html, workId)');
-    expect(source).toContain('if (bookmarkShowPageMatchesWork(postHtml, workId))');
-    expect(source).toContain('AO3 did not confirm bookmark creation');
+    expect(source).toContain("const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'");
+    expect(source).toContain("'User-Agent': userAgent");
+    expect(source).not.toContain("redirect: 'manual'");
+    expect(source).toContain('if (postResponse.ok || postResponse.status === 302)');
   });
 
   it('adds the session cookie to mark-for-later GET and POST requests', () => {

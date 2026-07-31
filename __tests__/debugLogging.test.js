@@ -15,7 +15,7 @@ describe('debug logging', () => {
     const source = read('main/web/other/bookmarks.js');
     const logger = read('main/utils/debugLog.js');
     expect(source).toContain("debugLog('bookmark'");
-    expect(source).toContain('POST HTTP');
+    expect(source).toContain('POST completed HTTP');
     expect(logger).toContain('_otwarchive_session=<redacted>');
   });
 

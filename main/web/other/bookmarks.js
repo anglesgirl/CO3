@@ -14,19 +14,6 @@ function isLoginPage(html) {
     || /You need to log in to access this page/i.test(String(html));
 }
 
-function isBookmarkShowPage(html) {
-  return /<title>\s*Show Bookmark\s*\|\s*Archive of Our Own/i.test(String(html));
-}
-
-function bookmarkShowPageMatchesWork(html, workId) {
-  const source = String(html);
-  const workUrl = `/works/${workId}`;
-  return isBookmarkShowPage(source)
-    && (source.includes(`bookmarkable_id&quot; value=&quot;${workId}`)
-      || source.includes(`bookmarkable_id" value="${workId}`)
-      || source.includes(workUrl));
-}
-
 function ao3FormError(html) {
   const text = String(html)
     .replace(/<[^>]*>/g, ' ')
@@ -91,13 +78,16 @@ export async function bookmark(work) {
       throw new Error(`Cannot bookmark this work: invalid work id (${String(workId)})`);
     }
     const url = `https://archiveofourown.org/works/${workId}/bookmarks/new`;
+    // AO3 accepts the Android request reliably when it carries the desktop UA
+    // used by the original bookmark implementation.
+    const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
     const sessionHeaders = await getSessionHeaders();
 
     console.log('[AO3 bookmark] loading form', url);
     await debugLog('bookmark', `GET form ${url}`);
     const pageResponse = await fetch(await echUrl(url), {
       credentials: 'include',
-      headers: { Accept: 'text/html,application/xhtml+xml,*/*;q=0.8', ...sessionHeaders },
+      headers: { Accept: 'text/html,application/xhtml+xml,*/*;q=0.8', 'User-Agent': userAgent, ...sessionHeaders },
     });
 
     if (!pageResponse.ok) {
@@ -127,45 +117,23 @@ export async function bookmark(work) {
     const postResponse = await fetch(await echUrl(postUrl), {
       method: 'POST',
       body: formData,
-      // A successful Rails create is a redirect. Do not follow it, otherwise
-      // fetch turns it into a generic 200 and the caller cannot tell success
-      // from an unchanged/new-bookmark form.
-      redirect: 'manual',
       credentials: 'include',
       headers: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Referer': url,
+        'User-Agent': userAgent,
         ...sessionHeaders,
       },
     });
 
-    // AO3 creates bookmarks with a redirect. A 200 response is the returned
-    // form (usually validation failure), not proof that a bookmark was added.
-    if (postResponse.status >= 300 && postResponse.status < 400) {
-      const location = postResponse.headers.get('location') || '(none)';
-      console.log('[AO3 bookmark] created', workId, postResponse.status, location);
-      await debugLog('bookmark', `POST HTTP ${postResponse.status}; Location=${location}`);
+    await debugLog('bookmark', `POST completed HTTP ${postResponse.status}; redirected=${postResponse.redirected}; final=${postResponse.url || '(hidden)'}`);
+    // Restore the original Android behavior: allow fetch to follow AO3's
+    // redirect and use its final successful response as the completion signal.
+    if (postResponse.ok || postResponse.status === 302) {
+      console.log('[AO3 bookmark] request completed', workId, postResponse.status);
       return true;
     }
-
-    const postHtml = await postResponse.text();
-    await debugLog('bookmark', `POST HTTP ${postResponse.status}; body=${postHtml.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500)}`);
-    // Android fetch follows AO3's create redirect despite redirect: 'manual',
-    // leaving us on the successful “Show Bookmark” page with HTTP 200.
-    if (bookmarkShowPageMatchesWork(postHtml, workId)) {
-      await debugLog('bookmark', `Created after followed redirect; HTTP ${postResponse.status}; work=${workId}`);
-      return true;
-    }
-    if (isBookmarkShowPage(postHtml)) {
-      throw new Error(`AO3 returned a bookmark page for a different work (expected ${workId})`);
-    }
-    if (isLoginPage(postHtml)) {
-      throw new Error('AO3 session was rejected while creating the bookmark');
-    }
-    const formError = ao3FormError(postHtml);
-    if (formError) throw new Error(`AO3 rejected the bookmark: ${formError}`);
-
-    throw new Error(`AO3 did not confirm bookmark creation (HTTP ${postResponse.status}); ECH: ${await getEchStatus()}`);
+    throw new Error(`Bookmark request failed with HTTP ${postResponse.status}; ECH: ${await getEchStatus()}`);
 
   } catch (error) {
     console.error('Error bookmarking:', error);
