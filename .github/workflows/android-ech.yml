@@ -4,7 +4,7 @@ name: "Build Android APK (ECH)"
 # gomobile, then builds the React Native app that loads it.
 on:
   push:
-    branches: [ech-support]
+    branches: [co3-b020]
   workflow_dispatch:
 
 permissions:

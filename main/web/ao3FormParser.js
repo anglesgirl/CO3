@@ -15,7 +15,14 @@ export function parseBookmarkForm(html) {
   const doc = new DomParser().parseFromString(html, 'text/html');
   const token = parseAuthenticityToken(doc);
   const input = elementsNamed(doc, 'input', 'bookmark[pseud_id]')[0];
-  const pseudId = input?.getAttribute('value') || parsePseudSelect(doc);
+  // AO3 renders a select for accounts with multiple pseuds. Its selected
+  // option is authoritative; only older single-pseud forms use a hidden input.
+  // react-native-html-parser does not reliably preserve a boolean `selected`
+  // attribute, so inspect that small form fragment before using the DOM fallback.
+  const selected = String(html).match(
+    /<option\b(?=[^>]*\bselected(?:\s|=|>))(?=[^>]*\bvalue=["']([^"']+)["'])[^>]*>/i,
+  );
+  const pseudId = selected?.[1] || parsePseudSelect(doc) || input?.getAttribute('value') || null;
   return { token, pseudId };
 }
 

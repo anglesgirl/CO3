@@ -3,8 +3,7 @@
 //
 // The proxy listens on http://127.0.0.1:<port> and re-originates each request to
 // https://archiveofourown.org over a TLS handshake whose SNI is hidden with ECH.
-// If the proxy can't start (non-Android build, missing native module, handshake
-// failure) we fall back to a direct request so the app keeps working.
+// On Android, protected requests must not fall back to the system resolver.
 
 import ky from 'ky';
 import { NativeModules, Platform } from 'react-native';
@@ -15,16 +14,23 @@ const AO3_HOSTS = new Set(['archiveofourown.org', 'www.archiveofourown.org']);
 // Default DoH endpoint (JSON API) used to fetch AO3's current ech= record.
 // A reachable DoH is important behind the GFW — dns.google is usually blocked,
 // which is why the default is a Cloudflare Gateway endpoint. User-overridable.
-export const DEFAULT_DOH = 'https://0kbpekmcr1.cloudflare-gateway.com/dns-query';
+export const DEFAULT_DOH = 'https://pieqllv9i7.cloudflare-gateway.com/dns-query';
+export const DEFAULT_DOH_FALLBACKS = [
+  DEFAULT_DOH,
+  'https://m2b4x7vw98.cloudflare-gateway.com/dns-query',
+  'https://dz1598pphb.cloudflare-gateway.com/dns-query',
+];
 
 // Domain whose TXT record carries remote settings, so end users can pull a
 // working DoH endpoint / edge IPs with one tap instead of understanding DoH.
 // Publish a TXT record on this name, e.g.:
 //   v=co3ech1; doh=https://example.com/dns-query; ip=104.20.8.2,104.20.9.2
 // Set this to your own domain before shipping builds.
-export const DEFAULT_CONFIG_DOMAIN = 'co3.xn--oiqt18e8e2a.eu.org';
+export const DEFAULT_CONFIG_DOMAIN = 'ech-config.anglesgirl.eu.org';
 
 const DOH_KEY = 'ech_doh';
+const DOH2_KEY = 'ech_doh2';
+const DOH3_KEY = 'ech_doh3';
 const IP_KEY = 'ech_ip';
 const CONFIG_DOMAIN_KEY = 'ech_config_domain';
 // Set once the user edits DoH/IP by hand — remote config must not clobber that.
@@ -39,10 +45,24 @@ let echBasePromise = null; // Promise<string|null> — memoised
 export async function getDoh() {
   try {
     const v = await AsyncStorage.getItem(DOH_KEY);
+    if (v === 'https://0kbpekmcr1.cloudflare-gateway.com/dns-query') {
+      await AsyncStorage.setItem(DOH_KEY, DEFAULT_DOH);
+      return DEFAULT_DOH;
+    }
     return v === null ? DEFAULT_DOH : v;
   } catch {
     return DEFAULT_DOH;
   }
+}
+
+async function getDohCandidates() {
+  const values = await Promise.all(
+    [DOH_KEY, DOH2_KEY, DOH3_KEY].map(key => AsyncStorage.getItem(key)),
+  );
+  const retired = 'https://0kbpekmcr1.cloudflare-gateway.com/dns-query';
+  return [...new Set(
+    [...DEFAULT_DOH_FALLBACKS, ...values].filter(value => value !== retired && isValidDoh(value)),
+  )];
 }
 
 // Optional comma-separated list of preferred Cloudflare edge IPs. Empty = use DNS.
@@ -61,7 +81,7 @@ function startProxy() {
     const mod = NativeModules.EchProxy;
     if (!mod || typeof mod.start !== 'function') return null;
     try {
-      const doh = await getDoh();
+      const doh = (await getDohCandidates()).join(',');
       const ips = await getCustomIPs();
       const port = await mod.start(0, doh, ips); // 0 = auto-pick a free port
       const base = `http://127.0.0.1:${port}`;
@@ -105,7 +125,11 @@ function isValidIPList(s) {
 // we keep whatever settings already work.
 export async function syncRemoteConfig() {
   if (Platform.OS !== 'android') return;
-  const domain = await getConfigDomain();
+  let domain = await getConfigDomain();
+  if (domain === 'co3.xn--oiqt18e8e2a.eu.org') {
+    domain = DEFAULT_CONFIG_DOMAIN;
+    await AsyncStorage.setItem(CONFIG_DOMAIN_KEY, domain);
+  }
   if (!domain) return;
   if (await hasManualOverride()) {
     console.log('[ECH] manual override set — skipping remote config');
@@ -122,19 +146,23 @@ export async function syncRemoteConfig() {
 
   const next = {
     doh: isValidDoh(cfg.doh) ? cfg.doh : null,
+    doh2: isValidDoh(cfg.doh2) ? cfg.doh2 : null,
+    doh3: isValidDoh(cfg.doh3) ? cfg.doh3 : null,
     ip: isValidIPList(cfg.ip) ? cfg.ip : null,
     tr: isValidDoh(cfg.tr) ? cfg.tr : null, // same https:// URL validation
   };
-  if (!next.doh && !next.ip && !next.tr) return;
+  if (!next.doh && !next.doh2 && !next.doh3 && !next.ip && !next.tr) return;
 
   // Only restart the proxy if something actually changed.
   let prev = {};
   try {
     prev = JSON.parse((await AsyncStorage.getItem(LAST_REMOTE_KEY)) || '{}');
   } catch {}
-  if (prev.doh === next.doh && prev.ip === next.ip && prev.tr === next.tr) return;
+  if (prev.doh === next.doh && prev.doh2 === next.doh2 && prev.doh3 === next.doh3 && prev.ip === next.ip && prev.tr === next.tr) return;
 
   if (next.doh) await AsyncStorage.setItem(DOH_KEY, next.doh);
+  if (next.doh2) await AsyncStorage.setItem(DOH2_KEY, next.doh2);
+  if (next.doh3) await AsyncStorage.setItem(DOH3_KEY, next.doh3);
   if (next.ip) await AsyncStorage.setItem(IP_KEY, next.ip);
   // Translation endpoint lives in translate.js but ships through the same record.
   if (next.tr) await AsyncStorage.setItem('translate_endpoint', next.tr);
@@ -142,7 +170,7 @@ export async function syncRemoteConfig() {
   console.log('[ECH] applied remote config:', JSON.stringify(next));
 
   // Only the proxy settings require a restart.
-  if (next.doh !== prev.doh || next.ip !== prev.ip) await restartProxy();
+  if (next.doh !== prev.doh || next.doh2 !== prev.doh2 || next.doh3 !== prev.doh3 || next.ip !== prev.ip) await restartProxy();
 }
 
 // echUrl rewrites an AO3 URL so it goes through the local ECH proxy. Use it for
@@ -151,11 +179,17 @@ export async function syncRemoteConfig() {
 export async function echUrl(url) {
   try {
     const base = await getEchBase();
-    if (!base) return url;
     const u = new URL(url);
+    if (!base) {
+      if (Platform.OS === 'android' && u.protocol === 'https:') {
+        throw new Error('ECH proxy unavailable; refusing direct HTTPS request');
+      }
+      return url;
+    }
     if (!AO3_HOSTS.has(u.hostname)) return url;
     return base + u.pathname + u.search;
-  } catch {
+  } catch (error) {
+    if (Platform.OS === 'android') throw error;
     return url;
   }
 }
@@ -165,31 +199,41 @@ export async function echUrl(url) {
 export async function echRequest(url) {
   try {
     const base = await getEchBase();
-    if (!base) return { url, headers: {} };
     const parsed = new URL(url);
+    if (!base) {
+      if (Platform.OS === 'android' && parsed.protocol === 'https:') {
+        throw new Error('ECH proxy unavailable; refusing direct HTTPS request');
+      }
+      return { url, headers: {} };
+    }
     return {
       url: base + parsed.pathname + parsed.search,
       headers: { 'X-Ech-Target': parsed.hostname },
     };
-  } catch {
+  } catch (error) {
+    if (Platform.OS === 'android') throw error;
     return { url, headers: {} };
   }
 }
 
-// echFetch sends a request for ANY host through the local proxy, so it gets the
-// proxy's DoH resolution (and ECH when the host supports it) instead of the
-// system resolver. Used for services like the translation API, which are
-// unreachable on networks with poisoned DNS. Falls back to a direct fetch when
-// the proxy isn't available.
+// echFetch sends a request for ANY HTTPS host through the local proxy, so it
+// gets DoH resolution and ECH only when the target qualifies. Android refuses
+// a direct HTTPS fallback when the proxy is unavailable.
 export async function echFetch(url, options = {}) {
   const base = await getEchBase();
   let u;
   try {
     u = new URL(url);
-  } catch {
+  } catch (error) {
+    if (Platform.OS === 'android') throw error;
     return fetch(url, options);
   }
-  if (!base) return fetch(url, options);
+  if (!base) {
+    if (Platform.OS === 'android' && u.protocol === 'https:') {
+      throw new Error('ECH proxy unavailable; refusing direct HTTPS request');
+    }
+    return fetch(url, options);
+  }
 
   return fetch(base + u.pathname + u.search, {
     ...options,
@@ -275,6 +319,8 @@ export function parseRemoteConfig(txt) {
       const v = part.slice(i + 1).trim();
       if (!v) continue;
       if (k === 'doh') out.doh = v;
+      else if (k === 'doh2') out.doh2 = v;
+      else if (k === 'doh3') out.doh3 = v;
       else if (k === 'ip' || k === 'ips') out.ip = v;
       else if (k === 'tr' || k === 'translate') out.tr = v;
     }
@@ -291,11 +337,21 @@ export async function fetchRemoteConfig(domain) {
   }
   const name = (domain ?? '').trim() || (await getConfigDomain());
   if (!name) throw new Error('No config domain set');
-  const doh = (await getDoh()) || DEFAULT_DOH;
-  const txt = await mod.fetchTxt(doh, name);
+  const candidates = await getDohCandidates();
+  let txt;
+  let lastError;
+  for (const doh of candidates) {
+    try {
+      txt = await mod.fetchTxt(doh, name);
+      break;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (txt == null) throw lastError || new Error('No DoH endpoint available');
   const cfg = parseRemoteConfig(txt);
-  if (!cfg.doh && !cfg.ip && !cfg.tr) {
-    throw new Error(`TXT found but no doh=/ip=/tr= keys:\n${txt}`);
+  if (!cfg.doh && !cfg.doh2 && !cfg.doh3 && !cfg.ip && !cfg.tr) {
+    throw new Error(`TXT found but no doh=/doh2=/doh3=/ip=/tr= keys:\n${txt}`);
   }
   return { ...cfg, raw: txt };
 }
@@ -307,15 +363,22 @@ const echKy = ky.create({
     beforeRequest: [
       async (request) => {
         const base = await getEchBase();
-        if (!base) return; // no proxy -> leave request untouched (direct)
         let u;
         try {
           u = new URL(request.url);
         } catch {
           return;
         }
-        if (!AO3_HOSTS.has(u.hostname)) return;
-        return new Request(base + u.pathname + u.search, request);
+        if (u.protocol !== 'https:') return;
+        if (!base) {
+          if (Platform.OS === 'android') {
+            throw new Error('ECH proxy unavailable; refusing direct HTTPS request');
+          }
+          return;
+        }
+        const rewritten = new Request(base + u.pathname + u.search, request);
+        rewritten.headers.set('X-Ech-Target', u.hostname);
+        return rewritten;
       },
     ],
   },

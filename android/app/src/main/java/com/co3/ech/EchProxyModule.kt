@@ -43,6 +43,7 @@ class EchProxyModule(private val reactContext: ReactApplicationContext) :
                     "",                     // echB64 (empty -> DoH / fallback + retry_configs)
                     doh,                    // DoH JSON endpoint (from JS; may be empty)
                     ipList,                 // preferred edge IPs (from JS; may be empty)
+                    java.io.File(reactContext.filesDir, "ech-public-config.json").absolutePath,
                     false,                  // insecure
                 )
                 promise.resolve(chosen)
