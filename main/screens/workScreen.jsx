@@ -431,6 +431,10 @@ const ChapterInfoScreen = ({ route }) => {
   const [jsonSettings, setJsonSettings] = useState();
 
   const showToast = (message, type = 'error') => {
+    setToastMessage(message);
+    setToastType(type);
+    setToastVisible(true);
+    setTimeout(hideToast, 3500);
     Toast.show({
       type: type,
       text1: type === 'success' ? t('general_success') : t('general_error'),
@@ -1283,6 +1287,24 @@ const ChapterInfoScreen = ({ route }) => {
           <Icon name="more-vert" size={24} color={currentTheme.iconColor} />
         </TouchableOpacity>
       </View>
+
+      {toastVisible && (
+        <View
+          pointerEvents="none"
+          style={[
+            styles.toast,
+            {
+              backgroundColor: toastType === 'success'
+                ? '#07845f'
+                : toastType === 'info'
+                  ? currentTheme.primaryColor
+                  : '#b42318',
+            },
+          ]}
+        >
+          <Text style={styles.toastText}>{toastMessage}</Text>
+        </View>
+      )}
 
       {renderHeaderMenu()}
       {renderDownloadHeaderMenu()}

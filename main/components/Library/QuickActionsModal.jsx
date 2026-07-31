@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  Alert,
   Modal,
   Pressable,
   SafeAreaView,
@@ -189,6 +190,10 @@ const QuickActionsModal = ({
 
     bookmark(work)
       .then(() => {
+        Alert.alert(
+          t('component_quick_actions_toast_bookmark_success_title'),
+          t('component_quick_actions_toast_bookmark_success_sub'),
+        );
         Toast.show({
           type: 'success',
           text1: t('component_quick_actions_toast_bookmark_success_title'),
@@ -196,6 +201,10 @@ const QuickActionsModal = ({
         });
       })
       .catch(error => {
+        Alert.alert(
+          t('component_quick_actions_toast_bookmark_failed_title'),
+          userErrorMessage(error, t),
+        );
         Toast.show({
           type: 'error',
           text1: t('component_quick_actions_toast_bookmark_failed_title'),
