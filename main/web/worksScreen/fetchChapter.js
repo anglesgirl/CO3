@@ -218,6 +218,52 @@ async function createCompleteHtml(chapterHtml, cssStyles, currentTheme, settings
   <div id="workskin">
     ${chapterHtml}
   </div>
+  <script>
+    (() => {
+      const AO3_HOST = 'archiveofourown.org';
+      const WORDPRESS_PROXY_HOSTS = new Set(['i2.wp.com', 'i3.wp.com']);
+
+      function isThirdPartyImage(url) {
+        try {
+          const parsed = new URL(url, document.baseURI);
+          return (parsed.protocol === 'http:' || parsed.protocol === 'https:')
+            && parsed.hostname !== AO3_HOST
+            && !parsed.hostname.endsWith('.' + AO3_HOST)
+            && !WORDPRESS_PROXY_HOSTS.has(parsed.hostname);
+        } catch (_) {
+          return false;
+        }
+      }
+
+      function proxyImage(image) {
+        const source = image.getAttribute('src');
+        if (!source || image.dataset.co3ImageProxyApplied || !isThirdPartyImage(source)) return;
+
+        const originalUrl = new URL(source, document.baseURI).href;
+        image.dataset.co3ImageProxyApplied = 'true';
+        image.dataset.co3OriginalSrc = originalUrl;
+        image.referrerPolicy = 'no-referrer';
+        image.addEventListener('error', () => {
+          if (image.dataset.co3ImageProxyFallback) return;
+          image.dataset.co3ImageProxyFallback = 'true';
+          image.src = image.dataset.co3OriginalSrc;
+        }, { once: true });
+        image.src = 'https://i2.wp.com/' + originalUrl.replace(/^https?:\/\//i, '');
+      }
+
+      function proxyImages(root = document) {
+        if (root.matches?.('img')) proxyImage(root);
+        root.querySelectorAll?.('img').forEach(proxyImage);
+      }
+
+      proxyImages();
+      new MutationObserver(records => {
+        records.forEach(record => record.addedNodes.forEach(node => {
+          if (node.nodeType === Node.ELEMENT_NODE) proxyImages(node);
+        }));
+      }).observe(document.documentElement, { childList: true, subtree: true });
+    })();
+  </script>
 </body>
 </html>`;
 }
