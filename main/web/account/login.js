@@ -23,17 +23,22 @@ export const handleLogin = async (username, password) => {
 
     if (sessionToken) {
       await setCredsToken(sessionToken);
+      const hadStoredPassword = await hasStoredPassword();
+      if (!hadStoredPassword) {
+        // Clear the old password/identity pair before writing the new
+        // canonical identity. Do not let this erase the identity we are about
+        // to store.
+        await deleteCredsPasswd();
+      }
+
       // Login accepts email, but all authenticated AO3 user routes require the
       // canonical username. Store that identity separately from the credential.
       const canonicalUsername = await resolveAuthenticatedUsername(sessionToken);
       const accountUsername = canonicalUsername || username;
-      if (canonicalUsername) await setUsernameOnly(canonicalUsername);
+      await setUsernameOnly(accountUsername);
 
-      if (await hasStoredPassword()) {
+      if (hadStoredPassword) {
         await setCredsToken(sessionToken);
-      } else {
-        await deleteCredsPasswd();
-        await setUsernameOnly(accountUsername);
       }
 
       await setLastLogin();
@@ -61,7 +66,11 @@ export function parseAuthenticatedUsername(html) {
   const greeting = String(html).match(/<[^>]+(?:id|class)=["'][^"']*\bgreeting\b[^"']*["'][^>]*>[\s\S]*?href=["']\/users\/([^\/'"?#]+)[\/'"]/i);
   if (greeting?.[1]) return decodeURIComponent(greeting[1]);
   const accountMenu = String(html).match(/<[^>]+(?:id|class)=["'][^"']*(?:user-menu|logged-in)[^"']*["'][^>]*>[\s\S]*?href=["']\/users\/([^\/'"?#]+)[\/'"]/i);
-  return accountMenu?.[1] ? decodeURIComponent(accountMenu[1]) : null;
+  if (accountMenu?.[1]) return decodeURIComponent(accountMenu[1]);
+  // AO3's current navigation commonly renders the user link in a dropdown,
+  // without either of the older greeting/menu wrapper classes.
+  const signedInNav = String(html).match(/<li\b[^>]*\bclass=["'][^"']*\bdropdown\b[^"']*["'][^>]*>[\s\S]*?href=["']\/users\/([^\/'"?#]+)[\/'"]/i);
+  return signedInNav?.[1] ? decodeURIComponent(signedInNav[1]) : null;
 }
 
 export async function resolveAuthenticatedUsername(sessionToken) {

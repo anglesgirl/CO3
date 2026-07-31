@@ -18,7 +18,9 @@ export async function fetchBookmarks(page, username, pseud, noWebview = false) {
     }
 
     console.log(`Fetching bookmarks from: ${url}`);
-    const response = await getUrl(url, noWebview);
+    const response = await getUrl(url, noWebview, {
+      headers: await getSessionHeaders(),
+    });
     const doc = new DomParser().parseFromString(response, "text/html");
 
     const mainDiv = doc.getElementById("main");

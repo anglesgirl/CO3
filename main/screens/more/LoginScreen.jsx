@@ -149,17 +149,20 @@ const LoginScreen = ({ route }) => {
         // AO3 accepts an email for login, but user/bookmark URLs use the
         // canonical AO3 username. Keep the login identifier for credentials,
         // and store the resolved username separately for account routes.
+        if (rememberPassword) {
+          await setCredsPasswd(username, password);
+        } else {
+          // This also clears the legacy username_only key. Re-create the
+          // identity after clearing credentials, otherwise the session modal
+          // and bookmark routes see an empty username.
+          await deleteCredsPasswd();
+        }
+
         const canonicalUsername = await resolveAuthenticatedUsername(sessionToken);
         const accountUsername = canonicalUsername || username;
         // Always persist this separately: remembered credentials retain the
         // email/login identifier, while bookmarks use this canonical value.
         await setUsernameOnly(accountUsername);
-
-        if (rememberPassword) {
-          await setCredsPasswd(username, password);
-        } else {
-          await deleteCredsPasswd();
-        }
 
         setIsLoggedIn(true);
         await setLastLogin();

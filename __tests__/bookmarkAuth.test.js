@@ -27,10 +27,11 @@ describe('ECH authenticated actions', () => {
     });
   });
 
-  it('adds the session cookie to bookmark GET and POST requests', () => {
+  it('adds the session cookie to bookmark listing, GET, and POST requests', () => {
     const source = read('main/web/other/bookmarks.js');
     expect(source).toContain('const sessionHeaders = await getSessionHeaders()');
     expect(source.match(/\.\.\.sessionHeaders/g)).toHaveLength(2);
+    expect(source).toContain('headers: await getSessionHeaders()');
   });
 
   it('adds the session cookie to mark-for-later GET and POST requests', () => {

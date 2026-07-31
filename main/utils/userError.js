@@ -6,6 +6,5 @@ export function userErrorMessage(error, translate) {
   const key = NETWORK_ERROR_PATTERN.test(message)
     ? 'general_network_error'
     : 'general_operation_failed';
-
   return translate(key);
 }

@@ -59,7 +59,7 @@ const cloudflareErrorCodes = [
   503, //Used for CF challenges
 ]
 
-export default async function getUrl(url, noWebview = false) {
+export default async function getUrl(url, noWebview = false, options = {}) {
   const { hostname } = new URL(url);
 
   if (noWebview) {
@@ -125,7 +125,7 @@ export default async function getUrl(url, noWebview = false) {
   }
 
   try {
-    const html = await ky.get(url).text();
+    const html = await ky.get(url, options).text();
 
     if (isCFChallenge(html)) {
       console.log(`isCfChalenged fiered with ${html}`);

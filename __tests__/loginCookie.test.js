@@ -27,6 +27,14 @@ describe('validateCookie', () => {
     expect(parseAuthenticatedUsername('<a href="/users/someone_else">Other user</a>')).toBeNull();
   });
 
+  it('recognizes the current user from AO3 navigation when greeting markup changes', () => {
+    expect(parseAuthenticatedUsername(`
+      <nav class="primary navigation actions" role="navigation">
+        <li class="dropdown"><a href="/users/Actual_User">Hi, Actual_User!</a></li>
+      </nav>
+    `)).toBe('Actual_User');
+  });
+
   it('validates the session through the ECH URL with a timeout signal', async () => {
     await expect(validateCookie('session-token')).resolves.toBe(true);
 
