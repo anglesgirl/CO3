@@ -182,34 +182,18 @@ const QuickActionsModal = ({
 
   const handleBookmark = () => {
     onClose();
-    Toast.show({
-      type: 'info',
-      text1: t('component_quick_actions_button_bookmark'),
-      text2: t('general_loading'),
-    });
-
     bookmark(work)
       .then(() => {
         Alert.alert(
           t('component_quick_actions_toast_bookmark_success_title'),
           t('component_quick_actions_toast_bookmark_success_sub'),
         );
-        Toast.show({
-          type: 'success',
-          text1: t('component_quick_actions_toast_bookmark_success_title'),
-          text2: t('component_quick_actions_toast_bookmark_success_sub'),
-        });
       })
       .catch(error => {
         Alert.alert(
           t('component_quick_actions_toast_bookmark_failed_title'),
           userErrorMessage(error, t),
         );
-        Toast.show({
-          type: 'error',
-          text1: t('component_quick_actions_toast_bookmark_failed_title'),
-          text2: userErrorMessage(error, t),
-        });
       });
   };
 

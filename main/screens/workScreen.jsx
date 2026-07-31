@@ -6,6 +6,7 @@ import React, {
   useState,
 } from 'react';
 import {
+  Alert,
   ActivityIndicator,
   DeviceEventEmitter,
   FlatList,
@@ -688,12 +689,14 @@ const ChapterInfoScreen = ({ route }) => {
 
   const handleBookmark = async () => {
     setMenuVisible(false);
-    showToast(t('screen_work_bookmark'), 'info');
     bookmark(work).then(() => {
-      showToast(t('screen_work_toast_added_to_bookmarks'), 'success');
-    }) .catch(error => {
-      showToast(userErrorMessage(error, t), 'error');
-    })
+      Alert.alert(
+        t('general_success'),
+        t('screen_work_toast_added_to_bookmarks'),
+      );
+    }).catch(error => {
+      Alert.alert(t('general_error'), userErrorMessage(error, t));
+    });
   };
 
   const handleMarkForLater = async () => {
