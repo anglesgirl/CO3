@@ -43,19 +43,58 @@ function findBookmarkId(html, workId) {
   return item?.getAttribute('id')?.match(/^bookmark_(\d+)$/i)?.[1] || null;
 }
 
-function parseDeleteForm(html) {
+// Extracts the CSRF token needed to delete a bookmark, directly from the
+// bookmark list page (the same page the browser uses as its referrer).
+// AO3 renders each bookmark with either a delete <form> containing
+// _method=delete, or a link with data-method="delete" that relies on the
+// page-level meta csrf-token. Both paths are covered.
+function findDeleteTokenInList(html, bookmarkId) {
   const doc = new DomParser().parseFromString(html, 'text/html');
-  const form = Array.from(doc.getElementsByTagName('form')).find(candidate =>
-    /bookmarks\/\d+/i.test(candidate.getAttribute('action') || '') &&
-    Array.from(candidate.getElementsByTagName('input')).some(input =>
-      input.getAttribute('name') === '_method' && input.getAttribute('value') === 'delete',
-    ),
+
+  // Path 1: a <form> whose action targets this bookmark and contains _method=delete
+  const forms = Array.from(doc.getElementsByTagName('form'));
+  for (const form of forms) {
+    const action = form.getAttribute('action') || '';
+    if (!new RegExp(`bookmarks/${bookmarkId}(?:$|[/?#])`, 'i').test(action)) continue;
+    const inputs = Array.from(form.getElementsByTagName('input'));
+    const hasDeleteMethod = inputs.some(i =>
+      i.getAttribute('name') === '_method' && i.getAttribute('value') === 'delete',
+    );
+    if (!hasDeleteMethod) continue;
+    const tokenInput = inputs.find(i => i.getAttribute('name') === 'authenticity_token');
+    if (tokenInput) return tokenInput.getAttribute('value');
+  }
+
+  // Path 2: a link with data-method="delete" — Rails UJS uses the meta csrf-token
+  const links = Array.from(doc.getElementsByTagName('a'));
+  const hasDeleteLink = links.some(a => {
+    const href = a.getAttribute('href') || '';
+    return new RegExp(`bookmarks/${bookmarkId}(?:$|[/?#])`, 'i').test(href)
+      && a.getAttribute('data-method') === 'delete';
+  });
+  if (hasDeleteLink) {
+    const meta = Array.from(doc.getElementsByTagName('meta')).find(
+      m => m.getAttribute('name') === 'csrf-token',
+    );
+    const token = meta?.getAttribute('content');
+    if (token) return token;
+  }
+
+  // Regex fallback for both paths (when the DOM parser misses attributes)
+  const formRegex = new RegExp(
+    `<form[^>]*action="[^"]*bookmarks/${bookmarkId}[^"]*"[^>]*>([\\s\\S]*?)</form>`, 'i',
   );
-  if (!form) return null;
-  const token = Array.from(form.getElementsByTagName('input')).find(input =>
-    input.getAttribute('name') === 'authenticity_token',
-  )?.getAttribute('value');
-  return { action: form.getAttribute('action'), token };
+  const formMatch = html.match(formRegex);
+  if (formMatch && /name=["']_method["']\s+value=["']delete["']/i.test(formMatch[1])) {
+    const tokenMatch = formMatch[1].match(/name=["']authenticity_token["']\s+value=["']([^"']+)["']/i);
+    if (tokenMatch) return tokenMatch[1];
+  }
+  if (new RegExp(`<a[^>]*href="[^"]*bookmarks/${bookmarkId}[^"]*"[^>]*data-method=["']delete["']`, 'i').test(html)) {
+    const metaMatch = html.match(/<meta\s+name=["']csrf-token["']\s+content=["']([^"']+)["']/i);
+    if (metaMatch) return metaMatch[1];
+  }
+
+  return null;
 }
 
 async function verifyBookmarkRemoved(workId) {
@@ -82,16 +121,15 @@ export async function removeBookmark(work) {
     if (!bookmarkId) {
       throw new Error(`Could not find bookmark ${workId} in the loaded bookmark list`);
     }
-    const editUrl = `https://archiveofourown.org/bookmarks/${bookmarkId}/edit`;
-    const editHtml = await getUrl(editUrl, false, { headers: sessionHeaders });
-    const form = parseDeleteForm(editHtml);
-    if (!form?.action || !form.token) {
-      throw new Error(`Could not find the delete form for bookmark ${bookmarkId}`);
+    const token = findDeleteTokenInList(listHtml, bookmarkId);
+    if (!token) {
+      await debugLog('bookmark', `Delete token not found in list HTML for bookmark ${bookmarkId}; HTML length=${listHtml.length}`);
+      throw new Error(`Could not find the delete token for bookmark ${bookmarkId}`);
     }
-    const deleteUrl = new URL(form.action, 'https://archiveofourown.org').toString();
+    const deleteUrl = `https://archiveofourown.org/bookmarks/${bookmarkId}`;
     // Matches AO3's browser delete request: Rails method override and CSRF
     // token encoded as application/x-www-form-urlencoded, not multipart.
-    const body = `_method=delete&authenticity_token=${encodeURIComponent(form.token)}`;
+    const body = `_method=delete&authenticity_token=${encodeURIComponent(token)}`;
     const response = await fetch(await echUrl(deleteUrl), {
       method: 'POST',
       body,
