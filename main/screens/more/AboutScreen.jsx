@@ -75,9 +75,19 @@ export default function AboutScreen({ route }) {
           <Text style={[{ paddingTop: 5, color: currentTheme.textColor }]}>
             {t('screen_about_text_2')}
           </Text>
+          <View style={[{ paddingTop: 16, paddingBottom: 8 }]}>
+            <Text style={[{ fontWeight: '700', color: currentTheme.textColor }]}>
+              本版本修改：雅💓涵
+            </Text>
+          </View>
+          <LinkButton
+            url="https://anglesya.win/"
+            label="作者博客：anglesya.win"
+            theme={currentTheme}
+          />
           <LinkButton
             url="https://github.com/tbvns/CO3"
-            label={t('screen_about_source')}
+            label={t('screen_about_source') + '（原仓库）'}
             theme={currentTheme}
           />
         </View>

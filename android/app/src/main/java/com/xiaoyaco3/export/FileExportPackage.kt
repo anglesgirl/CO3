@@ -1,4 +1,4 @@
-package com.ao3.xyz.export
+package com.xiaoyaco3.export
 
 import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.NativeModule

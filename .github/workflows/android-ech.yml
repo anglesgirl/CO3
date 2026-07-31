@@ -110,10 +110,10 @@ jobs:
           test -f "$APK_DIR/app-arm64-v8a-release.apk"
           BUILD_UTC=$(date -u +'%Y%m%d-%H%M%SZ')
           SHA_SHORT="${GITHUB_SHA::7}"
-          APK_NAME="CO3-ECH-arm64-v8a-${BUILD_UTC}-${SHA_SHORT}.apk"
+          APK_NAME="xiaoyaco3-ECH-arm64-v8a-${BUILD_UTC}-${SHA_SHORT}.apk"
           mv "$APK_DIR/app-arm64-v8a-release.apk" "$APK_NAME"
           echo "apk_name=$APK_NAME" >> "$GITHUB_OUTPUT"
-          echo "artifact_name=CO3-ECH-${BUILD_UTC}-${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=xiaoyaco3-ECH-${BUILD_UTC}-${SHA_SHORT}" >> "$GITHUB_OUTPUT"
           echo "Built $APK_NAME (UTC build time: $BUILD_UTC)"
 
       - name: Verify arm64-v8a artifact

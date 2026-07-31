@@ -1,4 +1,4 @@
-package com.ao3.xyz
+package com.xiaoyaco3
 
 import android.app.Application
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -10,8 +10,8 @@ import com.facebook.react.ReactNativeHost
 import com.facebook.react.ReactPackage
 import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
 import com.facebook.react.defaults.DefaultReactNativeHost
-import com.ao3.xyz.ech.EchProxyPackage
-import com.ao3.xyz.export.FileExportPackage
+import com.xiaoyaco3.ech.EchProxyPackage
+import com.xiaoyaco3.export.FileExportPackage
 import com.swmansion.rnscreens.RNScreensPackage;
 
 class MainApplication : Application(), ReactApplication {

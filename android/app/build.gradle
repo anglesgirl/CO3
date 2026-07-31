@@ -29,9 +29,9 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace "com.ao3.xyz"
+    namespace "com.xiaoyaco3"
     defaultConfig {
-        applicationId "com.ao3.xyz"
+        applicationId "com.xiaoyaco3"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 20

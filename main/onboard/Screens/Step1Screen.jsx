@@ -51,6 +51,39 @@ export default function Step1({ currentTheme, setScreen }) {
         <Text style={[styles.body, { color: currentTheme.secondaryTextColor }]}>
           {t('onboard_step1_ligne1') + '\n' + t('onboard_step1_ligne2')}
         </Text>
+
+        <View
+          style={[
+            styles.disclaimerBox,
+            {
+              borderColor: currentTheme.borderColor,
+              backgroundColor: currentTheme.secondaryBackgroundColor || currentTheme.backgroundColor,
+            },
+          ]}
+        >
+          <Text style={[styles.disclaimerTitle, { color: currentTheme.textColor }]}>
+            ⚠ 免责声明
+          </Text>
+          <Text style={[styles.disclaimerBody, { color: currentTheme.secondaryTextColor }]}>
+            本 App 与 AO3（Archive of Our Own）官方没有任何关系。
+          </Text>
+          <Text style={[styles.disclaimerBody, { color: currentTheme.secondaryTextColor }]}>
+            本版本由作者{' '}
+            <Text style={{ color: currentTheme.primaryColor, textDecorationLine: 'underline' }}>
+              雅💓涵
+            </Text>{' '}
+            仅对 CO3 原仓库（GitHub）做出部分修改。
+          </Text>
+          <Text style={[styles.disclaimerBody, { color: currentTheme.secondaryTextColor }]}>
+            作者博客：{' '}
+            <Text style={{ color: currentTheme.primaryColor, textDecorationLine: 'underline' }}>
+              https://anglesya.win/
+            </Text>
+          </Text>
+          <Text style={[styles.disclaimerBody, { color: currentTheme.secondaryTextColor }]}>
+            对本作品或对作者有任何不满意的，可以随时卸载。
+          </Text>
+        </View>
       </ScrollView>
 
       <View
@@ -120,6 +153,25 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 24,
     textAlign: 'center',
+  },
+  disclaimerBox: {
+    marginTop: 32,
+    padding: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    width: '100%',
+  },
+  disclaimerTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  disclaimerBody: {
+    fontSize: 14,
+    lineHeight: 22,
+    marginTop: 6,
+    textAlign: 'left',
   },
   bottomSection: {
     paddingHorizontal: 32,

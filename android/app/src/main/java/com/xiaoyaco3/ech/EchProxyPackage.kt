@@ -1,4 +1,4 @@
-package com.ao3.xyz.ech
+package com.xiaoyaco3.ech
 
 import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.NativeModule

@@ -1,4 +1,4 @@
-package com.ao3.xyz
+package com.xiaoyaco3
 
 import android.os.Bundle
 import com.facebook.react.ReactActivity
