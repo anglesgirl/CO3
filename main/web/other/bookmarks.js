@@ -52,7 +52,21 @@ function parseDeleteForm(html) {
   const token = Array.from(form.getElementsByTagName('input')).find(input =>
     input.getAttribute('name') === 'authenticity_token',
   )?.getAttribute('value');
-  return { action: form.getAttribute('action'), token };
+  const commit = [
+    ...Array.from(form.getElementsByTagName('input')),
+    ...Array.from(form.getElementsByTagName('button')),
+  ].find(element => element.getAttribute('name') === 'commit')?.getAttribute('value') || 'Delete';
+  return { action: form.getAttribute('action'), token, commit };
+}
+
+async function verifyBookmarkRemoved(workId) {
+  const username = await getUsername();
+  const url = `https://archiveofourown.org/users/${encodeURIComponent(username)}/bookmarks?page=1`;
+  const html = await getUrl(url, false, { headers: await getSessionHeaders() });
+  if (isLoginPage(html)) throw new Error('AO3 session was rejected while verifying bookmark removal');
+  const found = new RegExp(`/works/${workId}(?:["'#?]|/)`, 'i').test(html);
+  await debugLog('bookmark', `Removal verification page=1 work=${workId}; found=${found}`);
+  return !found;
 }
 
 export async function removeBookmark(work) {
@@ -79,15 +93,22 @@ export async function removeBookmark(work) {
     const body = new FormData();
     body.append('authenticity_token', form.token);
     body.append('_method', 'delete');
+    body.append('commit', form.commit);
     const response = await fetch(await echUrl(deleteUrl), {
       method: 'POST',
       body,
       credentials: 'include',
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', ...sessionHeaders },
     });
-    await debugLog('bookmark', `Remove work=${workId}; bookmark=${bookmarkId}; HTTP ${response.status}; action=${deleteUrl}`);
+    const responseHtml = await response.text();
+    const error = ao3FormError(responseHtml);
+    await debugLog('bookmark', `Remove work=${workId}; bookmark=${bookmarkId}; HTTP ${response.status}; action=${deleteUrl}; formError=${error || '(none)'}`);
     if (!response.ok && response.status !== 302) {
       throw new Error(`Bookmark removal failed with HTTP ${response.status}`);
+    }
+    if (error) throw new Error(error);
+    if (!await verifyBookmarkRemoved(workId)) {
+      throw new Error('AO3 accepted the removal request, but the work is still in your bookmarks');
     }
     return true;
   } catch (error) {
