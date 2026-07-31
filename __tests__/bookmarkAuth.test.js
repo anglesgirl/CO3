@@ -53,7 +53,9 @@ describe('ECH authenticated actions', () => {
     const source = read('main/web/other/bookmarks.js');
     expect(source).toContain('export async function removeBookmark(work)');
     expect(source).toContain("body.append('_method', 'delete')");
-    expect(source).toContain('findBookmarkDeleteForm');
+    expect(source).toContain('findBookmarkId');
+    expect(source).toContain('/edit`');
+    expect(source).toContain('parseDeleteForm');
   });
 
   it('does not turn an eventual bookmark-list lookup into an add failure', () => {

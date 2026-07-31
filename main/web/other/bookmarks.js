@@ -34,16 +34,19 @@ async function verifyBookmarkInList(workId) {
   return found;
 }
 
-function findBookmarkDeleteForm(html, workId) {
+function findBookmarkId(html, workId) {
   const doc = new DomParser().parseFromString(html, 'text/html');
   const items = Array.from(doc.getElementsByTagName('li'));
   const item = items.find(li => Array.from(li.getElementsByTagName('a')).some(a =>
     new RegExp(`/works/${workId}(?:["'#?]|/)`, 'i').test(a.getAttribute('href') || ''),
   ));
-  if (!item) return null;
-  const form = Array.from(item.getElementsByTagName('form')).find(candidate =>
-    /bookmarks\/\d+/i.test(candidate.getAttribute('action') || '')
-    || /delete/i.test(candidate.getAttribute('class') || ''),
+  return item?.getAttribute('id')?.match(/^bookmark_(\d+)$/i)?.[1] || null;
+}
+
+function parseDeleteForm(html) {
+  const doc = new DomParser().parseFromString(html, 'text/html');
+  const form = Array.from(doc.getElementsByTagName('form')).find(candidate =>
+    /bookmarks\/\d+/i.test(candidate.getAttribute('action') || ''),
   );
   if (!form) return null;
   const token = Array.from(form.getElementsByTagName('input')).find(input =>
@@ -62,9 +65,15 @@ export async function removeBookmark(work) {
     const listUrl = `https://archiveofourown.org/users/${encodeURIComponent(username)}/bookmarks?page=1`;
     const sessionHeaders = await getSessionHeaders();
     const listHtml = await getUrl(listUrl, false, { headers: sessionHeaders });
-    const form = findBookmarkDeleteForm(listHtml, workId);
+    const bookmarkId = findBookmarkId(listHtml, workId);
+    if (!bookmarkId) {
+      throw new Error(`Could not find bookmark ${workId} in the loaded bookmark list`);
+    }
+    const editUrl = `https://archiveofourown.org/bookmarks/${bookmarkId}/edit`;
+    const editHtml = await getUrl(editUrl, false, { headers: sessionHeaders });
+    const form = parseDeleteForm(editHtml);
     if (!form?.action || !form.token) {
-      throw new Error(`Could not find the delete form for bookmark ${workId}`);
+      throw new Error(`Could not find the delete form for bookmark ${bookmarkId}`);
     }
     const deleteUrl = new URL(form.action, 'https://archiveofourown.org').toString();
     const body = new FormData();
@@ -76,7 +85,7 @@ export async function removeBookmark(work) {
       credentials: 'include',
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', ...sessionHeaders },
     });
-    await debugLog('bookmark', `Remove work=${workId}; HTTP ${response.status}; action=${deleteUrl}`);
+    await debugLog('bookmark', `Remove work=${workId}; bookmark=${bookmarkId}; HTTP ${response.status}; action=${deleteUrl}`);
     if (!response.ok && response.status !== 302) {
       throw new Error(`Bookmark removal failed with HTTP ${response.status}`);
     }
