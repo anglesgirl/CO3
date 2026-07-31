@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const ENABLED_KEY = 'debug_logging_enabled';
 const LOG_KEY = 'debug_logs';
 const MAX_LOGS = 200;
+let consoleCaptureInstalled = false;
 
 function safeText(value) {
   return String(value ?? '')
@@ -45,4 +46,21 @@ export async function getDebugLogs() {
 
 export async function clearDebugLogs() {
   await AsyncStorage.removeItem(LOG_KEY);
+}
+
+export function installDebugConsoleCapture() {
+  if (consoleCaptureInstalled || typeof console === 'undefined') return;
+  consoleCaptureInstalled = true;
+  ['log', 'warn', 'error'].forEach(level => {
+    const original = console[level]?.bind(console);
+    if (!original) return;
+    console[level] = (...args) => {
+      original(...args);
+      debugLog(`console.${level}`, args.map(value => {
+        if (value instanceof Error) return value.stack || value.message;
+        if (typeof value === 'string') return value;
+        try { return JSON.stringify(value); } catch { return String(value); }
+      }).join(' '));
+    };
+  });
 }

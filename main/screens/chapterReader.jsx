@@ -94,6 +94,15 @@ const ChapterReader = ({
   const [scrollProgress, setScrollProgress] = useState(0);
   const [pullDistance, setPullDistance] = useState(0);
   const [webViewReady, setWebViewReady] = useState(false);
+
+  useEffect(() => {
+    const html = htmlContent || '';
+    const imageCount = (html.match(/<img\b/gi) || []).length;
+    debugLog(
+      'reader',
+      `Opening chapter=${chapterID || workId}; images=${imageCount}; imageProxy=${html.includes('WORDPRESS_PROXY_HOSTS')}`,
+    );
+  }, [chapterID, htmlContent, workId]);
   const [isIncognitoMode, setIsIncognitoMode] = useState(false);
   const [commentsVisible, setCommentsVisible] = useState(false);
   const [initialProgressLoaded, setInitialProgressLoaded] = useState(false);
@@ -514,6 +523,7 @@ const ChapterReader = ({
 
     // Indicate that initial JavaScript has been injected and WebView is ready for commands
     webViewLog('WebView: Injected JavaScript loaded and ready.');
+    setTimeout(() => webViewLog('WebView: document images=' + document.images.length), 0);
     true;
   `;
 

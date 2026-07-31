@@ -264,7 +264,8 @@ async function createCompleteHtml(chapterHtml, cssStyles, currentTheme, settings
         root.querySelectorAll?.('img').forEach(proxyImage);
       }
 
-      proxyImages();
+      log('initialized; images=' + document.images.length);
+      setTimeout(proxyImages, 0);
       new MutationObserver(records => {
         records.forEach(record => record.addedNodes.forEach(node => {
           if (node.nodeType === Node.ELEMENT_NODE) proxyImages(node);

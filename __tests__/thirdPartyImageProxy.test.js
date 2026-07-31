@@ -12,6 +12,7 @@ describe('third-party chapter image proxy', () => {
     expect(source).toContain("const proxyUrl = 'https://i2.wp.com/' + originalUrl.replace");
     expect(source).toContain("/^https?:\\/\\//i, ''");
     expect(source).toContain("message: '[image proxy] ' + message");
+    expect(source).toContain("log('initialized; images=' + document.images.length)");
   });
 
   it('does not proxy AO3 or an existing WordPress proxy URL', () => {

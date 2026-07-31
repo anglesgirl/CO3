@@ -84,12 +84,23 @@ import DebugScreen from './screens/more/DebugScreen';
 import CategoryScreen from './screens/more/CategoryScreen';
 import BookmarksScreen from './screens/more/BookmarksScreen';
 import AboutScreen from './screens/more/AboutScreen';
+import { debugLog, installDebugConsoleCapture } from './utils/debugLog';
 
 export const AppContext = createContext();
 const Stack = createNativeStackNavigator();
 export const navigationRef = createNavigationContainerRef();
 
 const AppWrapper = () => {
+  useEffect(() => {
+    installDebugConsoleCapture();
+    const rejection = global?.ErrorUtils?.getGlobalHandler?.();
+    if (global?.ErrorUtils?.setGlobalHandler) {
+      global.ErrorUtils.setGlobalHandler((error, isFatal) => {
+        debugLog('uncaught', `${isFatal ? 'fatal' : 'nonfatal'}: ${error?.stack || error?.message || String(error)}`);
+        rejection?.(error, isFatal);
+      });
+    }
+  }, []);
   const wrapperStyle = Platform.OS === 'web'
     ? { flex: 1, width: '100%', height: '100%' }
     : { flex: 1 };

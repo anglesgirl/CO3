@@ -22,6 +22,17 @@ describe('debug logging', () => {
   it('records reader WebView image proxy events', () => {
     const source = read('main/screens/chapterReader.jsx');
     expect(source).toContain("debugLog('reader', data.message)");
+    expect(source).toContain('Opening chapter=${chapterID || workId}; images=${imageCount}');
+    expect(source).toContain("WebView: document images='");
     expect(read('main/web/worksScreen/fetchChapter.js')).toContain("message: '[image proxy] ' + message");
+  });
+
+  it('captures console output and uncaught errors while debugging is enabled', () => {
+    const source = read('main/utils/debugLog.js');
+    const app = read('main/app.jsx');
+    expect(source).toContain("['log', 'warn', 'error'].forEach");
+    expect(source).toContain('console[level] = (...args)');
+    expect(app).toContain('installDebugConsoleCapture()');
+    expect(app).toContain("debugLog('uncaught'");
   });
 });
