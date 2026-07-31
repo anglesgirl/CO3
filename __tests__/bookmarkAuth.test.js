@@ -56,12 +56,13 @@ describe('ECH authenticated actions', () => {
   it('supports removing a bookmark from its AO3 list form', () => {
     const source = read('main/web/other/bookmarks.js');
     expect(source).toContain('export async function removeBookmark(work)');
-    expect(source).toContain("const body = `_method=delete&authenticity_token=${encodeURIComponent(form.token)}`;");
+    expect(source).toContain("const body = `_method=delete&authenticity_token=${encodeURIComponent(token)}`;");
     expect(source).toContain("'Content-Type': 'application/x-www-form-urlencoded'");
     expect(source).toContain("'Referer': listUrl");
     expect(source).toContain('findBookmarkId');
-    expect(source).toContain('/edit`');
-    expect(source).toContain('parseDeleteForm');
+    expect(source).toContain('findDeleteTokenInList');
+    expect(source).not.toContain('/edit`');
+    expect(source).not.toContain('parseDeleteForm');
     expect(source).toContain('verifyBookmarkRemoved(workId)');
     expect(source).toContain('Removal verification failed after successful delete');
     expect(source).not.toContain('AO3 accepted the removal request, but the work is still in your bookmarks');
