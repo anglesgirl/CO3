@@ -15,6 +15,7 @@ describe('bookmark quick actions', () => {
     const modal = read('main/components/Library/QuickActionsModal.jsx');
     expect(modal).toContain('bookmark, removeBookmark');
     expect(modal).toContain('const operation = isBookmark ? removeBookmark(work) : bookmark(work);');
-    expect(modal).toContain('if (isBookmark) onUpdate?.();');
+    expect(modal).toContain('onUpdate?.();');
+    expect(modal).not.toContain('if (isBookmark) onUpdate?.();');
   });
 });
