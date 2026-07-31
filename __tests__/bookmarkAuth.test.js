@@ -52,8 +52,9 @@ describe('ECH authenticated actions', () => {
   it('supports removing a bookmark from its AO3 list form', () => {
     const source = read('main/web/other/bookmarks.js');
     expect(source).toContain('export async function removeBookmark(work)');
-    expect(source).toContain("body.append('_method', 'delete')");
-    expect(source).toContain("body.append('commit', form.commit)");
+    expect(source).toContain("const body = `_method=delete&authenticity_token=${encodeURIComponent(form.token)}`;");
+    expect(source).toContain("'Content-Type': 'application/x-www-form-urlencoded'");
+    expect(source).toContain("'Referer': listUrl");
     expect(source).toContain('findBookmarkId');
     expect(source).toContain('/edit`');
     expect(source).toContain('parseDeleteForm');

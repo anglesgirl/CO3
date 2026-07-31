@@ -52,11 +52,7 @@ function parseDeleteForm(html) {
   const token = Array.from(form.getElementsByTagName('input')).find(input =>
     input.getAttribute('name') === 'authenticity_token',
   )?.getAttribute('value');
-  const commit = [
-    ...Array.from(form.getElementsByTagName('input')),
-    ...Array.from(form.getElementsByTagName('button')),
-  ].find(element => element.getAttribute('name') === 'commit')?.getAttribute('value') || 'Delete';
-  return { action: form.getAttribute('action'), token, commit };
+  return { action: form.getAttribute('action'), token };
 }
 
 async function verifyBookmarkRemoved(workId) {
@@ -90,15 +86,20 @@ export async function removeBookmark(work) {
       throw new Error(`Could not find the delete form for bookmark ${bookmarkId}`);
     }
     const deleteUrl = new URL(form.action, 'https://archiveofourown.org').toString();
-    const body = new FormData();
-    body.append('authenticity_token', form.token);
-    body.append('_method', 'delete');
-    body.append('commit', form.commit);
+    // Matches AO3's browser delete request: Rails method override and CSRF
+    // token encoded as application/x-www-form-urlencoded, not multipart.
+    const body = `_method=delete&authenticity_token=${encodeURIComponent(form.token)}`;
     const response = await fetch(await echUrl(deleteUrl), {
       method: 'POST',
       body,
       credentials: 'include',
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', ...sessionHeaders },
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Referer': listUrl,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        ...sessionHeaders,
+      },
     });
     const responseHtml = await response.text();
     const error = ao3FormError(responseHtml);
