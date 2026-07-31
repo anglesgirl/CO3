@@ -107,6 +107,7 @@ function getElementText(element) {
 
 async function createCompleteHtml(chapterHtml, cssStyles, currentTheme, settingsDAO) {
   const themeCSS = currentTheme ? generateThemeCSS(currentTheme) : '';
+  const proxiedChapterHtml = rewriteThirdPartyImageUrls(chapterHtml);
 
   const settings = await settingsDAO.getSettings();
 
@@ -216,7 +217,7 @@ async function createCompleteHtml(chapterHtml, cssStyles, currentTheme, settings
 </head>
 <body>
   <div id="workskin">
-    ${chapterHtml}
+    ${proxiedChapterHtml}
   </div>
   <script>
     (() => {
@@ -275,6 +276,25 @@ async function createCompleteHtml(chapterHtml, cssStyles, currentTheme, settings
   </script>
 </body>
 </html>`;
+}
+
+function rewriteThirdPartyImageUrls(chapterHtml) {
+  const ao3Host = 'archiveofourown.org';
+  const proxyHosts = new Set(['i2.wp.com', 'i3.wp.com']);
+  return String(chapterHtml || '').replace(
+    /(<img\b[^>]*\bsrc\s*=\s*["'])([^"']+)(["'])/gi,
+    (match, prefix, source, suffix) => {
+      try {
+        const url = new URL(source, 'https://archiveofourown.org');
+        const isHttp = url.protocol === 'http:' || url.protocol === 'https:';
+        const isAo3 = url.hostname === ao3Host || url.hostname.endsWith(`.${ao3Host}`);
+        if (!isHttp || isAo3 || proxyHosts.has(url.hostname)) return match;
+        return `${prefix}https://i2.wp.com/${url.href.replace(/^https?:\/\//i, '')}${suffix}`;
+      } catch (_) {
+        return match;
+      }
+    },
+  );
 }
 
 function generateThemeCSS(theme) {

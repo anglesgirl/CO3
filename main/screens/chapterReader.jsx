@@ -98,9 +98,10 @@ const ChapterReader = ({
   useEffect(() => {
     const html = htmlContent || '';
     const imageCount = (html.match(/<img\b/gi) || []).length;
+    const proxiedImageCount = (html.match(/https:\/\/i2\.wp\.com\//gi) || []).length;
     debugLog(
       'reader',
-      `Opening chapter=${chapterID || workId}; images=${imageCount}; imageProxy=${html.includes('WORDPRESS_PROXY_HOSTS')}`,
+      `Opening chapter=${chapterID || workId}; images=${imageCount}; proxiedImages=${proxiedImageCount}`,
     );
   }, [chapterID, htmlContent, workId]);
   const [isIncognitoMode, setIsIncognitoMode] = useState(false);
@@ -709,6 +710,10 @@ const ChapterReader = ({
           style={styles.webView}
           injectedJavaScript={injectedJavaScript}
           onMessage={handleMessage}
+          onLoadStart={(event) => debugLog('reader', `WebView load start: ${event.nativeEvent.url || '(inline HTML)'}`)}
+          onLoadEnd={(event) => debugLog('reader', `WebView load end: ${event.nativeEvent.url || '(inline HTML)'}`)}
+          onError={(event) => debugLog('reader', `WebView error: ${event.nativeEvent.code} ${event.nativeEvent.description}`)}
+          onHttpError={(event) => debugLog('reader', `WebView HTTP error: ${event.nativeEvent.statusCode} ${event.nativeEvent.description}`)}
           showsVerticalScrollIndicator={false}
           bounces={false}
           overScrollMode="never"

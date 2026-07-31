@@ -22,8 +22,10 @@ describe('debug logging', () => {
   it('records reader WebView image proxy events', () => {
     const source = read('main/screens/chapterReader.jsx');
     expect(source).toContain("debugLog('reader', data.message)");
-    expect(source).toContain('Opening chapter=${chapterID || workId}; images=${imageCount}');
+    expect(source).toContain('Opening chapter=${chapterID || workId}; images=${imageCount}; proxiedImages=${proxiedImageCount}');
     expect(source).toContain("WebView: document images='");
+    expect(source).toContain('WebView load start:');
+    expect(source).toContain('WebView HTTP error:');
     expect(read('main/web/worksScreen/fetchChapter.js')).toContain("message: '[image proxy] ' + message");
   });
 

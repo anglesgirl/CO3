@@ -18,6 +18,15 @@ function isBookmarkShowPage(html) {
   return /<title>\s*Show Bookmark\s*\|\s*Archive of Our Own/i.test(String(html));
 }
 
+function bookmarkShowPageMatchesWork(html, workId) {
+  const source = String(html);
+  const workUrl = `/works/${workId}`;
+  return isBookmarkShowPage(source)
+    && (source.includes(`bookmarkable_id&quot; value=&quot;${workId}`)
+      || source.includes(`bookmarkable_id" value="${workId}`)
+      || source.includes(workUrl));
+}
+
 function ao3FormError(html) {
   const text = String(html)
     .replace(/<[^>]*>/g, ' ')
@@ -143,9 +152,12 @@ export async function bookmark(work) {
     await debugLog('bookmark', `POST HTTP ${postResponse.status}; body=${postHtml.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500)}`);
     // Android fetch follows AO3's create redirect despite redirect: 'manual',
     // leaving us on the successful “Show Bookmark” page with HTTP 200.
-    if (isBookmarkShowPage(postHtml)) {
-      await debugLog('bookmark', `Created after followed redirect; HTTP ${postResponse.status}`);
+    if (bookmarkShowPageMatchesWork(postHtml, workId)) {
+      await debugLog('bookmark', `Created after followed redirect; HTTP ${postResponse.status}; work=${workId}`);
       return true;
+    }
+    if (isBookmarkShowPage(postHtml)) {
+      throw new Error(`AO3 returned a bookmark page for a different work (expected ${workId})`);
     }
     if (isLoginPage(postHtml)) {
       throw new Error('AO3 session was rejected while creating the bookmark');

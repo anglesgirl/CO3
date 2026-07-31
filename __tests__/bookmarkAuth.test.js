@@ -39,7 +39,8 @@ describe('ECH authenticated actions', () => {
     expect(source).toContain("redirect: 'manual'");
     expect(source).toContain('postResponse.status >= 300 && postResponse.status < 400');
     expect(source).toContain('function isBookmarkShowPage(html)');
-    expect(source).toContain('if (isBookmarkShowPage(postHtml))');
+    expect(source).toContain('function bookmarkShowPageMatchesWork(html, workId)');
+    expect(source).toContain('if (bookmarkShowPageMatchesWork(postHtml, workId))');
     expect(source).toContain('AO3 did not confirm bookmark creation');
   });
 
