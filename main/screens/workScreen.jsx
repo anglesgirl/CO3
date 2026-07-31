@@ -684,6 +684,7 @@ const ChapterInfoScreen = ({ route }) => {
 
   const handleBookmark = async () => {
     setMenuVisible(false);
+    showToast(t('screen_work_bookmark'), 'info');
     bookmark(work).then(() => {
       showToast(t('screen_work_toast_added_to_bookmarks'), 'success');
     }) .catch(error => {

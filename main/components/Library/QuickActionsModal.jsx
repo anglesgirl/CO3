@@ -181,6 +181,11 @@ const QuickActionsModal = ({
 
   const handleBookmark = () => {
     onClose();
+    Toast.show({
+      type: 'info',
+      text1: t('component_quick_actions_button_bookmark'),
+      text2: t('general_loading'),
+    });
 
     bookmark(work)
       .then(() => {
