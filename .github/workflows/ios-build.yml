@@ -1,7 +1,10 @@
 name: "Build iOS IPA (Unsigned)"
 
 on:
+  # This branch ships the Android ECH variant. Avoid unrelated macOS builds
+  # and their notification noise on every Android test push.
   push:
+    branches-ignore: [co3-b020]
   release:
     types: [created]
   workflow_dispatch:
