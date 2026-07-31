@@ -58,6 +58,8 @@ describe('ECH authenticated actions', () => {
     expect(source).toContain('/edit`');
     expect(source).toContain('parseDeleteForm');
     expect(source).toContain('verifyBookmarkRemoved(workId)');
+    expect(source).toContain('Removal verification failed after successful delete');
+    expect(source).not.toContain('AO3 accepted the removal request, but the work is still in your bookmarks');
   });
 
   it('does not turn an eventual bookmark-list lookup into an add failure', () => {

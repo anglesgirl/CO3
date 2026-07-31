@@ -107,9 +107,12 @@ export async function removeBookmark(work) {
       throw new Error(`Bookmark removal failed with HTTP ${response.status}`);
     }
     if (error) throw new Error(error);
-    if (!await verifyBookmarkRemoved(workId)) {
-      throw new Error('AO3 accepted the removal request, but the work is still in your bookmarks');
-    }
+    // AO3 can serve a stale bookmark-list response immediately after its
+    // delete redirect. Keep this diagnostic-only so a successful delete is
+    // never presented as a failure because of list caching or ordering.
+    verifyBookmarkRemoved(workId).catch(error =>
+      debugLog('bookmark', `Removal verification failed after successful delete: ${error?.message ?? String(error)}`),
+    );
     return true;
   } catch (error) {
     await debugLog('bookmark', `Remove failed: ${error?.message ?? String(error)}`);
