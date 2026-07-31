@@ -22,6 +22,22 @@ export default function CustomToast({ currentTheme }) {
             }}
           />
         ),
+        info: props => (
+          <BaseToast
+            {...props}
+            style={{
+              backgroundColor: currentTheme.cardBackground,
+              borderLeftColor: currentTheme.primaryColor,
+              borderColor: currentTheme.borderColor,
+              borderWidth: 1,
+            }}
+            text1Style={{ color: currentTheme.textColor, fontSize: 16 }}
+            text2Style={{
+              color: currentTheme.secondaryTextColor,
+              fontSize: 14,
+            }}
+          />
+        ),
         error: props => (
           <ErrorToast
             {...props}

@@ -27,7 +27,8 @@ describe('requested feature boundaries', () => {
   it('uploads only the arm64-v8a APK', () => {
     const workflow = read('.github/workflows/android-ech.yml');
     expect(workflow).toContain('-PBUILD_ABI=arm64-v8a');
-    expect(workflow).toContain('path: CO3-ECH-arm64-v8a.apk');
+    expect(workflow).toContain('CO3-ECH-arm64-v8a-${BUILD_UTC}-${SHA_SHORT}.apk');
+    expect(workflow).toContain('path: ${{ steps.artifact.outputs.apk_name }}');
     expect(workflow).not.toContain('CO3-ECH-*.apk');
   });
 
