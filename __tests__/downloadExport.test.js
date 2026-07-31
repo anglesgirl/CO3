@@ -16,8 +16,8 @@ describe('Android downloads', () => {
   });
 
   it('registers the Android MediaStore export package', () => {
-    const app = read('android/app/src/main/java/com/co3/MainApplication.kt');
-    const module = read('android/app/src/main/java/com/co3/export/FileExportModule.kt');
+    const app = read('android/app/src/main/java/com/xiaoyaco3/MainApplication.kt');
+    const module = read('android/app/src/main/java/com/xiaoyaco3/export/FileExportModule.kt');
     expect(app).toContain('add(FileExportPackage())');
     expect(module).toContain('MediaStore.Downloads.EXTERNAL_CONTENT_URI');
     expect(module).toContain('Environment.DIRECTORY_DOWNLOADS + "/CO3"');

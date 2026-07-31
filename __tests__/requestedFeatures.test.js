@@ -27,9 +27,9 @@ describe('requested feature boundaries', () => {
   it('uploads only the arm64-v8a APK', () => {
     const workflow = read('.github/workflows/android-ech.yml');
     expect(workflow).toContain('-PBUILD_ABI=arm64-v8a');
-    expect(workflow).toContain('CO3-ECH-arm64-v8a-${BUILD_UTC}-${SHA_SHORT}.apk');
+    expect(workflow).toContain('xiaoyaco3-ECH-arm64-v8a-${BUILD_UTC}-${SHA_SHORT}.apk');
     expect(workflow).toContain('path: ${{ steps.artifact.outputs.apk_name }}');
-    expect(workflow).not.toContain('CO3-ECH-*.apk');
+    expect(workflow).not.toContain('xiaoyaco3-ECH-*.apk');
   });
 
   it('uses a new Android version so the previous installation is replaced', () => {
