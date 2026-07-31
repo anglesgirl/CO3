@@ -98,7 +98,9 @@ export async function bookmark(work) {
     await debugLog('bookmark', `GET form ${url}`);
     const pageResponse = await fetch(await echUrl(url), {
       credentials: 'include',
-      headers: { Accept: 'text/html,application/xhtml+xml,*/*;q=0.8', 'User-Agent': userAgent, ...sessionHeaders },
+      // Keep this GET byte-for-byte aligned with the last confirmed-working
+      // Android bookmark flow. The later verification runs only after POST.
+      headers: { 'User-Agent': userAgent, ...sessionHeaders },
     });
 
     if (!pageResponse.ok) {

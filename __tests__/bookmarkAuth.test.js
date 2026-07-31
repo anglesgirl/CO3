@@ -49,6 +49,11 @@ describe('ECH authenticated actions', () => {
     expect(source).toContain('AO3 accepted the request, but the work was not found');
   });
 
+  it('uses AO3 selected pseud values before falling back to an input', () => {
+    const source = read('main/web/ao3FormParser.js');
+    expect(source).toContain("const pseudId = selected?.[1] || parsePseudSelect(doc) || input?.getAttribute('value') || null;");
+  });
+
   it('adds the session cookie to mark-for-later GET and POST requests', () => {
     const source = read('main/web/other/markedLater.js');
     expect(source).toContain('const sessionHeaders = await getSessionHeaders()');
