@@ -59,8 +59,12 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # ubuntu-latest already ships Android command-line tools. Avoid
+      # setup-android's expired cmdline-tools download URL (HTTP 404).
+      - name: Verify preinstalled Android SDK
+        run: |
+          command -v sdkmanager
+          sdkmanager --version
 
       - name: Install pinned NDK
         run: |
