@@ -34,10 +34,12 @@ describe('ECH authenticated actions', () => {
     expect(source).toContain('headers: await getSessionHeaders()');
   });
 
-  it('treats only AO3’s create redirect as bookmark success', () => {
+  it('recognizes an AO3 create redirect or its followed Show Bookmark page as success', () => {
     const source = read('main/web/other/bookmarks.js');
     expect(source).toContain("redirect: 'manual'");
     expect(source).toContain('postResponse.status >= 300 && postResponse.status < 400');
+    expect(source).toContain('function isBookmarkShowPage(html)');
+    expect(source).toContain('if (isBookmarkShowPage(postHtml))');
     expect(source).toContain('AO3 did not confirm bookmark creation');
   });
 
