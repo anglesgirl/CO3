@@ -43,7 +43,7 @@ const imageMappings = {
   },
 };
 
-const BookCard = ({ book, viewMode, theme, onUpdate, setScreens, libraryDAO, workDAO, settingsDAO, historyDAO, progressDAO, kudoHistoryDAO, openTagSearch, showDate = true, jsonSettings, chapterDAO }) => {
+const BookCard = ({ book, viewMode, theme, onUpdate, setScreens, libraryDAO, workDAO, settingsDAO, historyDAO, progressDAO, kudoHistoryDAO, openTagSearch, showDate = true, jsonSettings, chapterDAO, isBookmark = false }) => {
   const navigation = useNavigation();
 
   const [isMainModalOpen, setIsMainModalOpen] = useState(false);
@@ -323,6 +323,8 @@ const BookCard = ({ book, viewMode, theme, onUpdate, setScreens, libraryDAO, wor
           theme={theme}
           libraryDAO={libraryDAO}
           workDAO={workDAO}
+          isBookmark={isBookmark}
+          onUpdate={onUpdate}
         />
 
         <BookDetailsModal

@@ -14,7 +14,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Toast from 'react-native-toast-message';
 import CategorySelectionModal from '../WorkScreen/CategorySelectionModal';
 import { markForLater } from '../../web/other/markedLater';
-import { bookmark } from '../../web/other/bookmarks';
+import { bookmark, removeBookmark } from '../../web/other/bookmarks';
 import { normalizeWorkData } from '../../storage/dao/WorkDAO';
 import { useTranslation } from 'react-i18next';
 import { userErrorMessage } from '../../utils/userError';
@@ -26,6 +26,8 @@ const QuickActionsModal = ({
   theme,
   libraryDAO,
   workDAO,
+  isBookmark = false,
+  onUpdate,
 }) => {
   const [inLibrary, setInLibrary] = useState(false);
   const [categories, setCategories] = useState(null);
@@ -182,16 +184,18 @@ const QuickActionsModal = ({
 
   const handleBookmark = () => {
     onClose();
-    bookmark(work)
+    const operation = isBookmark ? removeBookmark(work) : bookmark(work);
+    operation
       .then(() => {
         Alert.alert(
-          t('component_quick_actions_toast_bookmark_success_title'),
-          t('component_quick_actions_toast_bookmark_success_sub'),
+          isBookmark ? '移除书签成功' : t('component_quick_actions_toast_bookmark_success_title'),
+          isBookmark ? '已从 AO3 书签中移除' : t('component_quick_actions_toast_bookmark_success_sub'),
         );
+        if (isBookmark) onUpdate?.();
       })
       .catch(error => {
         Alert.alert(
-          t('component_quick_actions_toast_bookmark_failed_title'),
+          isBookmark ? '移除书签失败' : t('component_quick_actions_toast_bookmark_failed_title'),
           userErrorMessage(error, t),
         );
       });
@@ -286,9 +290,9 @@ const QuickActionsModal = ({
                   onPress={handleBookmark}
                   activeOpacity={0.7}
                 >
-                  <Icon name="bookmark" size={24} color="white" />
+                  <Icon name={isBookmark ? 'bookmark-remove' : 'bookmark'} size={24} color="white" />
                   <Text style={styles.actionButtonText}>
-                    {t('component_quick_actions_button_bookmark')}
+                    {isBookmark ? '移除书签' : t('component_quick_actions_button_bookmark')}
                   </Text>
                 </TouchableOpacity>
               </View>

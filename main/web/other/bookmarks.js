@@ -34,6 +34,59 @@ async function verifyBookmarkInList(workId) {
   return found;
 }
 
+function findBookmarkDeleteForm(html, workId) {
+  const doc = new DomParser().parseFromString(html, 'text/html');
+  const items = Array.from(doc.getElementsByTagName('li'));
+  const item = items.find(li => Array.from(li.getElementsByTagName('a')).some(a =>
+    new RegExp(`/works/${workId}(?:["'#?]|/)`, 'i').test(a.getAttribute('href') || ''),
+  ));
+  if (!item) return null;
+  const form = Array.from(item.getElementsByTagName('form')).find(candidate =>
+    /bookmarks\/\d+/i.test(candidate.getAttribute('action') || '')
+    || /delete/i.test(candidate.getAttribute('class') || ''),
+  );
+  if (!form) return null;
+  const token = Array.from(form.getElementsByTagName('input')).find(input =>
+    input.getAttribute('name') === 'authenticity_token',
+  )?.getAttribute('value');
+  return { action: form.getAttribute('action'), token };
+}
+
+export async function removeBookmark(work) {
+  const workId = work?.id;
+  try {
+    if (!workId || !/^\d+$/.test(String(workId))) {
+      throw new Error(`Cannot remove bookmark: invalid work id (${String(workId)})`);
+    }
+    const username = await getUsername();
+    const listUrl = `https://archiveofourown.org/users/${encodeURIComponent(username)}/bookmarks?page=1`;
+    const sessionHeaders = await getSessionHeaders();
+    const listHtml = await getUrl(listUrl, false, { headers: sessionHeaders });
+    const form = findBookmarkDeleteForm(listHtml, workId);
+    if (!form?.action || !form.token) {
+      throw new Error(`Could not find the delete form for bookmark ${workId}`);
+    }
+    const deleteUrl = new URL(form.action, 'https://archiveofourown.org').toString();
+    const body = new FormData();
+    body.append('authenticity_token', form.token);
+    body.append('_method', 'delete');
+    const response = await fetch(await echUrl(deleteUrl), {
+      method: 'POST',
+      body,
+      credentials: 'include',
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', ...sessionHeaders },
+    });
+    await debugLog('bookmark', `Remove work=${workId}; HTTP ${response.status}; action=${deleteUrl}`);
+    if (!response.ok && response.status !== 302) {
+      throw new Error(`Bookmark removal failed with HTTP ${response.status}`);
+    }
+    return true;
+  } catch (error) {
+    await debugLog('bookmark', `Remove failed: ${error?.message ?? String(error)}`);
+    throw error;
+  }
+}
+
 export async function fetchBookmarks(page, username, pseud, noWebview = false) {
   let url;
   try {
@@ -146,8 +199,10 @@ export async function bookmark(work) {
       console.log('[AO3 bookmark] request completed', workId, postResponse.status);
       // Submit first and only then inspect the list. This check never changes
       // the AO3 create request or blocks it from reaching the server.
-      if (await verifyBookmarkInList(workId)) return true;
-      throw new Error('AO3 accepted the request, but the work was not found in your bookmarks');
+      verifyBookmarkInList(workId).catch(error =>
+        debugLog('bookmark', `Verification failed after successful add: ${error?.message ?? String(error)}`),
+      );
+      return true;
     }
     throw new Error(`Bookmark request failed with HTTP ${postResponse.status}; ECH: ${await getEchStatus()}`);
 

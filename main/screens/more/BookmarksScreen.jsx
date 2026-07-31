@@ -172,6 +172,7 @@ export default function BookmarksScreen({
       openTagSearch={openTagSearch}
       showDate={false}
       chapterDAO={chapterDAO}
+      isBookmark={true}
     />
   );
 

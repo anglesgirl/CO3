@@ -30,7 +30,7 @@ describe('ECH authenticated actions', () => {
   it('adds the session cookie to bookmark listing, GET, and POST requests', () => {
     const source = read('main/web/other/bookmarks.js');
     expect(source).toContain('const sessionHeaders = await getSessionHeaders()');
-    expect(source.match(/\.\.\.sessionHeaders/g)).toHaveLength(2);
+    expect(source.match(/\.\.\.sessionHeaders/g)).toHaveLength(3);
     expect(source).toContain('headers: await getSessionHeaders()');
   });
 
@@ -45,8 +45,21 @@ describe('ECH authenticated actions', () => {
   it('verifies the saved work only after the add request completes', () => {
     const source = read('main/web/other/bookmarks.js');
     expect(source).toContain('async function verifyBookmarkInList(workId)');
-    expect(source).toContain('if (await verifyBookmarkInList(workId)) return true;');
-    expect(source).toContain('AO3 accepted the request, but the work was not found');
+    expect(source).toContain('verifyBookmarkInList(workId).catch');
+    expect(source).toContain('return true;');
+  });
+
+  it('supports removing a bookmark from its AO3 list form', () => {
+    const source = read('main/web/other/bookmarks.js');
+    expect(source).toContain('export async function removeBookmark(work)');
+    expect(source).toContain("body.append('_method', 'delete')");
+    expect(source).toContain('findBookmarkDeleteForm');
+  });
+
+  it('does not turn an eventual bookmark-list lookup into an add failure', () => {
+    const source = read('main/web/other/bookmarks.js');
+    expect(source).toContain('Verification failed after successful add');
+    expect(source).not.toContain('AO3 accepted the request, but the work was not found');
   });
 
   it('uses AO3 selected pseud values before falling back to an input', () => {

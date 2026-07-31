@@ -45,6 +45,7 @@ jobs:
           __tests__/bookmarkAuth.test.js
           __tests__/thirdPartyImageProxy.test.js
           __tests__/debugLogging.test.js
+          __tests__/bookmarkQuickActions.test.js
           __tests__/androidIdentity.test.js
 
       - name: Setup Go 1.24
