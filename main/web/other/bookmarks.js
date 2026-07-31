@@ -46,7 +46,10 @@ function findBookmarkId(html, workId) {
 function parseDeleteForm(html) {
   const doc = new DomParser().parseFromString(html, 'text/html');
   const form = Array.from(doc.getElementsByTagName('form')).find(candidate =>
-    /bookmarks\/\d+/i.test(candidate.getAttribute('action') || ''),
+    /bookmarks\/\d+/i.test(candidate.getAttribute('action') || '') &&
+    Array.from(candidate.getElementsByTagName('input')).some(input =>
+      input.getAttribute('name') === '_method' && input.getAttribute('value') === 'delete',
+    ),
   );
   if (!form) return null;
   const token = Array.from(form.getElementsByTagName('input')).find(input =>

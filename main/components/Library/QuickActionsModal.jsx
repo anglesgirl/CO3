@@ -191,7 +191,7 @@ const QuickActionsModal = ({
           isBookmark ? '移除书签成功' : t('component_quick_actions_toast_bookmark_success_title'),
           isBookmark ? '已从 AO3 书签中移除' : t('component_quick_actions_toast_bookmark_success_sub'),
         );
-        if (isBookmark) onUpdate?.();
+        onUpdate?.();
       })
       .catch(error => {
         Alert.alert(
