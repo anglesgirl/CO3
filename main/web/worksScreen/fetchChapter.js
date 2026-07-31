@@ -222,6 +222,10 @@ async function createCompleteHtml(chapterHtml, cssStyles, currentTheme, settings
     (() => {
       const AO3_HOST = 'archiveofourown.org';
       const WORDPRESS_PROXY_HOSTS = new Set(['i2.wp.com', 'i3.wp.com']);
+      const log = message => window.ReactNativeWebView?.postMessage(JSON.stringify({
+        type: 'log',
+        message: '[image proxy] ' + message,
+      }));
 
       function isThirdPartyImage(url) {
         try {
@@ -243,12 +247,16 @@ async function createCompleteHtml(chapterHtml, cssStyles, currentTheme, settings
         image.dataset.co3ImageProxyApplied = 'true';
         image.dataset.co3OriginalSrc = originalUrl;
         image.referrerPolicy = 'no-referrer';
+        const proxyUrl = 'https://i2.wp.com/' + originalUrl.replace(/^https?:\/\//i, '');
+        image.addEventListener('load', () => log('loaded ' + proxyUrl), { once: true });
         image.addEventListener('error', () => {
           if (image.dataset.co3ImageProxyFallback) return;
           image.dataset.co3ImageProxyFallback = 'true';
+          log('failed ' + proxyUrl + '; falling back to ' + originalUrl);
           image.src = image.dataset.co3OriginalSrc;
         }, { once: true });
-        image.src = 'https://i2.wp.com/' + originalUrl.replace(/^https?:\/\//i, '');
+        log('loading ' + proxyUrl);
+        image.src = proxyUrl;
       }
 
       function proxyImages(root = document) {

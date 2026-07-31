@@ -5,6 +5,7 @@ import { echUrl } from '../echKy';
 import { getEchStatus } from '../echKy';
 import { parseBookmarkForm } from '../ao3FormParser';
 import { getSessionHeaders } from '../sessionHeaders';
+import { debugLog } from '../../utils/debugLog';
 
 let DomParser = require('react-native-html-parser').DOMParser;
 
@@ -72,6 +73,7 @@ export async function fetchBookmarks(page, username, pseud, noWebview = false) {
 export async function bookmark(work) {
   try {
     const workId = work.id;
+    await debugLog('bookmark', `Start work=${workId}`);
     if (!workId || !/^\d+$/.test(String(workId))) {
       throw new Error(`Cannot bookmark this work: invalid work id (${String(workId)})`);
     }
@@ -79,12 +81,14 @@ export async function bookmark(work) {
     const sessionHeaders = await getSessionHeaders();
 
     console.log('[AO3 bookmark] loading form', url);
+    await debugLog('bookmark', `GET form ${url}`);
     const pageResponse = await fetch(await echUrl(url), {
       credentials: 'include',
       headers: { Accept: 'text/html,application/xhtml+xml,*/*;q=0.8', ...sessionHeaders },
     });
 
     if (!pageResponse.ok) {
+      await debugLog('bookmark', `Form failed HTTP ${pageResponse.status}`);
       throw new Error(`Bookmark form failed: HTTP ${pageResponse.status}; ECH: ${await getEchStatus()}`);
     }
 
@@ -93,6 +97,7 @@ export async function bookmark(work) {
       throw new Error('AO3 session was rejected while loading the bookmark form');
     }
     const { token, pseudId } = parseBookmarkForm(html);
+    await debugLog('bookmark', `Form HTTP ${pageResponse.status}; token=${!!token}; pseud=${!!pseudId}`);
 
     if (!token || !pseudId) {
       throw new Error(`Extraction failed. Token: ${!!token}, Pseud: ${!!pseudId}`);
@@ -124,11 +129,14 @@ export async function bookmark(work) {
     // AO3 creates bookmarks with a redirect. A 200 response is the returned
     // form (usually validation failure), not proof that a bookmark was added.
     if (postResponse.status >= 300 && postResponse.status < 400) {
-      console.log('[AO3 bookmark] created', workId, postResponse.status);
+      const location = postResponse.headers.get('location') || '(none)';
+      console.log('[AO3 bookmark] created', workId, postResponse.status, location);
+      await debugLog('bookmark', `POST HTTP ${postResponse.status}; Location=${location}`);
       return true;
     }
 
     const postHtml = await postResponse.text();
+    await debugLog('bookmark', `POST HTTP ${postResponse.status}; body=${postHtml.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500)}`);
     if (isLoginPage(postHtml)) {
       throw new Error('AO3 session was rejected while creating the bookmark');
     }
@@ -139,6 +147,7 @@ export async function bookmark(work) {
 
   } catch (error) {
     console.error('Error bookmarking:', error);
+    await debugLog('bookmark', `Failed: ${error?.message ?? String(error)}`);
     throw error;
   }
 }

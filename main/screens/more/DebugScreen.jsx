@@ -1,167 +1,69 @@
-import {
-  ScrollView,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native';
-import { useState } from 'react';
+import { ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigation } from '@react-navigation/native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { echSelfTest } from '../../web/echKy';
+import {
+  clearDebugLogs,
+  debugLog,
+  getDebugLogs,
+  isDebugEnabled,
+  setDebugEnabled,
+} from '../../utils/debugLog';
 
-export default function DebugScreen({ route }) {
-  const {db, setScreens} = route.params;
-  const [sqlCmd, setSqlCmd] = useState('');
+export default function DebugScreen() {
+  const navigation = useNavigation();
+  const [enabled, setEnabled] = useState(false);
   const [logs, setLogs] = useState([]);
-  const addLog = (type, message) => {
-    setLogs(prev => [
-      { id: Date.now(), type, message, time: new Date().toLocaleTimeString() },
-      ...prev,
-    ]);
+
+  const refresh = useCallback(async () => {
+    setEnabled(await isDebugEnabled());
+    setLogs(await getDebugLogs());
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const toggle = async () => {
+    const next = !enabled;
+    await setDebugEnabled(next);
+    setEnabled(next);
+    if (next) await debugLog('debug', 'Debug logging enabled');
+    await refresh();
   };
 
-  const navigation = useNavigation();
+  const selfTest = async () => {
+    try {
+      const result = await echSelfTest();
+      await debugLog('ECH', result);
+    } catch (error) {
+      await debugLog('ECH', `Self-test failed: ${error?.message ?? String(error)}`);
+    }
+    await refresh();
+  };
 
   return (
-      <ScrollView style={{ flex: 1, padding: 12, backgroundColor: '#fff' }}>
-        <Text style={{ fontSize: 25 }}>Debug Screen</Text>
-        <Text>
-          If you don't know what you are doing here, press the red text below.
-        </Text>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={{ color: '#ff0000' }}>Close debug menu</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={{
-            marginTop: 8,
-            backgroundColor: '#111',
-            borderRadius: 6,
-            paddingVertical: 10,
-            paddingHorizontal: 12,
-            alignSelf: 'flex-start',
-          }}
-          onPress={async () => {
-            addLog('cmd', '> ECH self-test (fetching AO3 through proxy)...');
-            try {
-              const result = await echSelfTest();
-              const ok = result.includes('ECHAccepted=true');
-              addLog(ok ? 'success' : 'error', result);
-            } catch (e) {
-              addLog('error', e?.message ?? String(e));
-            }
-          }}
-        >
-          <Text style={{ color: '#fff' }}>Test ECH status</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={{
-            marginTop: 8,
-            backgroundColor: '#7a3',
-            borderRadius: 6,
-            paddingVertical: 10,
-            paddingHorizontal: 12,
-            alignSelf: 'flex-start',
-          }}
-          onPress={async () => {
-            try {
-              await AsyncStorage.removeItem('cf_domains');
-              addLog('success', 'Cleared Cloudflare/WebView fallback mode. Go back and retry.');
-            } catch (e) {
-              addLog('error', e?.message ?? String(e));
-            }
-          }}
-        >
-          <Text style={{ color: '#fff' }}>Clear CF/WebView fallback</Text>
-        </TouchableOpacity>
-
-        <Text style={{ marginTop: 16 }}>Run SQL cmd</Text>
-        <TextInput
-          style={{ borderColor: '#fff', backgroundColor: "#000", color: "#fff", borderWidth: 1, }}
-          placeholder="UPDATE works SET..."
-          onChangeText={setSqlCmd}
-          value={sqlCmd}
-        />
-        <TouchableOpacity
-          onPress={async () => {
-            addLog('cmd', `> ${sqlCmd}`);
-            try {
-              const res = await db.executeSql(sqlCmd);
-              const rowsAffected = res[0]?.rowsAffected ?? 0;
-              const rows = res[0]?.rows?._array ?? [];
-              const rawResult = res[0]?.rows?.raw?.() ?? [];
-
-              addLog('cmd', `> ${sqlCmd}`);
-
-              const resultRows = rows.length > 0 ? rows : rawResult;
-
-              if (resultRows.length > 0) {
-                addLog('result', JSON.stringify(resultRows, null, 2));
-              } else if (rowsAffected > 0) {
-                addLog('success', `OK — ${rowsAffected} row(s) affected`);
-              } else {
-                addLog('success', 'OK — no rows returned or affected');
-              }
-            } catch (e) {
-              addLog('error', e.message);
-            }
-          }}
-        >
-          <Text>Execute SQL</Text>
-        </TouchableOpacity>
-
-        <View style={{ marginTop: 20 }}>
-          <View
-            style={{
-              flexDirection: 'row',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-            }}
-          >
-            <Text style={{ fontSize: 16, fontWeight: '600' }}>Log</Text>
-            {logs.length > 0 && (
-              <TouchableOpacity onPress={() => setLogs([])}>
-                <Text style={{ color: '#888', fontSize: 13 }}>Clear</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-
-          <ScrollView
-            style={{
-              maxHeight: 300,
-            }}
-            nestedScrollEnabled
-          >
-            {logs.length === 0 ? (
-              <Text style={{ color: '#555', fontSize: 13 }}>
-                No output yet...
-              </Text>
-            ) : (
-              logs.map(log => (
-                <View key={log.id} style={{ marginBottom: 6 }}>
-                  <Text
-                    style={{
-                      fontSize: 12,
-                      color:
-                        log.type === 'error'
-                          ? '#ff6b6b'
-                          : log.type === 'success'
-                            ? '#69db7c'
-                            : log.type === 'cmd'
-                              ? '#74c0fc'
-                              : '#86911e',
-                    }}
-                  >
-                    <Text style={{ color: '#555' }}>[{log.time}] </Text>
-                    {log.message}
-                  </Text>
-                </View>
-              ))
-            )}
-          </ScrollView>
-        </View>
-      </ScrollView>
+    <ScrollView style={{ flex: 1, padding: 16, backgroundColor: '#fff' }}>
+      <Text style={{ fontSize: 24, fontWeight: '700' }}>Debug</Text>
+      <Text style={{ marginTop: 8 }}>状态：{enabled ? '已开启' : '已关闭'}</Text>
+      <TouchableOpacity style={styles.button} onPress={toggle}>
+        <Text style={styles.buttonText}>{enabled ? '关闭日志' : '开启日志'}</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.button} onPress={selfTest}>
+        <Text style={styles.buttonText}>测试 ECH</Text>
+      </TouchableOpacity>
+      <View style={{ flexDirection: 'row', gap: 18, marginTop: 16 }}>
+        <TouchableOpacity onPress={refresh}><Text>刷新</Text></TouchableOpacity>
+        <TouchableOpacity onPress={async () => { await clearDebugLogs(); await refresh(); }}><Text style={{ color: '#b42318' }}>清空</Text></TouchableOpacity>
+        <TouchableOpacity onPress={() => navigation.goBack()}><Text>返回</Text></TouchableOpacity>
+      </View>
+      <Text selectable style={styles.logText}>
+        {logs.length ? logs.map(log => `[${log.time}] ${log.scope}: ${log.message}`).join('\n\n') : '暂无日志'}
+      </Text>
+    </ScrollView>
   );
 }
+
+const styles = {
+  button: { backgroundColor: '#182230', borderRadius: 6, marginTop: 10, padding: 11 },
+  buttonText: { color: '#fff', textAlign: 'center', fontWeight: '600' },
+  logText: { color: '#182230', fontSize: 12, marginTop: 18, paddingBottom: 36 },
+};

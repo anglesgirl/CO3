@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { WebView } from 'react-native-webview';
+import { debugLog } from '../utils/debugLog';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import Svg, { Circle } from 'react-native-svg';
 import Slider from '@react-native-community/slider';
@@ -341,6 +342,7 @@ const ChapterReader = ({
           }
           case 'log': {
             console.log('WebView Log:', data.message);
+            debugLog('reader', data.message);
             break;
           }
           default:

@@ -9,8 +9,9 @@ const source = fs.readFileSync(
 describe('third-party chapter image proxy', () => {
   it('routes third-party images through the WordPress image proxy', () => {
     expect(source).toContain("const WORDPRESS_PROXY_HOSTS = new Set(['i2.wp.com', 'i3.wp.com'])");
-    expect(source).toContain("image.src = 'https://i2.wp.com/' + originalUrl.replace");
+    expect(source).toContain("const proxyUrl = 'https://i2.wp.com/' + originalUrl.replace");
     expect(source).toContain("/^https?:\\/\\//i, ''");
+    expect(source).toContain("message: '[image proxy] ' + message");
   });
 
   it('does not proxy AO3 or an existing WordPress proxy URL', () => {

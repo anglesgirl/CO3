@@ -9,14 +9,28 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { co3Version } from '../../constant';
-import DebugScreen from './DebugScreen';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRef } from 'react';
+import { debugLog, setDebugEnabled } from '../../utils/debugLog';
 
 export default function AboutScreen({ route }) {
   const {setScreens, currentTheme, db} = route.params;
   const navigation = useNavigation();
+  const logoTapCount = useRef(0);
+  const logoTapTimer = useRef(null);
+
+  async function onLogoPress() {
+    logoTapCount.current += 1;
+    clearTimeout(logoTapTimer.current);
+    logoTapTimer.current = setTimeout(() => { logoTapCount.current = 0; }, 900);
+    if (logoTapCount.current !== 3) return;
+    logoTapCount.current = 0;
+    await setDebugEnabled(true);
+    await debugLog('debug', 'Debug logging enabled from About screen');
+    navigation.push('Debug', { setScreens, db });
+  }
 
   function onBack() {
     navigation.goBack();
@@ -37,12 +51,7 @@ export default function AboutScreen({ route }) {
       <ScrollView style={{ height: '100%' }}>
         <View style={styles.mainContent}>
           <TouchableOpacity
-            onPress={() =>
-              navigation.push("Debug", {
-                setScreens: setScreens,
-                db: db
-              })
-            }
+            onPress={onLogoPress}
           >
             <Image style={styles.image} source={require('../../res/CO3.png')} />
           </TouchableOpacity>
