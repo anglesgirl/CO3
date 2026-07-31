@@ -59,12 +59,17 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      # ubuntu-latest already ships Android command-line tools. Avoid
-      # setup-android's expired cmdline-tools download URL (HTTP 404).
-      - name: Verify preinstalled Android SDK
+      # ubuntu-latest ships these tools, but does not add sdkmanager to PATH.
+      # Use its installed cmdline-tools and avoid setup-android's expired
+      # command-line-tools download URL (HTTP 404).
+      - name: Configure preinstalled Android SDK
         run: |
-          command -v sdkmanager
-          sdkmanager --version
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          "$SDKMANAGER" --version
 
       - name: Install pinned NDK
         run: |
