@@ -206,12 +206,18 @@ export async function bookmark(work) {
       throw new Error(`Extraction failed. Token: ${!!token}, Pseud: ${!!pseudId}`);
     }
 
-    const formData = new FormData();
-    formData.append('authenticity_token', token);
-    formData.append('bookmark[pseud_id]', pseudId);
-    formData.append('bookmark[private]', '0');
-    formData.append('bookmark[rec]', '0');
-    formData.append('commit', 'Create');
+    // Match AO3's browser form submission. AO3 expects this form to be URL
+    // encoded, including its optional fields when they are empty.
+    const formData = [
+      ['authenticity_token', token],
+      ['bookmark[pseud_id]', pseudId],
+      ['bookmark[bookmarker_notes]', ''],
+      ['bookmark[tag_string]', ''],
+      ['bookmark[collection_names]', ''],
+      ['bookmark[private]', '0'],
+      ['bookmark[rec]', '0'],
+      ['commit', 'Create'],
+    ].map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join('&');
 
     const postUrl = `https://archiveofourown.org/works/${workId}/bookmarks`;
     const postResponse = await fetch(await echUrl(postUrl), {
@@ -220,6 +226,7 @@ export async function bookmark(work) {
       credentials: 'include',
       headers: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Content-Type': 'application/x-www-form-urlencoded',
         'Referer': url,
         'User-Agent': userAgent,
         ...sessionHeaders,

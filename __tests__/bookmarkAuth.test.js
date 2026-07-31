@@ -38,6 +38,10 @@ describe('ECH authenticated actions', () => {
     const source = read('main/web/other/bookmarks.js');
     expect(source).toContain("const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'");
     expect(source).toContain("'User-Agent': userAgent");
+    expect(source).toContain("'Content-Type': 'application/x-www-form-urlencoded'");
+    expect(source).toContain("['bookmark[bookmarker_notes]', '']");
+    expect(source).toContain("['bookmark[tag_string]', '']");
+    expect(source).toContain("['bookmark[collection_names]', '']");
     expect(source).not.toContain("redirect: 'manual'");
     expect(source).toContain('if (postResponse.ok || postResponse.status === 302)');
   });
