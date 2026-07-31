@@ -42,6 +42,13 @@ describe('ECH authenticated actions', () => {
     expect(source).toContain('if (postResponse.ok || postResponse.status === 302)');
   });
 
+  it('verifies the saved work only after the add request completes', () => {
+    const source = read('main/web/other/bookmarks.js');
+    expect(source).toContain('async function verifyBookmarkInList(workId)');
+    expect(source).toContain('if (await verifyBookmarkInList(workId)) return true;');
+    expect(source).toContain('AO3 accepted the request, but the work was not found');
+  });
+
   it('adds the session cookie to mark-for-later GET and POST requests', () => {
     const source = read('main/web/other/markedLater.js');
     expect(source).toContain('const sessionHeaders = await getSessionHeaders()');

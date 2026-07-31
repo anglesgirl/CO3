@@ -23,6 +23,17 @@ function ao3FormError(html) {
   return match?.[1]?.trim() || null;
 }
 
+async function verifyBookmarkInList(workId) {
+  const username = await getUsername();
+  if (!username) throw new Error('Cannot verify bookmark: AO3 username is unavailable');
+  const url = `https://archiveofourown.org/users/${encodeURIComponent(username)}/bookmarks?page=1`;
+  const html = await getUrl(url, false, { headers: await getSessionHeaders() });
+  if (isLoginPage(html)) throw new Error('AO3 session was rejected while verifying bookmarks');
+  const found = new RegExp(`/works/${workId}(?:["'#?]|/)`, 'i').test(html);
+  await debugLog('bookmark', `Verification page=1 work=${workId}; found=${found}`);
+  return found;
+}
+
 export async function fetchBookmarks(page, username, pseud, noWebview = false) {
   let url;
   try {
@@ -131,7 +142,10 @@ export async function bookmark(work) {
     // redirect and use its final successful response as the completion signal.
     if (postResponse.ok || postResponse.status === 302) {
       console.log('[AO3 bookmark] request completed', workId, postResponse.status);
-      return true;
+      // Submit first and only then inspect the list. This check never changes
+      // the AO3 create request or blocks it from reaching the server.
+      if (await verifyBookmarkInList(workId)) return true;
+      throw new Error('AO3 accepted the request, but the work was not found in your bookmarks');
     }
     throw new Error(`Bookmark request failed with HTTP ${postResponse.status}; ECH: ${await getEchStatus()}`);
 
