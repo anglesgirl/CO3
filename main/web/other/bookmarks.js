@@ -65,22 +65,26 @@ function findDeleteTokenInList(html, bookmarkId) {
     if (tokenInput) return tokenInput.getAttribute('value');
   }
 
-  // Path 2: a link with data-method="delete" — Rails UJS uses the meta csrf-token
+  // Path 2: find any delete link or form (not necessarily bound to this ID)
+  // and fall back to the page-level meta csrf-token. This matches how
+  // Rails UJS works: the meta token is used for every data-method="delete"
+  // click, regardless of the specific link.
   const links = Array.from(doc.getElementsByTagName('a'));
-  const hasDeleteLink = links.some(a => {
-    const href = a.getAttribute('href') || '';
-    return new RegExp(`bookmarks/${bookmarkId}(?:$|[/?#])`, 'i').test(href)
-      && a.getAttribute('data-method') === 'delete';
-  });
-  if (hasDeleteLink) {
-    const meta = Array.from(doc.getElementsByTagName('meta')).find(
-      m => m.getAttribute('name') === 'csrf-token',
+  const hasAnyDeleteLink = links.some(a => a.getAttribute('data-method') === 'delete');
+  const formsWithDelete = forms.some(f => {
+    const inputs = Array.from(f.getElementsByTagName('input'));
+    return inputs.some(i =>
+      i.getAttribute('name') === '_method' && i.getAttribute('value') === 'delete',
     );
-    const token = meta?.getAttribute('content');
-    if (token) return token;
-  }
+  });
+  const metaToken = Array.from(doc.getElementsByTagName('meta')).find(
+    m => m.getAttribute('name') === 'csrf-token',
+  )?.getAttribute('content');
 
-  // Regex fallback for both paths (when the DOM parser misses attributes)
+  // If we see a delete-capable UI anywhere on the page, the meta token works.
+  if ((hasAnyDeleteLink || formsWithDelete) && metaToken) return metaToken;
+
+  // Regex fallback for forms
   const formRegex = new RegExp(
     `<form[^>]*action="[^"]*bookmarks/${bookmarkId}[^"]*"[^>]*>([\\s\\S]*?)</form>`, 'i',
   );
@@ -89,10 +93,17 @@ function findDeleteTokenInList(html, bookmarkId) {
     const tokenMatch = formMatch[1].match(/name=["']authenticity_token["']\s+value=["']([^"']+)["']/i);
     if (tokenMatch) return tokenMatch[1];
   }
-  if (new RegExp(`<a[^>]*href="[^"]*bookmarks/${bookmarkId}[^"]*"[^>]*data-method=["']delete["']`, 'i').test(html)) {
-    const metaMatch = html.match(/<meta\s+name=["']csrf-token["']\s+content=["']([^"']+)["']/i);
-    if (metaMatch) return metaMatch[1];
-  }
+  // Regex fallback: any delete link on the page (broad match)
+  const anyDeleteLink = /data-method=["']delete["']/i.test(html);
+  const anyDeleteForm = /name=["']_method["']\s+value=["']delete["']/i.test(html);
+  const metaMatch = html.match(/<meta\s+name=["']csrf-token["']\s+content=["']([^"']+)["']/i);
+  if ((anyDeleteLink || anyDeleteForm) && metaMatch) return metaMatch[1];
+
+  // Ultimate fallback: the caller already confirmed via findBookmarkId that
+  // this bookmark is present in the user's list. Use the page-level meta
+  // token, which is what Rails UJS uses for delete operations anyway.
+  if (metaToken) return metaToken;
+  if (metaMatch) return metaMatch[1];
 
   return null;
 }
