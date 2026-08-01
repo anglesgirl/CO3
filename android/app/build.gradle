@@ -88,11 +88,17 @@ android {
 
     // When there's no prebuilt echproxy.aar, skip the ECH module sources entirely
     // (they reference Go-generated classes shipped inside the AAR and would fail
-    // to compile). MainApplication.kt uses reflection to register EchProxyPackage
-    // only when the class is present on the classpath at runtime.
+    // to compile). Both java and kotlin source sets need the exclude because AGP
+    // compiles Kotlin independently from Java sources. MainApplication.kt uses
+    // reflection to register EchProxyPackage only when the class is present.
     sourceSets {
         main {
             java {
+                if (!echproxyAar.exists()) {
+                    exclude 'com/xiaoyaco3/ech/**'
+                }
+            }
+            kotlin {
                 if (!echproxyAar.exists()) {
                     exclude 'com/xiaoyaco3/ech/**'
                 }
