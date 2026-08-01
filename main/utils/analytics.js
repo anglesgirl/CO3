@@ -85,16 +85,23 @@ export async function initAnalytics(enabled) {
 
   try {
     // v4.x: 使用构造函数创建实例。
-    // 关键: 传 customStorage 直接指定 AsyncStorage,绕过 SDK 内部的
-    // buildOptimisticAsyncStorage()——它会 require('expo-file-system'),
-    // 而本项目的 expo-file-system 没有原生模块,导致 requireNativeModule
-    // ('FileSystem') 抛 JavascriptException 闪退。
+    //
+    // 关键修复: persistence: 'memory' 彻底跳过文件存储路径。
+    // 之前用 customStorage: AsyncStorage 仍然崩溃,因为 PostHog 构造函数在
+    // persistence='file' 时即使 customStorage 有值,native-deps.js 顶部
+    // require('./optional/OptionalExpoFileSystem') 已经加载了 expo-file-system
+    // 模块对象,buildOptimisticAsyncStorage() 内部访问该模块的属性时触发
+    // requireNativeModule('FileSystem') 的 getter——这个 getter 抛出的
+    // JavascriptException 不在 OptionalExpoFileSystem.js 的 try-catch 范围内,
+    // 导致闪退。persistence='memory' 让构造函数走 createEventsMemoryStorage()
+    // 路径,完全不触碰 buildOptimisticAsyncStorage()。
+    // 代价: 断网时事件仅缓存在内存,App 重启后丢失。对活跃统计无影响。
     posthog = new PostHogClass(POSTHOG_KEY, {
       host: POSTHOG_HOST,
       autocapture: false,        // 原则 1: 不自动采集,只发手动埋的事件
       maskAllText: true,         // 隐私: 遮挡文本
       captureScreenViews: false,
-      customStorage: AsyncStorage, // 显式指定存储,绕过 expo-file-system 检测
+      persistence: 'memory',     // 关键: 内存存储,跳过 expo-file-system 崩溃路径
     });
 
     const id = await ensureDistinctId();
