@@ -62,23 +62,37 @@ export async function checkAppUpdate(t) {
     const hint = t('update_open_hint');
     const message = body ? `${body}\n\n${hint}` : hint;
 
+    // GitHub 直连在国内常打不开,提供镜像入口。
+    // ghproxy 会把 release 页面里的资源按相同路径代理。
+    const mirrorUrl = data.html_url
+      ? `https://ghproxy.com/${data.html_url}`
+      : null;
+
+    const buttons = [
+      {
+        text: t('update_later_button'),
+        onPress: async () => {
+          await AsyncStorage.setItem(SKIPPED_KEY, latestTag);
+        },
+      },
+      {
+        text: t('update_view_button'),
+        onPress: () => {
+          if (data.html_url) Linking.openURL(data.html_url);
+        },
+      },
+    ];
+    if (mirrorUrl) {
+      buttons.push({
+        text: t('update_mirror_button'),
+        onPress: () => Linking.openURL(mirrorUrl),
+      });
+    }
+
     Alert.alert(
       t('update_available_title', { version: latestTag }),
       message,
-      [
-        {
-          text: t('update_later_button'),
-          onPress: async () => {
-            await AsyncStorage.setItem(SKIPPED_KEY, latestTag);
-          },
-        },
-        {
-          text: t('update_view_button'),
-          onPress: () => {
-            if (data.html_url) Linking.openURL(data.html_url);
-          },
-        },
-      ],
+      buttons,
       { cancelable: true },
     );
   } catch (e) {

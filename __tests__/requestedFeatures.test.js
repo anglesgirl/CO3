@@ -24,12 +24,20 @@ describe('requested feature boundaries', () => {
     expect(source).not.toContain('/invite_requests/new');
   });
 
-  it('builds and uploads split APKs for all ABIs', () => {
-    const workflow = read('.github/workflows/android-ech.yml');
-    expect(workflow).toContain('armeabi-v7a,arm64-v8a,x86,x86_64');
-    expect(workflow).toContain('apk-out/*.apk');
-    // gomobile must build all four ABIs into the AAR
-    expect(workflow).toContain('android/arm,android/arm64,android/386,android/amd64');
+  it('builds and uploads split APKs for arm64 + armv7 only', () => {
+    const ech = read('.github/workflows/android-ech.yml');
+    // gomobile 只构建 32/64 位 ARM,x86 系列已不再支持
+    expect(ech).toContain('android/arm,android/arm64');
+    expect(ech).toContain('arm64-v8a,armeabi-v7a');
+    expect(ech).not.toContain('android/386');
+    expect(ech).not.toContain('android/amd64');
+    expect(ech).not.toContain('x86,x86_64');
+
+    const std = read('.github/workflows/android-build.yml');
+    expect(std).toContain('arm64-v8a,armeabi-v7a');
+    // 普通 build 不应再尝试 mv 不存在的 x86 产物
+    expect(std).not.toContain('app-x86-release.apk');
+    expect(std).not.toContain('app-x86_64-release.apk');
   });
 
   it('uses a new Android version so the previous installation is replaced', () => {

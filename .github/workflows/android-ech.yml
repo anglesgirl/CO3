@@ -86,10 +86,8 @@ jobs:
           # NOTE: do not `go mod tidy` afterwards — it would strip this unused-by-source require.
           go get golang.org/x/mobile/bind@latest
           mkdir -p ../android/app/libs
-          # Build all ABIs in one AAR so every APK variant can load the ECH proxy.
-          gomobile bind -v \
-            -target=android/arm,android/arm64,android/386,android/amd64 \
-            -androidapi 24 \
+          # 同时构建 32/64 位 ARM:x86 系列已无人在用,只保留 arm64 + armv7 照顾老设备。
+          gomobile bind -v -target=android/arm,android/arm64 -androidapi 24 \
             -o ../android/app/libs/echproxy.aar ./echproxy
           ls -la ../android/app/libs
 
@@ -98,39 +96,50 @@ jobs:
           cd android
           ./gradlew generateCodegenArtifactsFromSchema
 
-      - name: Build Release APK (all ABIs, split per architecture)
+      - name: Build Release APK (arm64-v8a + armeabi-v7a)
         run: |
           cd android
-          # Build all four ABIs as separate split APKs — each is ~20-25M and
-          # contains only that architecture's native libs (including the ECH
-          # proxy .so from the gomobile AAR).
-          ./gradlew assembleRelease -PBUILD_ABI=armeabi-v7a,arm64-v8a,x86,x86_64
+          ./gradlew assembleRelease -PBUILD_ABI=arm64-v8a,armeabi-v7a -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
         env:
-          BUILD_ABI: "armeabi-v7a,arm64-v8a,x86,x86_64"
+          BUILD_ABI: arm64-v8a,armeabi-v7a
 
       - name: Collect & rename split APKs
         id: artifact
         run: |
           APK_DIR=android/app/build/outputs/apk/release
           ls -la "$APK_DIR"
+          test -f "$APK_DIR/app-arm64-v8a-release.apk"
+          test -f "$APK_DIR/app-armeabi-v7a-release.apk"
           BUILD_UTC=$(date -u +'%Y%m%d-%H%M%SZ')
           SHA_SHORT="${GITHUB_SHA::7}"
-          APK_NAME="co3-reader-ECH-arm64-v8a-${BUILD_UTC}-${SHA_SHORT}.apk"
-          mv "$APK_DIR/app-arm64-v8a-release.apk" "$APK_NAME"
-          echo "apk_name=$APK_NAME" >> "$GITHUB_OUTPUT"
+          cp "$APK_DIR/app-arm64-v8a-release.apk"   "co3-reader-ECH-arm64-v8a-${BUILD_UTC}-${SHA_SHORT}.apk"
+          cp "$APK_DIR/app-armeabi-v7a-release.apk" "co3-reader-ECH-armeabi-v7a-${BUILD_UTC}-${SHA_SHORT}.apk"
+          echo "apk_glob=co3-reader-ECH-*-${BUILD_UTC}-${SHA_SHORT}.apk" >> "$GITHUB_OUTPUT"
           echo "artifact_name=co3-reader-ECH-${BUILD_UTC}-${SHA_SHORT}" >> "$GITHUB_OUTPUT"
-          echo "Built $APK_NAME (UTC build time: $BUILD_UTC)"
+          echo "Built 2 APKs (UTC build time: $BUILD_UTC)"
+          ls -la co3-reader-ECH-*.apk
 
-      - name: Verify each APK has correct native libs
+      - name: Verify ABIs in artifacts
         run: |
-          for APK in apk-out/*.apk; do
-            echo "=== $(basename $APK) ==="
-            unzip -l "$APK" | grep -E 'lib/' || true
+          for apk in co3-reader-ECH-*.apk; do
+            echo "=== $apk ==="
+            unzip -l "$apk" > apk-files.txt
+            if echo "$apk" | grep -q 'arm64-v8a'; then
+              grep -q 'lib/arm64-v8a/' apk-files.txt || { echo "Missing lib/arm64-v8a/"; exit 1; }
+            fi
+            if echo "$apk" | grep -q 'armeabi-v7a'; then
+              grep -q 'lib/armeabi-v7a/' apk-files.txt || { echo "Missing lib/armeabi-v7a/"; exit 1; }
+            fi
+            # 不应出现 x86 系列
+            if grep -Eq 'lib/(x86|x86_64)/' apk-files.txt; then
+              echo "Unexpected x86 native libraries found"
+              exit 1
+            fi
           done
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.artifact.outputs.artifact_name }}
-          path: apk-out/*.apk
+          path: ${{ steps.artifact.outputs.apk_glob }}
           retention-days: 30
