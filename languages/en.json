@@ -115,6 +115,8 @@
   "screen_preferences_title_update": "Updates",
   "screen_preferences_title_download": "Download",
   "screen_preferences_label_language": "Language",
+  "screen_preferences_setting_analytics": "Anonymous usage statistics",
+  "screen_preferences_setting_analytics_desc": "Only reports launch, activity and version info to understand user count. No reading content or account info. Can be turned off anytime.",
   "screen_preferences_sample_title": "Sample Chapter",
   "screen_preferences_sample_text": "This is a sample text to preview your reader settings. You can adjust the font size using the controls below.",
   "screen_preferences_sample_blockquotes": "Blockquotes and other elements will also reflect your custom settings.",

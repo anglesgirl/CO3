@@ -115,6 +115,8 @@
   "screen_preferences_title_update": "更新",
   "screen_preferences_title_download": "下载",
   "screen_preferences_label_language": "语言",
+  "screen_preferences_setting_analytics": "匿名使用统计",
+  "screen_preferences_setting_analytics_desc": "仅上报启动、活跃和版本信息,用于了解使用人数。不含任何阅读内容或账号信息,可随时关闭。",
   "screen_preferences_sample_title": "示例章节",
   "screen_preferences_sample_text": "这是一段用于预览阅读器设置的示例文本。你可以用下方的控件调整字号。",
   "screen_preferences_sample_blockquotes": "引用块及其他元素也会反映你的自定义设置。",

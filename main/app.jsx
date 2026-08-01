@@ -9,6 +9,7 @@ import React, {
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   BackHandler,
   DeviceEventEmitter,
   Image,
@@ -85,6 +86,12 @@ import CategoryScreen from './screens/more/CategoryScreen';
 import BookmarksScreen from './screens/more/BookmarksScreen';
 import AboutScreen from './screens/more/AboutScreen';
 import { debugLog, installDebugConsoleCapture } from './utils/debugLog';
+import {
+  initAnalytics,
+  track,
+  startHeartbeat,
+  stopHeartbeat,
+} from './utils/analytics';
 
 export const AppContext = createContext();
 const Stack = createNativeStackNavigator();
@@ -100,6 +107,18 @@ const AppWrapper = () => {
         rejection?.(error, isFatal);
       });
     }
+  }, []);
+
+  // 前台/后台切换时管理统计心跳:后台停止,回前台恢复。
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        startHeartbeat();
+      } else {
+        stopHeartbeat();
+      }
+    });
+    return () => sub.remove();
   }, []);
   const wrapperStyle = Platform.OS === 'web'
     ? { flex: 1, width: '100%', height: '100%' }
@@ -595,6 +614,15 @@ const App = () => {
     const jsonSettings = await getJsonSettings();
     setJsonSettings(jsonSettings)
     setup(jsonSettings.time)
+
+    // 匿名使用统计:尊重用户开关,Key 未填时全程 no-op。
+    try {
+      await initAnalytics(jsonSettings.analyticsEnabled !== false);
+      track('app_open');
+      startHeartbeat();
+    } catch (e) {
+      /* 统计初始化失败不影响 App */
+    }
 
     if (Platform.OS === 'android') {
       try {

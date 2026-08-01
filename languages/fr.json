@@ -104,6 +104,8 @@
   "screen_preferences_title_update": "Mise à jour",
   "screen_preferences_title_download": "Téléchargement",
   "screen_preferences_label_language": "Langue",
+  "screen_preferences_setting_analytics": "Statistiques d'utilisation anonymes",
+  "screen_preferences_setting_analytics_desc": "Signale uniquement le lancement, l'activité et la version pour estimer le nombre d'utilisateurs. Aucun contenu de lecture ni information de compte. Désactivable à tout moment.",
   "screen_preferences_sample_title": "Chapitre d'exemple",
   "screen_preferences_sample_text": "Ceci est un texte d'exemple pour vous permettre de prévisualiser les paramètres de votre lecteur. Vous pouvez ajuster la taille de la police d'écriture à l'aide des contrôles ci-dessous.",
   "screen_preferences_sample_blockquotes": "Les citations et les autres éléments seront aussi le reflet de vos paramètres personnalisés.",

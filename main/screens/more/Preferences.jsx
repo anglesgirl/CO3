@@ -64,6 +64,7 @@ const PreferencesScreen = ({
   const [syncBookmarksToLibraryCategory, setSyncBookmarksToLibraryCategory] = useState("default");
   const [showChapterDate, setShowChapterDate] = useState(false);
   const [compactNotifications, setCompactNotifications] = useState(false);
+  const [analyticsEnabled, setAnalyticsEnabled] = useState(true);
   const [updateTime, setUpdateTime] = useState(1440);
   const [updateRestriction, setUpdateRestriction] = useState(3);
   const [categories, setCategories] = useState();
@@ -113,6 +114,7 @@ const PreferencesScreen = ({
 
         setSyncBookmarksToLibrary(jsonSettings.addBookmarksToCategory)
         setSyncBookmarksToLibraryCategory(jsonSettings.bookmarksCategory)
+        setAnalyticsEnabled(jsonSettings.analyticsEnabled !== false)
       }
     } catch (error) {
       console.error('Error loading settings:', error);
@@ -268,6 +270,12 @@ const PreferencesScreen = ({
 
   const handleLanguageChange = async lng => {
     await changeLanguage(lng);
+  };
+
+  const handleAnalyticsToggle = () => {
+    const newValue = !analyticsEnabled;
+    setAnalyticsEnabled(newValue);
+    saveJsonSettingsData({ analyticsEnabled: newValue });
   };
 
   const handleRestartOnboarding = () => {
@@ -466,6 +474,37 @@ const PreferencesScreen = ({
                 />
               ))}
             </CustomDropdown>
+          </View>
+
+          <View
+            style={[
+              styles.settingItem,
+              { borderBottomColor: activeTheme.borderColor },
+            ]}
+          >
+            <View style={styles.switchContainer}>
+              <View style={{ flex: 1, paddingRight: 12 }}>
+                <Text
+                  style={[{ color: activeTheme.textColor }, styles.settingText, { marginBottom: 4 }]}
+                >
+                  {t('screen_preferences_setting_analytics')}
+                </Text>
+                <Text style={{ fontSize: 12, color: activeTheme.secondaryTextColor }}>
+                  {t('screen_preferences_setting_analytics_desc')}
+                </Text>
+              </View>
+              <Switch
+                value={analyticsEnabled}
+                onValueChange={handleAnalyticsToggle}
+                thumbColor={
+                  analyticsEnabled ? activeTheme.primaryColor : '#f4f3f4'
+                }
+                trackColor={{
+                  false: '#767577',
+                  true: `${activeTheme.primaryColor}40`,
+                }}
+              />
+            </View>
           </View>
         </View>
 

@@ -25,6 +25,10 @@ const DEFAULT_SETTINGS = {
 
   addBookmarksToCategory: false,
   bookmarksCategory: "default",
+
+  // 匿名使用统计(启动/活跃心跳/版本,不含阅读内容)。默认开启,
+  // 用户可在 设置 → 通用 里关闭。
+  analyticsEnabled: true,
 };
 
 export async function getJsonSettings() {
