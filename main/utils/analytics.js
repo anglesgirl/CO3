@@ -85,14 +85,16 @@ export async function initAnalytics(enabled) {
 
   try {
     // v4.x: 使用构造函数创建实例。
-    // 注意: 不传 enableSessionReplay / sessionReplayConfig —— 未安装
-    // posthog-react-native-session-replay 原生插件时,这些选项可能
-    // 触发 native 模块调用导致闪退。会话回放功能等装好插件后再开。
+    // 关键: 传 customStorage 直接指定 AsyncStorage,绕过 SDK 内部的
+    // buildOptimisticAsyncStorage()——它会 require('expo-file-system'),
+    // 而本项目的 expo-file-system 没有原生模块,导致 requireNativeModule
+    // ('FileSystem') 抛 JavascriptException 闪退。
     posthog = new PostHogClass(POSTHOG_KEY, {
       host: POSTHOG_HOST,
       autocapture: false,        // 原则 1: 不自动采集,只发手动埋的事件
       maskAllText: true,         // 隐私: 遮挡文本
       captureScreenViews: false,
+      customStorage: AsyncStorage, // 显式指定存储,绕过 expo-file-system 检测
     });
 
     const id = await ensureDistinctId();
