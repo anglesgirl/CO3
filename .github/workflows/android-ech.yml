@@ -123,18 +123,16 @@ jobs:
           ls -la "$APK_DIR"
           test -f "$APK_DIR/app-arm64-v8a-release.apk"
           test -f "$APK_DIR/app-armeabi-v7a-release.apk"
-          BUILD_UTC=$(date -u +'%Y%m%d-%H%M%SZ')
+          cp "$APK_DIR/app-arm64-v8a-release.apk"   "CO3-Android-ECH-arm64-v8a.apk"
+          cp "$APK_DIR/app-armeabi-v7a-release.apk" "CO3-Android-ECH-armeabi-v7a.apk"
+          echo "apk_glob=CO3-Android-ECH-*.apk" >> "$GITHUB_OUTPUT"
           SHA_SHORT="${GITHUB_SHA::7}"
-          cp "$APK_DIR/app-arm64-v8a-release.apk"   "co3-reader-ECH-arm64-v8a-${BUILD_UTC}-${SHA_SHORT}.apk"
-          cp "$APK_DIR/app-armeabi-v7a-release.apk" "co3-reader-ECH-armeabi-v7a-${BUILD_UTC}-${SHA_SHORT}.apk"
-          echo "apk_glob=co3-reader-ECH-*-${BUILD_UTC}-${SHA_SHORT}.apk" >> "$GITHUB_OUTPUT"
-          echo "artifact_name=co3-reader-ECH-${BUILD_UTC}-${SHA_SHORT}" >> "$GITHUB_OUTPUT"
-          echo "Built 2 APKs (UTC build time: $BUILD_UTC)"
-          ls -la co3-reader-ECH-*.apk
+          echo "artifact_name=CO3-ECH-${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+          ls -la CO3-Android-ECH-*.apk
 
       - name: Verify ABIs in artifacts
         run: |
-          for apk in co3-reader-ECH-*.apk; do
+          for apk in CO3-Android-ECH-*.apk; do
             echo "=== $apk ==="
             unzip -l "$apk" > apk-files.txt
             if echo "$apk" | grep -q 'arm64-v8a'; then
