@@ -24,7 +24,6 @@ import { getAllPresets } from '../storage/jsonSearches';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useTranslation } from 'react-i18next';
 import { userErrorMessage } from '../utils/userError';
-import { track } from '../utils/analytics';
 
 const FilterIcon = ({ color, size }) => (
   <Icon name={'filter-list'} style={{ color: color }} size={size} />
@@ -49,7 +48,6 @@ const BrowseScreen = ({ currentTheme, viewMode = 'med', setScreens, screens, lib
   const slideAnim = useRef(new Animated.Value(Dimensions.get('window').height)).current;
 
   const openSearch = () => {
-    track('browse_search_open');
     setSearchMounted(true);
     Animated.timing(slideAnim, {
       toValue: 0,
@@ -118,8 +116,6 @@ const BrowseScreen = ({ currentTheme, viewMode = 'med', setScreens, screens, lib
       setError(null);
 
       const pageToLoad = reset ? 1 : currentPage + 1;
-
-      track('browse_load', { mode: tagMode ? 'tag' : 'filter', page: String(pageToLoad) });
 
       const result = isTagMode
         ? await fetchTagWorks(tagMode.tagName, appliedFilters, pageToLoad)

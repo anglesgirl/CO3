@@ -15,7 +15,6 @@ import {
   clearManualOverride,
   DEFAULT_DOH,
 } from '../../web/echKy';
-import { track } from '../../utils/analytics';
 
 /**
  * Network & Connection (ECH) settings.
@@ -41,7 +40,6 @@ export default function EchSection({ theme }) {
   }, []);
 
   const runTest = async () => {
-    track('ech_test');
     setTesting(true);
     setResult(null);
     try {
@@ -135,7 +133,6 @@ export default function EchSection({ theme }) {
           />
           <View style={styles.row}>
             {btn(t('ech_get_remote_doh'), async () => {
-              track('ech_doh_update', { source: 'remote' });
               try {
                 await setConfigDomain(cfgDomain);
                 const cfg = await fetchRemoteConfig(cfgDomain);
@@ -148,7 +145,6 @@ export default function EchSection({ theme }) {
               }
             })}
             {btn(t('ech_get_remote_ip'), async () => {
-              track('ech_ip_update', { source: 'remote' });
               try {
                 await setConfigDomain(cfgDomain);
                 const cfg = await fetchRemoteConfig(cfgDomain);
@@ -163,7 +159,6 @@ export default function EchSection({ theme }) {
             {btn(
               t('ech_reenable_auto'),
               async () => {
-                track('ech_auto_restore');
                 try {
                   await clearManualOverride();
                   await syncRemoteConfig();

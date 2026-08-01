@@ -20,9 +20,8 @@ import { CommentsScreen } from '../components/Reader/commentsScreen';
 import { getJsonSettings } from '../storage/jsonSettings';
 import Toast from 'react-native-toast-message';
 import { useTranslation } from 'react-i18next';
-import { translateHtmlCached, getTargetLang } from '../web/translate';
+import { translateHtmlCached } from '../web/translate';
 import { userErrorMessage } from '../utils/userError';
-import { track } from '../utils/analytics';
 
 const PULL_THRESHOLD = 150;
 const PROGRESS_SAVE_DEBOUNCE = 1000;
@@ -130,8 +129,6 @@ const ChapterReader = ({
       setShowTranslated(v => !v); // already have it — just toggle
       return;
     }
-    const targetLang = await getTargetLang();
-    track('chapter_translate', { target_lang: targetLang });
     setTranslating(true);
     try {
       const out = await translateHtmlCached(
@@ -378,7 +375,6 @@ const ChapterReader = ({
   );
 
   const handleForwardButton = useCallback(async () => {
-    track('chapter_next');
     if (hasNextChapter) {
       if (progressSaveTimeoutRef.current) clearTimeout(progressSaveTimeoutRef.current);
       if (!isIncognitoMode && scrollProgress > 0) {
@@ -390,7 +386,6 @@ const ChapterReader = ({
   }, [hasNextChapter, onNextChapter, isIncognitoMode, scrollProgress, workId, chapterID, progressDAO]);
 
   const handleBackButton = useCallback(async () => {
-    track('chapter_prev');
     if (hasPreviousChapter) {
       if (progressSaveTimeoutRef.current) clearTimeout(progressSaveTimeoutRef.current);
       if (!isIncognitoMode && scrollProgress > 0) {

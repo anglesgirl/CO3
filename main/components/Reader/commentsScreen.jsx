@@ -16,7 +16,6 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
 import UserInfoScreen from '../../screens/UserInfo';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
-import { track } from '../../utils/analytics';
 
 export const CommentsScreen = ({
   setCommentsVisible,
@@ -61,7 +60,6 @@ export const CommentsScreen = ({
     );
     setComments(p => [...p, ..._comments]);
     setLoading(false);
-    track('comments_view');
   };
 
   const renderAuthorPic = authorImg => {

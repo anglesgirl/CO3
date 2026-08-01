@@ -12,7 +12,6 @@ import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import CustomToast from '../../components/common/CustomToast';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { track } from '../../utils/analytics';
 
 export default function StorageScreen({
   route
@@ -52,7 +51,6 @@ export default function StorageScreen({
         </View>
         <TouchableOpacity
           onPress={() => {
-            track('export_db');
             exportDb(databaseObj)
               .then(() => {
                 Toast.show({

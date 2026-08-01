@@ -49,7 +49,6 @@ import { useTranslation } from 'react-i18next';
 import { StackActions, useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { userErrorMessage } from '../utils/userError';
-import { track } from '../utils/analytics';
 
 const NATIVE_DOWNLOAD_FORMATS = ['azw3', 'epub', 'mobi', 'pdf', 'html'];
 
@@ -137,7 +136,6 @@ const ChapterItem = React.memo(({ chapter, index, currentTheme, onPress, showDat
 
   const handleDownloadPress = async () => {
     if (isInQueue) return;
-    track('chapter_download', { action: isDownloadedFile ? 'remove' : 'add' });
     if (isDownloadedFile) {
       if (showDelete) {
         try {
@@ -644,7 +642,6 @@ const ChapterInfoScreen = ({ route }) => {
   }, [workId, libraryDAO]);
 
   const handleAddToLibrary = useCallback(async () => {
-    track('library_toggle', { action: inLibrary ? 'remove' : 'add' });
     if (inLibrary) {
       await showCategorySelection('remove');
     } else {
@@ -654,7 +651,6 @@ const ChapterInfoScreen = ({ route }) => {
 
   const handleLike = useCallback(async () => {
     if (likeLoading) return;
-    track('kudo_send', { work_id: String(work?.id || '') });
 
     setLikeLoading(true);
     try {
@@ -692,7 +688,6 @@ const ChapterInfoScreen = ({ route }) => {
   }, []);
 
   const handleBookmark = async () => {
-    track('bookmark_toggle', { action: 'add' });
     setMenuVisible(false);
     bookmark(work).then(() => {
       Alert.alert(
@@ -705,7 +700,6 @@ const ChapterInfoScreen = ({ route }) => {
   };
 
   const handleMarkForLater = async () => {
-    track('mark_for_later');
     setMenuVisible(false);
     markForLater(work).then(() => {
       showToast(t('screen_work_toast_marked_for_later'), 'success');
@@ -715,7 +709,6 @@ const ChapterInfoScreen = ({ route }) => {
   };
 
   const handleChapterPress = useCallback(async (chapter, originalIndex) => {
-    track('chapter_open', { work_id: String(work?.id || '') });
     try {
       const existingWork = await workDAO.get(workId);
       if (!existingWork) {
@@ -1148,7 +1141,6 @@ const ChapterInfoScreen = ({ route }) => {
   }
 
   async function downloadNextChapters(nb) {
-    track('chapter_download_batch', { count: nb === -2 ? 'all' : String(nb) });
     setDownloadMenuVisible(false);
     let startIndex = 0;
 
@@ -1200,7 +1192,6 @@ const ChapterInfoScreen = ({ route }) => {
   }
 
   async function deleteAllChapters() {
-    track('chapter_download_delete_all');
     setDownloadMenuVisible(false);
     for (const chapter of chapters) {
       if (await isDownloaded(workId, chapter.id)) {
@@ -1210,7 +1201,6 @@ const ChapterInfoScreen = ({ route }) => {
   }
 
   const handleNativeDownload = async (format) => {
-    track('work_download_native', { format });
     const safeName = (work?.title || `work_${workId}`).replace(/[/\\?%*:|"<>]/g, '_');
     const filename = `${safeName}.${format}`;
 

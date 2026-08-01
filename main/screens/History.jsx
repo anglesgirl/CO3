@@ -20,7 +20,6 @@ import WorkScreen from './workScreen';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { firstHistoryItemForDoubleTap } from '../utils/historyNavigation';
-import { track } from '../utils/analytics';
 
 const HistoryScreen = ({
   currentTheme,
@@ -216,7 +215,6 @@ const HistoryScreen = ({
             try {
               if (historyDAO) {
                 await historyDAO.deleteAll();
-                track('history_clear');
                 setHistory([]);
                 setTotalCount(0);
                 setHasMore(false);

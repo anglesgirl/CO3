@@ -19,7 +19,6 @@ import {
   UPDATE_RESTRICTIONS,
 } from '../../storage/jsonSettings';
 import { themes } from '../../utils/themes';
-import { track } from '../../utils/analytics';
 import CustomDropdown from '../../components/common/CustomDropdown';
 import { keepLocalCopy, pick } from '@react-native-documents/picker';
 import { useTranslation } from 'react-i18next';
@@ -162,7 +161,6 @@ const PreferencesScreen = ({
     const clampedValue = Math.min(Math.max(value, 0.5), 3);
     setFontSize(clampedValue);
     saveDbSettings({ fontSize: clampedValue });
-    track('pref_font_size', { size: String(value) });
   };
 
   const toggleCustomSize = () => {
@@ -200,7 +198,6 @@ const PreferencesScreen = ({
     setLocalTheme(newTheme);
     saveDbSettings({ theme: newTheme });
     if (setTheme) setTheme(newTheme);
-    track('pref_theme', { theme: newTheme });
   };
 
   const handleViewModeChange = newMode => {
@@ -231,7 +228,6 @@ const PreferencesScreen = ({
     const newValue = !allowSelect;
     setAllowSelect(newValue);
     saveJsonSettingsData({ allowSelectingText: newValue });
-    track('toggle_text_select', { enabled: newValue });
   };
 
   const handlePreferHtml = () => {
@@ -264,7 +260,6 @@ const PreferencesScreen = ({
   const handleDownloadWhileReadinChange = value => {
     setDownloadWhileReading(value);
     saveJsonSettingsData({ downloadWhileReading: value });
-    track('pref_download_while_reading', { value: String(value) });
   };
 
   const handleDownloadOnUpdateChange = () => {
@@ -275,14 +270,12 @@ const PreferencesScreen = ({
 
   const handleLanguageChange = async lng => {
     await changeLanguage(lng);
-    track('pref_language', { lng });
   };
 
   const handleAnalyticsToggle = () => {
     const newValue = !analyticsEnabled;
     setAnalyticsEnabled(newValue);
     saveJsonSettingsData({ analyticsEnabled: newValue });
-    track('pref_analytics', { enabled: String(newValue) });
   };
 
   const handleRestartOnboarding = () => {
