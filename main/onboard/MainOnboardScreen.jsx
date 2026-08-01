@@ -3,6 +3,7 @@ import { SafeAreaView, StyleSheet, View } from 'react-native';
 import { useState } from 'react';
 import Step1 from './Screens/Step1Screen';
 import Step3 from './Screens/Step3Screen';
+import { track } from '../utils/analytics';
 
 export default function MainOnboardScreen({
   setCurrentTheme,
@@ -12,6 +13,11 @@ export default function MainOnboardScreen({
   onFinish,
 }) {
   const [screen, setScreen] = useState(0);
+
+  const handleFinish = (...args) => {
+    track('onboard_complete');
+    onFinish?.(...args);
+  };
 
   const renderScreen = () => {
     switch (screen) {
@@ -24,7 +30,7 @@ export default function MainOnboardScreen({
             setScreen={setScreen}
             theme={theme}
             setTheme={setTheme}
-            onFinish={onFinish}
+            onFinish={handleFinish}
           />
         );
       default:

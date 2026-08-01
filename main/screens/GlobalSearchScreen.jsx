@@ -5,7 +5,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { track } from '../utils/analytics';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import autoComplete from '../web/browse/autoComplete';
 import { fetchFilteredWorks } from '../web/browse/fetchWorks';
@@ -289,6 +290,7 @@ function EmptyState({ currentTheme, t }) {
 export default function GlobalSearchScreen({ currentTheme, searchTerm, setActiveScreen, libraryDAO, setScreens, settingsDAO, workDAO, historyDAO, progressDAO, kudoHistoryDAO, chapterDAO, openTagSearch, setSelectedPreset, setSelectedCollection }) {
   const { t } = useTranslation();
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState(searchTerm);
+  const lastTrackedTermRef = useRef('');
 
   const [categoriesResults, setCategoriesResults] = useState();
   const [presetResults, setPresetResults] = useState([]);
@@ -343,6 +345,11 @@ export default function GlobalSearchScreen({ currentTheme, searchTerm, setActive
       if (!term) {
         setTags([]); setFandoms([]); setShips([]); setChars([]); setFreeform([]);
         return;
+      }
+
+      if (term !== lastTrackedTermRef.current) {
+        lastTrackedTermRef.current = term;
+        track('search_global');
       }
 
       searchCategories(term).then(setCategoriesResults)

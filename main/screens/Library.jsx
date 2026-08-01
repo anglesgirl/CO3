@@ -18,6 +18,7 @@ import { getJsonSettings } from '../storage/jsonSettings';
 import ReadLaterScreen from './more/ReadLaterScreen';
 import { useTranslation } from 'react-i18next';
 import { userErrorMessage } from '../utils/userError';
+import { track } from '../utils/analytics';
 import { useNavigation } from '@react-navigation/native';
 
 const SortIcon = ({ color, size }) => (
@@ -106,6 +107,7 @@ const LibraryScreen = ({
 
   useEffect(() => {
     const subscription = DeviceEventEmitter.addListener('doubleTap', (id) => {
+      track('library_open_work');
       navigation.push("ReadLaterScreen", {
         setScreens: setScreens,
         currentTheme: currentTheme,

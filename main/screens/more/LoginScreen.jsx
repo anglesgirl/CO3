@@ -28,6 +28,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppContext } from '../../app';
+import { track } from '../../utils/analytics';
 
 const LoginScreen = ({ route }) => {
   const { currentTheme } = useContext(AppContext);
@@ -140,6 +141,7 @@ const LoginScreen = ({ route }) => {
       return;
     }
 
+    track('login_attempt');
     setIsLoading(true);
     try {
       const sessionToken = await login(username, password);
@@ -166,8 +168,10 @@ const LoginScreen = ({ route }) => {
 
         setIsLoggedIn(true);
         await setLastLogin();
+        track('login_success');
         showAlert(t('general_success'), t('screen_account_login_success'));
       } else {
+        track('login', { status: 'failed' });
         showAlert(
           t('screen_account_login_failed'),
           t('screen_account_login_failed_invalid_creds_or_server_error'),
@@ -185,6 +189,7 @@ const LoginScreen = ({ route }) => {
   };
 
   const handleLogout = async () => {
+    track('logout');
     try {
       await deleteCredsToken();
       await deleteCredsPasswd();

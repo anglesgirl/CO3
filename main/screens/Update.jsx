@@ -15,6 +15,7 @@ import { run } from '../web/updater';
 import Toast from 'react-native-toast-message';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
+import { track } from '../utils/analytics';
 
 const UpdateScreen = ({
   currentTheme,
@@ -81,6 +82,7 @@ const UpdateScreen = ({
   };
 
   const handleManualUpdate = async () => {
+    track('update_check_manual');
     setRefreshing(true);
     try {
       await run(databaseObj);
@@ -143,6 +145,7 @@ const UpdateScreen = ({
   };
 
   const handleUpdatePress = async update => {
+    track('update_open_work');
     let loadChapterIndex = null;
 
     if (update.chapterNumber) {

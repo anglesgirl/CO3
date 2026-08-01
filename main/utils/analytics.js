@@ -1,14 +1,16 @@
 /**
  * 匿名使用统计封装 (PostHog)。
  *
- * 设计要点:
- * - PostHog 的 Project API Key 在 POSTHOG_KEY 为空时,所有方法 no-op,
- *   不报错也不影响 App 运行。注册拿到 Key 后填入 constant.js 即可启用。
- * - posthog-react-native v4.x 使用 `new PostHog(apiKey, options)` 构造函数
- *   初始化,而非旧版的 `PostHog.setup()` 静态方法。
+ * 设计原则:
+ * 1. 普通页面/点击事件随便打,避免循环内疯狂打点;
+ * 2. Session 会话回放采样 8% 用户,不 100% 开启;
+ * 3. 超长属性做字符串截断 (max 200 字符),禁止把整篇小说丢进埋点;
+ * 4. 提供开关,允许用户关闭数据采集 (analyticsEnabled);
+ * 5. 使用自有域名代理上报 (e.anglesya.win),减少丢事件;
+ * 6. 断网时 SDK 自动用 AsyncStorage 本地缓存,网络恢复后补发。
+ *
+ * - posthog-react-native v4.x 使用 `new PostHog(apiKey, options)` 构造函数。
  * - distinct_id 用本地随机 UUID,不关联任何 AO3 账号或 PII。
- * - 仅上报:启动、活跃心跳、App 版本、系统、语言。不采集阅读内容。
- * - 卸载推断:后台按 distinct_id 的"最后心跳时间 > N 天"判断。
  */
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -21,6 +23,8 @@ let heartbeatTimer = null;
 let distinctId = null;
 
 const DISTINCT_ID_KEY = 'analytics_distinct_id';
+const SESSION_REPLAY_SAMPLE_RATE = 0.08; // 8% 用户开启会话回放
+const MAX_PROP_LENGTH = 200;             // 属性值最大长度
 
 // 动态加载 SDK,失败则保持 null(全程 no-op)。
 try {
@@ -58,6 +62,22 @@ function deviceProps() {
   };
 }
 
+/**
+ * 截断超长属性值,防止把整篇小说/章节内容丢进埋点。
+ * 字符串超过 MAX_PROP_LENGTH 时截断并加省略号。
+ */
+function truncateProps(props) {
+  const out = {};
+  for (const [key, value] of Object.entries(props)) {
+    if (typeof value === 'string' && value.length > MAX_PROP_LENGTH) {
+      out[key] = value.slice(0, MAX_PROP_LENGTH) + '…';
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
 /** 初始化统计。enabled=false 时跳过(尊重用户关闭)。 */
 export async function initAnalytics(enabled) {
   if (!enabled) return;
@@ -65,12 +85,21 @@ export async function initAnalytics(enabled) {
   if (!PostHogClass || !POSTHOG_KEY) return; // Key 未填 → no-op
 
   try {
-    // v4.x: 使用构造函数创建实例,而非 setup() 静态方法。
+    // 原则 2: 以 8% 概率开启会话回放,而非全量。
+    const replayEnabled = Math.random() < SESSION_REPLAY_SAMPLE_RATE;
+
+    // v4.x: 使用构造函数创建实例。
     posthog = new PostHogClass(POSTHOG_KEY, {
       host: POSTHOG_HOST,
-      autocapture: false, // 不自动采集,只发我们埋的事件
-      maskAllText: true,
+      autocapture: false,        // 原则 1: 不自动采集,只发手动埋的事件
+      maskAllText: true,         // 隐私: 遮挡文本
       captureScreenViews: false,
+      enableSessionReplay: replayEnabled,
+      sessionReplayConfig: {
+        maskAllTextInputs: true,
+        maskAllImages: true,
+        maskAllSandboxedViews: true,
+      },
     });
 
     const id = await ensureDistinctId();
@@ -84,11 +113,14 @@ export async function initAnalytics(enabled) {
   }
 }
 
-/** 上报事件。未初始化时 no-op。 */
+/**
+ * 上报事件。未初始化时 no-op。
+ * 原则 3: 所有属性值自动截断到 200 字符,防止超长内容。
+ */
 export function track(event, properties = {}) {
   if (!initialized || !posthog) return;
   try {
-    posthog.capture(event, { ...properties, ...deviceProps() });
+    posthog.capture(event, { ...truncateProps(properties), ...deviceProps() });
   } catch (e) {
     /* 静默失败,统计不应影响 App */
   }
