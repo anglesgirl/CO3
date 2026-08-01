@@ -95,7 +95,7 @@ function startProxy() {
   return echBasePromise;
 }
 
-function getEchBase() {
+export function getEchBase() {
   return echBasePromise || startProxy();
 }
 

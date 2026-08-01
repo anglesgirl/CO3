@@ -10,7 +10,7 @@ const AO3_HOSTS = new Set(['archiveofourown.org', 'www.archiveofourown.org']);
 /**
  * 如果 ECH 代理可用，把 AO3 直链改写为本地代理 URL，
  * 这样 WebView 也不裸连 archiveofourown.org（否则被墙重置 -6）。
- * 非 AO3 的 URL 原样返回。
+ * 非 AO3 的 URL 或代理不可用时原样返回（不 throw）。
  */
 async function rewriteForEch(url) {
   try {
