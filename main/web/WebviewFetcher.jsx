@@ -94,8 +94,11 @@ export default function WebviewFetcher() {
 
   const loadCurrent = () => {
     setVisible(false);
+    const wvStart = Date.now();
     // ECH 代理可用时，WebView 也走代理，避免直连被墙重置。
     rewriteForEch(currentRef.current.url).then(({ uri, headers }) => {
+      const proxied = uri !== currentRef.current.url;
+      console.log(`[WV] loading ${currentRef.current.url} → ${proxied ? 'proxy' : 'direct'} (${Date.now() - wvStart}ms)`);
       setSource(headers ? { uri, headers } : { uri });
     });
   };

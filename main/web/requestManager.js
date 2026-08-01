@@ -123,39 +123,46 @@ export default async function getUrl(url, noWebview = false, options = {}) {
   // 只有当 ky 返回 CF 挑战页面时才需要 WebView 来执行 JS 挑战。
   // 之前的逻辑是 CF 模式一开就完全跳过 ky 直走 WebView，导致 WebView
   // 裸连 archiveofourown.org 被 GFW 重置 (-6 ERR_CONNECTION_RESET)。
+  const reqStart = Date.now();
   try {
     const html = await ky.get(url, options).text();
+    console.log(`[NET] ${url} → ${html.length} chars in ${Date.now() - reqStart}ms (ECH)`);
 
     if (isCFChallenge(html)) {
-      console.log(`CF challenge detected for ${url}, falling back to WebView`);
+      console.log(`[NET] CF challenge detected for ${url} after ${Date.now() - reqStart}ms`);
       await enableCFMode(hostname);
       return fetchViaWebView(url, { cfWarning: true });
     }
 
-    console.log(`fetched ${url} via ky (ECH).`);
     return html;
   } catch (err) {
+    const elapsed = Date.now() - reqStart;
+    console.log(`[NET] ${url} FAILED in ${elapsed}ms: ${err?.message ?? err}`);
+
     // CF 挑战错误码：WebView 能解 JS 挑战，启用 CF 模式。
     if (cloudflareErrorCodes.includes(err?.response?.status)) {
+      console.log(`[NET] CF error ${err?.response?.status}, trying WebView`);
       await enableCFMode(hostname);
       return fetchViaWebView(url, { cfWarning: true });
     }
 
     // 超时：不永久切换 CF 模式。ECH 握手首次可能慢，给它多一次机会。
     if (err instanceof TimeoutError) {
-      console.log(`Timeout for ${url}, retrying with longer timeout...`);
+      console.log(`[NET] Timeout after ${elapsed}ms, retrying with 60s timeout...`);
+      const retryStart = Date.now();
       try {
         const html = await ky.get(url, { ...options, timeout: 60000 }).text();
+        console.log(`[NET] ${url} → ${html.length} chars in ${Date.now() - retryStart}ms (ECH retry)`);
         if (isCFChallenge(html)) {
           await enableCFMode(hostname);
           return fetchViaWebView(url, { cfWarning: true });
         }
-        console.log(`fetched ${url} via ky (ECH) on retry.`);
         return html;
       } catch (retryErr) {
+        console.log(`[NET] Retry also failed in ${Date.now() - retryStart}ms: ${retryErr?.message ?? retryErr}`);
         // 重试仍失败 → WebView 兜底（现在 WebView 也会走 ECH 代理）
         if (!noWebview) {
-          console.log(`Retry failed, falling back to WebView for ${url}`);
+          console.log(`[NET] Falling back to WebView for ${url}`);
           return fetchViaWebView(url);
         }
         throw retryErr;
@@ -164,10 +171,14 @@ export default async function getUrl(url, noWebview = false, options = {}) {
 
     // 其他网络错误：WebView 兜底（走 ECH），避免直接抛错影响体验。
     if (!noWebview) {
-      console.log(`ky error for ${url}: ${err?.message ?? err}, trying WebView`);
+      console.log(`[NET] Trying WebView fallback for ${url}`);
       try {
-        return await fetchViaWebView(url);
+        const wvStart = Date.now();
+        const result = await fetchViaWebView(url);
+        console.log(`[NET] WebView fallback OK in ${Date.now() - wvStart}ms`);
+        return result;
       } catch (wvErr) {
+        console.log(`[NET] WebView fallback also failed: ${wvErr?.message ?? wvErr}`);
         throw err; // WebView 也失败，抛原始错误
       }
     }

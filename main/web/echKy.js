@@ -81,14 +81,16 @@ function startProxy() {
     const mod = NativeModules.EchProxy;
     if (!mod || typeof mod.start !== 'function') return null;
     try {
+      const t0 = Date.now();
       const doh = (await getDohCandidates()).join(',');
       const ips = await getCustomIPs();
+      console.log(`[ECH] starting proxy (doh=${doh || '(none)'}, ip=${ips || '(dns)'})`);
       const port = await mod.start(0, doh, ips); // 0 = auto-pick a free port
       const base = `http://127.0.0.1:${port}`;
-      console.log(`[ECH] proxy started on ${base} (doh=${doh || '(none)'}, ip=${ips || '(dns)'})`);
+      console.log(`[ECH] proxy started on ${base} in ${Date.now() - t0}ms`);
       return base;
     } catch (e) {
-      console.warn('[ECH] proxy failed to start, using direct requests:', e?.message ?? e);
+      console.warn(`[ECH] proxy failed to start in ${Date.now() - t0}ms:`, e?.message ?? e);
       return null;
     }
   })();
@@ -362,7 +364,14 @@ const echKy = ky.create({
   hooks: {
     beforeRequest: [
       async (request) => {
-        const base = await getEchBase();
+        const t0 = Date.now();
+        let base;
+        try {
+          base = await getEchBase();
+        } catch (e) {
+          console.log(`[ECH] getEchBase failed in ${Date.now() - t0}ms: ${e?.message ?? e}`);
+          throw e;
+        }
         let u;
         try {
           u = new URL(request.url);
@@ -372,13 +381,22 @@ const echKy = ky.create({
         if (u.protocol !== 'https:') return;
         if (!base) {
           if (Platform.OS === 'android') {
+            console.log(`[ECH] proxy unavailable, refusing direct HTTPS to ${u.hostname}`);
             throw new Error('ECH proxy unavailable; refusing direct HTTPS request');
           }
           return;
         }
         const rewritten = new Request(base + u.pathname + u.search, request);
         rewritten.headers.set('X-Ech-Target', u.hostname);
+        console.log(`[ECH] → ${u.hostname}${u.pathname} via proxy ${base} (waited ${Date.now() - t0}ms)`);
         return rewritten;
+      },
+    ],
+    afterResponse: [
+      async (request, options, response) => {
+        const url = new URL(request.url);
+        console.log(`[ECH] ← ${response.status} ${url.hostname}${url.pathname}`);
+        return response;
       },
     ],
   },
