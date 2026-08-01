@@ -12,6 +12,7 @@ import {
   setConfigDomain,
   fetchRemoteConfig,
   syncRemoteConfig,
+  refreshRemoteConfig,
   clearManualOverride,
   DEFAULT_DOH,
 } from '../../web/echKy';
@@ -161,7 +162,7 @@ export default function EchSection({ theme }) {
               async () => {
                 try {
                   await clearManualOverride();
-                  await syncRemoteConfig();
+                  await refreshRemoteConfig(); // 清除缓存，强制从远程获取最新配置
                   setDohInput(await getDoh());
                   setIpsInput(await getCustomIPs());
                   flash(true, t('ech_auto_restored'));

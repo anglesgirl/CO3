@@ -37,6 +37,10 @@ const CONFIG_DOMAIN_KEY = 'ech_config_domain';
 const MANUAL_KEY = 'ech_manual_override';
 // Last remote values we applied, so we only restart when they actually change.
 const LAST_REMOTE_KEY = 'ech_last_remote';
+// 远程配置缓存时间戳 + TTL。缓存未过期时直接用 AsyncStorage 里的配置启动代理，
+// 不发网络请求获取 TXT 记录。TTL 6 小时：兼顾及时性和启动速度。
+const CONFIG_CACHE_TS_KEY = 'ech_config_cache_ts';
+const CONFIG_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 let echBasePromise = null; // Promise<string|null> — memoised
 
@@ -103,11 +107,9 @@ export function getEchBase() {
 
 // Eagerly warm up the proxy so it's ready before the first AO3 request.
 //
-// 关键: 先同步远程配置，再启动代理。
-// 之前两个并行执行，代理先用旧配置启动，远程配置拿到新IP后 restartProxy()，
-// 导致代理被杀掉重建。新代理用了有问题的自定义IP → 525错误。
-// 现在先拿到远程配置写入 AsyncStorage，再启动代理，一步到位不重启。
-// syncRemoteConfig 有 5 秒超时，超时则用缓存/默认配置启动。
+// 流程: syncRemoteConfig() 先检查缓存 → 缓存有效则秒回 → 代理用缓存配置启动。
+// 缓存过期才发 DoH 请求获取最新 TXT 记录，拿到后如果配置变了才重启代理。
+// syncRemoteConfig 有 5 秒超时，超时则用缓存/默认配置启动代理，不阻塞。
 export function initEch() {
   (async () => {
     try {
@@ -137,6 +139,9 @@ function isValidIPList(s) {
 // syncRemoteConfig pulls the operator's TXT record and applies it silently.
 // Skipped entirely when the user has set things by hand. Failures are ignored:
 // we keep whatever settings already work.
+//
+// 缓存策略: TTL 6 小时。缓存未过期时直接跳过网络获取，用 AsyncStorage 里
+// 已有的配置。过期才发 DoH 请求拿最新 TXT 记录。这样启动时不用等网络。
 export async function syncRemoteConfig() {
   if (Platform.OS !== 'android') return;
   let domain = await getConfigDomain();
@@ -150,11 +155,28 @@ export async function syncRemoteConfig() {
     return;
   }
 
+  // --- 缓存检查 ---
+  let cacheTs = 0;
+  try {
+    cacheTs = parseInt(await AsyncStorage.getItem(CONFIG_CACHE_TS_KEY) || '0', 10);
+  } catch {}
+  const cacheAge = Date.now() - cacheTs;
+  if (cacheTs > 0 && cacheAge < CONFIG_CACHE_TTL_MS) {
+    console.log(`[ECH] config cache valid (${Math.floor(cacheAge / 1000 / 60)}min old, TTL ${CONFIG_CACHE_TTL_MS / 1000 / 60}min) — skipping network fetch`);
+    return; // 缓存未过期，AsyncStorage 里的配置就是最新的，直接用
+  }
+  console.log(`[ECH] config cache ${cacheTs > 0 ? `expired (${Math.floor(cacheAge / 1000 / 60)}min old)` : 'empty'} — fetching from remote`);
+
   let cfg;
   try {
     cfg = await fetchRemoteConfig(domain);
   } catch (e) {
     console.log('[ECH] remote config unavailable:', e?.message ?? e);
+    // 获取失败但缓存存在：刷新缓存时间戳，给它续命，避免频繁重试
+    if (cacheTs > 0) {
+      await AsyncStorage.setItem(CONFIG_CACHE_TS_KEY, String(Date.now()));
+      console.log('[ECH] fetch failed, extending cache TTL to avoid retry storm');
+    }
     return; // keep last known-good settings
   }
 
@@ -172,7 +194,7 @@ export async function syncRemoteConfig() {
   try {
     prev = JSON.parse((await AsyncStorage.getItem(LAST_REMOTE_KEY)) || '{}');
   } catch {}
-  if (prev.doh === next.doh && prev.doh2 === next.doh2 && prev.doh3 === next.doh3 && prev.ip === next.ip && prev.tr === next.tr) return;
+  const changed = prev.doh !== next.doh || prev.doh2 !== next.doh2 || prev.doh3 !== next.doh3 || prev.ip !== next.ip || prev.tr !== next.tr;
 
   if (next.doh) await AsyncStorage.setItem(DOH_KEY, next.doh);
   if (next.doh2) await AsyncStorage.setItem(DOH2_KEY, next.doh2);
@@ -181,10 +203,19 @@ export async function syncRemoteConfig() {
   // Translation endpoint lives in translate.js but ships through the same record.
   if (next.tr) await AsyncStorage.setItem('translate_endpoint', next.tr);
   await AsyncStorage.setItem(LAST_REMOTE_KEY, JSON.stringify(next));
+  await AsyncStorage.setItem(CONFIG_CACHE_TS_KEY, String(Date.now()));
   console.log('[ECH] applied remote config:', JSON.stringify(next));
 
   // Only the proxy settings require a restart.
-  if (next.doh !== prev.doh || next.doh2 !== prev.doh2 || next.doh3 !== prev.doh3 || next.ip !== prev.ip) await restartProxy();
+  if (changed && (next.doh !== prev.doh || next.doh2 !== prev.doh2 || next.doh3 !== prev.doh3 || next.ip !== prev.ip)) {
+    await restartProxy();
+  }
+}
+
+// 手动刷新远程配置（用户在设置页面点击"更新"时调用）。清除缓存时间戳，强制网络获取。
+export async function refreshRemoteConfig() {
+  await AsyncStorage.removeItem(CONFIG_CACHE_TS_KEY);
+  return syncRemoteConfig();
 }
 
 // echUrl rewrites an AO3 URL so it goes through the local ECH proxy. Use it for
@@ -277,11 +308,12 @@ async function restartProxy() {
 }
 
 // 525 = SSL handshake failed。自定义IP可能不支持ECH或已失效。
-// 清除自定义IP，用DNS重新启动代理，避免持续525导致每次请求都走WebView兜底。
+// 清除自定义IP和缓存，用DNS重新启动代理，避免持续525导致每次请求都走WebView兜底。
 // 返回新的 echBase，调用方可以用它重试请求。
 export async function recoverFromBadIPs() {
-  console.log('[ECH] 525 detected — clearing custom IPs, restarting with DNS');
+  console.log('[ECH] 525 detected — clearing custom IPs & cache, restarting with DNS');
   await AsyncStorage.removeItem(IP_KEY);
+  await AsyncStorage.removeItem(CONFIG_CACHE_TS_KEY); // 清缓存，下次启动重新获取
   return restartProxy();
 }
 
