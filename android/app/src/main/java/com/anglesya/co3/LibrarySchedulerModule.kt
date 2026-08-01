@@ -1,4 +1,4 @@
-package com.xiaoyaco3
+package com.anglesya.co3
 
 import androidx.work.*
 import com.facebook.react.bridge.ReactApplicationContext

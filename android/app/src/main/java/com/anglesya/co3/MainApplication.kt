@@ -1,4 +1,4 @@
-package com.xiaoyaco3
+package com.anglesya.co3
 
 import android.app.Application
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -10,7 +10,7 @@ import com.facebook.react.ReactNativeHost
 import com.facebook.react.ReactPackage
 import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
 import com.facebook.react.defaults.DefaultReactNativeHost
-import com.xiaoyaco3.export.FileExportPackage
+import com.anglesya.co3.export.FileExportPackage
 import com.swmansion.rnscreens.RNScreensPackage;
 
 class MainApplication : Application(), ReactApplication {
@@ -28,7 +28,7 @@ class MainApplication : Application(), ReactApplication {
                 // NativeModules.EchProxy being absent gracefully.
                 try {
                     @Suppress("UNCHECKED_CAST")
-                    val pkg = Class.forName("com.xiaoyaco3.ech.EchProxyPackage")
+                    val pkg = Class.forName("com.anglesya.co3.ech.EchProxyPackage")
                         .getDeclaredConstructor()
                         .newInstance() as ReactPackage
                     add(pkg)

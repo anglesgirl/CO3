@@ -1,4 +1,4 @@
-package com.xiaoyaco3
+package com.anglesya.co3
 
 import android.content.Context
 import android.content.Intent

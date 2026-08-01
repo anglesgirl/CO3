@@ -7,10 +7,10 @@ const read = relativePath =>
 describe('Android application identity', () => {
   it('uses the requested application ID and native package', () => {
     const gradle = read('android/app/build.gradle');
-    const application = read('android/app/src/main/java/com/xiaoyaco3/MainApplication.kt');
-    expect(gradle).toContain('namespace "com.xiaoyaco3"');
-    expect(gradle).toContain('applicationId "com.xiaoyaco3"');
-    expect(application).toContain('package com.xiaoyaco3');
+    const application = read('android/app/src/main/java/com/anglesya/co3/MainApplication.kt');
+    expect(gradle).toContain('namespace "com.anglesya.co3"');
+    expect(gradle).toContain('applicationId "com.anglesya.co3"');
+    expect(application).toContain('package com.anglesya.co3');
   });
 
   it('uses the supplied logo for adaptive icons', () => {

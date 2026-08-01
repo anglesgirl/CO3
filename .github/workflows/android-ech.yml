@@ -115,20 +115,11 @@ jobs:
           ls -la "$APK_DIR"
           BUILD_UTC=$(date -u +'%Y%m%d-%H%M%SZ')
           SHA_SHORT="${GITHUB_SHA::7}"
-          ARTIFACT_NAME="xiaoyaco3-ECH-${BUILD_UTC}-${SHA_SHORT}"
-          mkdir -p apk-out
-          for ABI in arm64-v8a armeabi-v7a x86 x86_64; do
-            SRC="$APK_DIR/app-${ABI}-release.apk"
-            if [ -f "$SRC" ]; then
-              DST="apk-out/xiaoyaco3-ECH-${ABI}-${BUILD_UTC}-${SHA_SHORT}.apk"
-              mv "$SRC" "$DST"
-              echo "Built $DST"
-            else
-              echo "WARNING: $SRC not found"
-            fi
-          done
-          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
-          ls -la apk-out/
+          APK_NAME="co3-reader-ECH-arm64-v8a-${BUILD_UTC}-${SHA_SHORT}.apk"
+          mv "$APK_DIR/app-arm64-v8a-release.apk" "$APK_NAME"
+          echo "apk_name=$APK_NAME" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=co3-reader-ECH-${BUILD_UTC}-${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+          echo "Built $APK_NAME (UTC build time: $BUILD_UTC)"
 
       - name: Verify each APK has correct native libs
         run: |
