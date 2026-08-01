@@ -4,8 +4,8 @@
  * 设计要点:
  * - PostHog 的 Project API Key 在 POSTHOG_KEY 为空时,所有方法 no-op,
  *   不报错也不影响 App 运行。注册拿到 Key 后填入 constant.js 即可启用。
- * - 通过动态 require 加载 posthog-react-native;SDK 未安装或原生未链接时
- *   降级为 no-op,绝不崩溃。
+ * - posthog-react-native v4.x 使用 `new PostHog(apiKey, options)` 构造函数
+ *   初始化,而非旧版的 `PostHog.setup()` 静态方法。
  * - distinct_id 用本地随机 UUID,不关联任何 AO3 账号或 PII。
  * - 仅上报:启动、活跃心跳、App 版本、系统、语言。不采集阅读内容。
  * - 卸载推断:后台按 distinct_id 的"最后心跳时间 > N 天"判断。
@@ -14,7 +14,8 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { POSTHOG_KEY, POSTHOG_HOST, HEARTBEAT_INTERVAL_MS } from '../constant';
 
-let PostHog = null;
+let PostHogClass = null;
+let posthog = null;       // PostHog 实例 (v4.x)
 let initialized = false;
 let heartbeatTimer = null;
 let distinctId = null;
@@ -24,9 +25,9 @@ const DISTINCT_ID_KEY = 'analytics_distinct_id';
 // 动态加载 SDK,失败则保持 null(全程 no-op)。
 try {
   // eslint-disable-next-line global-require
-  PostHog = require('posthog-react-native').default;
+  PostHogClass = require('posthog-react-native').default;
 } catch (e) {
-  PostHog = null;
+  PostHogClass = null;
 }
 
 async function ensureDistinctId() {
@@ -61,30 +62,33 @@ function deviceProps() {
 export async function initAnalytics(enabled) {
   if (!enabled) return;
   if (initialized) return;
-  if (!PostHog || !POSTHOG_KEY) return; // Key 未填 → no-op
+  if (!PostHogClass || !POSTHOG_KEY) return; // Key 未填 → no-op
 
   try {
-    const id = await ensureDistinctId();
-    await PostHog.setup(POSTHOG_KEY, {
+    // v4.x: 使用构造函数创建实例,而非 setup() 静态方法。
+    posthog = new PostHogClass(POSTHOG_KEY, {
       host: POSTHOG_HOST,
       autocapture: false, // 不自动采集,只发我们埋的事件
       maskAllText: true,
       captureScreenViews: false,
     });
+
+    const id = await ensureDistinctId();
     if (id) {
-      PostHog.identify(id, deviceProps());
+      posthog.identify(id, deviceProps());
     }
     initialized = true;
   } catch (e) {
+    console.warn('[Analytics] init failed:', e?.message ?? e);
     initialized = false;
   }
 }
 
 /** 上报事件。未初始化时 no-op。 */
 export function track(event, properties = {}) {
-  if (!initialized || !PostHog) return;
+  if (!initialized || !posthog) return;
   try {
-    PostHog.capture(event, { ...properties, ...deviceProps() });
+    posthog.capture(event, { ...properties, ...deviceProps() });
   } catch (e) {
     /* 静默失败,统计不应影响 App */
   }
@@ -111,8 +115,8 @@ export function stopHeartbeat() {
 /** 用户在设置里关闭统计时,重置状态并 opt out。 */
 export function disableAnalytics() {
   stopHeartbeat();
-  if (PostHog && initialized) {
-    try { PostHog.optOut(); } catch (e) { /* ignore */ }
+  if (posthog && initialized) {
+    try { posthog.optOut(); } catch (e) { /* ignore */ }
   }
   initialized = false;
 }
