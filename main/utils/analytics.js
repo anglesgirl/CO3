@@ -23,7 +23,6 @@ let heartbeatTimer = null;
 let distinctId = null;
 
 const DISTINCT_ID_KEY = 'analytics_distinct_id';
-const SESSION_REPLAY_SAMPLE_RATE = 0.08; // 8% 用户开启会话回放
 const MAX_PROP_LENGTH = 200;             // 属性值最大长度
 
 // 动态加载 SDK,失败则保持 null(全程 no-op)。
@@ -85,21 +84,15 @@ export async function initAnalytics(enabled) {
   if (!PostHogClass || !POSTHOG_KEY) return; // Key 未填 → no-op
 
   try {
-    // 原则 2: 以 8% 概率开启会话回放,而非全量。
-    const replayEnabled = Math.random() < SESSION_REPLAY_SAMPLE_RATE;
-
     // v4.x: 使用构造函数创建实例。
+    // 注意: 不传 enableSessionReplay / sessionReplayConfig —— 未安装
+    // posthog-react-native-session-replay 原生插件时,这些选项可能
+    // 触发 native 模块调用导致闪退。会话回放功能等装好插件后再开。
     posthog = new PostHogClass(POSTHOG_KEY, {
       host: POSTHOG_HOST,
       autocapture: false,        // 原则 1: 不自动采集,只发手动埋的事件
       maskAllText: true,         // 隐私: 遮挡文本
       captureScreenViews: false,
-      enableSessionReplay: replayEnabled,
-      sessionReplayConfig: {
-        maskAllTextInputs: true,
-        maskAllImages: true,
-        maskAllSandboxedViews: true,
-      },
     });
 
     const id = await ensureDistinctId();
