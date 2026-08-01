@@ -56,6 +56,7 @@ jobs:
           git add main/constant.js
           git commit -m "Release ${{ steps.version.outputs.tag }}"
           git tag ${{ steps.version.outputs.tag }}
+          git push origin main
           git push origin co3-b020
           git push origin ${{ steps.version.outputs.tag }}
 
@@ -81,7 +82,7 @@ jobs:
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/${{ github.repository }}/actions/workflows/ios-build.yml/dispatches \
             -d '{
-              "ref": "co3-b020",
+              "ref": "main",
               "inputs": {
                 "release_tag": "${{ steps.version.outputs.tag }}"
               }
@@ -94,7 +95,7 @@ jobs:
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/${{ github.repository }}/actions/workflows/android-build.yml/dispatches \
             -d '{
-              "ref": "co3-b020",
+              "ref": "main",
               "inputs": {
                 "release_tag": "${{ steps.version.outputs.tag }}"
               }
