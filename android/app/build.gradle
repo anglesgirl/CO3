@@ -16,6 +16,13 @@ repositories {
 def enableProguardInReleaseBuilds = false
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+// The gomobile-built ECH proxy is placed here by android-ech.yml (or locally by
+// the developer). When the file is missing, the ech/ Kotlin sources are
+// excluded from compilation and the ECH native module is simply not registered
+// at runtime via reflection in MainApplication.kt — so the non-ECH workflow
+// (android-build.yml) and local builds still succeed.
+def echproxyAar = file("$projectDir/libs/echproxy.aar")
+
 def requestedAbi  = (project.findProperty("BUILD_ABI") ?: System.getenv("BUILD_ABI"))?.trim()
 def allAbis       = ["armeabi-v7a", "arm64-v8a", "x86", "x86_64"]
 def universalOnly = requestedAbi == "universal"
@@ -78,6 +85,22 @@ android {
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
     }
+
+    // Kotlin/Java sources that depend on the Go-generated echproxy classes are kept in a
+    // sibling directory (android/ech-sources/src/main/java) so they can be
+    // conditionally added to the source set only when the prebuilt echproxy.aar is
+    // present. This is far more reliable than trying to .exclude() individual
+    // patterns inside src/main — the Kotlin Gradle plugin does not consistently honor
+    // sourceSet exclude rules for compileKotlin, and moving the whole module out of the
+    // default source tree means the compiler literally never sees them.
+    sourceSets {
+        main {
+            if (echproxyAar.exists()) {
+                java.srcDir("$rootDir/ech-sources/src/main/java")
+                kotlin.srcDir("$rootDir/ech-sources/src/main/java")
+            }
+        }
+    }
 }
 
 dependencies {
@@ -85,8 +108,12 @@ dependencies {
     implementation "androidx.work:work-runtime:2.9.0"
     implementation "androidx.lifecycle:lifecycle-process:2.8.7"
 
-    // gomobile-built ECH proxy (android/app/libs/echproxy.aar). Generated in CI.
-    implementation(name: 'echproxy', ext: 'aar')
+    // gomobile-built ECH proxy (android/app/libs/echproxy.aar). Generated in CI
+    // by `gomobile bind`. Only declare the dependency when the file is present
+    // so non-ECH CI builds and local development still compile.
+    if (echproxyAar.exists()) {
+        implementation(name: 'echproxy', ext: 'aar')
+    }
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
