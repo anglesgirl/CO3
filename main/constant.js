@@ -12,3 +12,10 @@ export const POSTHOG_HOST = 'https://e.anglesya.win';
 // 活跃心跳间隔。前台时每隔此时间上报一次 app_active,
 // 用于活跃/留存/卸载(长期无心跳)推断。30 分钟。
 export const HEARTBEAT_INTERVAL_MS = 30 * 60 * 1000;
+
+// ---- App 更新检测 ----
+// 启动时查询 GitHub latest release,跟本地 co3Version 对比。
+// 发版时 create-release.yml 会自动把 tag 写进 co3Version,二者天然同步。
+// 未认证 API 限流 60次/小时/IP,故每次查询后缓存 24h。
+export const GITHUB_REPO = 'anglesgirl/CO3';
+export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;

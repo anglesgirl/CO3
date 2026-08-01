@@ -34,6 +34,7 @@ import { WorkDAO } from './storage/dao/WorkDAO';
 import { SettingsDAO } from './storage/dao/SettingsDAO';
 
 import { themes } from './utils/themes';
+import { checkAppUpdate } from './utils/appUpdater';
 import { STORAGE_KEYS } from './utils/constants';
 
 import LibraryScreen from './screens/Library';
@@ -667,6 +668,8 @@ const App = () => {
       Alert.alert(t('general_error'), t('app_initialization_failed'));
     } finally {
       setLoading(false);
+      // App 初始化完成后,延迟异步检查更新(非阻塞,失败静默,24h 一次)
+      setTimeout(() => { checkAppUpdate(t).catch(() => {}); }, 3000);
     }
   };
 
