@@ -511,6 +511,7 @@
   "account_step_activate": "Activation",
   "account_invite_intro": "AO3 exige une invitation. Saisissez votre e-mail pour rejoindre la file d'attente ; l'invitation arrive généralement en quelques jours.",
   "account_have_invite_already": "J'ai déjà un lien d'invitation",
+  "account_have_activation_already": "Déjà inscrit, activer directement",
   "account_paste_invite_hint": "Ouvrez l'e-mail d'invitation d'AO3, trouvez le lien d'inscription et collez-le ci-dessous.",
   "account_invite_link_ok": "Lien d'invitation accepté. Créez maintenant votre compte.",
   "account_register_hint": "Choisissez votre nom d'utilisateur et votre mot de passe AO3. Le nom ne pourra plus être modifié.",
