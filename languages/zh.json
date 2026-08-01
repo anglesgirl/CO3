@@ -552,6 +552,7 @@
   "account_invite_unavailable_title": "邀请服务暂不可用",
   "account_invite_unavailable_body": "AO3 的邀请页面返回了 404，请稍后重试；其他账号功能不受影响。",
   "account_have_invite_already": "我已经有邀请链接了",
+  "account_have_activation_already": "我已注册，直接激活",
   "account_paste_invite_hint": "打开 AO3 发来的邀请邮件，找到里面的注册链接，把它粘贴到下方。",
   "account_invite_link_ok": "邀请链接有效，现在可以创建账号了。",
   "account_register_hint": "设置你的 AO3 用户名和密码。用户名之后无法更改。",

@@ -284,6 +284,11 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
               {t('account_have_invite_already')}
             </Text>
           </TouchableOpacity>
+          <TouchableOpacity onPress={() => setStep('activate')}>
+            <Text style={[styles.link, { color: theme.primaryColor }]}>
+              {t('account_have_activation_already')}
+            </Text>
+          </TouchableOpacity>
         </>
       )}
 

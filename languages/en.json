@@ -552,6 +552,7 @@
   "account_invite_unavailable_title": "Invitation service unavailable",
   "account_invite_unavailable_body": "AO3 returned a 404 for its invitation page. Please try again later; your other account features are unaffected.",
   "account_have_invite_already": "I already have an invitation link",
+  "account_have_activation_already": "I already registered, just activate",
   "account_paste_invite_hint": "Open the invitation email from AO3, find the sign-up link and paste it below.",
   "account_invite_link_ok": "Invitation link accepted. Now create your account.",
   "account_register_hint": "Choose your AO3 username and password. The username cannot be changed later.",
