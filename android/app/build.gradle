@@ -86,22 +86,18 @@ android {
         }
     }
 
-    // When there's no prebuilt echproxy.aar, skip the ECH module sources entirely
-    // (they reference Go-generated classes shipped inside the AAR and would fail
-    // to compile). Both java and kotlin source sets need the exclude because AGP
-    // compiles Kotlin independently from Java sources. MainApplication.kt uses
-    // reflection to register EchProxyPackage only when the class is present.
+    // Kotlin/Java sources that depend on the Go-generated echproxy classes are kept in a
+    // sibling directory (android/ech-sources/src/main/java) so they can be
+    // conditionally added to the source set only when the prebuilt echproxy.aar is
+    // present. This is far more reliable than trying to .exclude() individual
+    // patterns inside src/main — the Kotlin Gradle plugin does not consistently honor
+    // sourceSet exclude rules for compileKotlin, and moving the whole module out of the
+    // default source tree means the compiler literally never sees them.
     sourceSets {
         main {
-            java {
-                if (!echproxyAar.exists()) {
-                    exclude 'com/xiaoyaco3/ech/**'
-                }
-            }
-            kotlin {
-                if (!echproxyAar.exists()) {
-                    exclude 'com/xiaoyaco3/ech/**'
-                }
+            if (echproxyAar.exists()) {
+                java.srcDir("$rootDir/ech-sources/src/main/java")
+                kotlin.srcDir("$rootDir/ech-sources/src/main/java")
             }
         }
     }
