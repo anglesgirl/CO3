@@ -16,6 +16,13 @@ repositories {
 def enableProguardInReleaseBuilds = false
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+// The gomobile-built ECH proxy is placed here by android-ech.yml (or locally by
+// the developer). When the file is missing, the ech/ Kotlin sources are
+// excluded from compilation and the ECH native module is simply not registered
+// at runtime via reflection in MainApplication.kt — so the non-ECH workflow
+// (android-build.yml) and local builds still succeed.
+def echproxyAar = file("$projectDir/libs/echproxy.aar")
+
 def requestedAbi  = (project.findProperty("BUILD_ABI") ?: System.getenv("BUILD_ABI"))?.trim()
 def allAbis       = ["armeabi-v7a", "arm64-v8a", "x86", "x86_64"]
 def universalOnly = requestedAbi == "universal"
@@ -78,6 +85,20 @@ android {
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
     }
+
+    // When there's no prebuilt echproxy.aar, skip the ECH module sources entirely
+    // (they reference Go-generated classes shipped inside the AAR and would fail
+    // to compile). MainApplication.kt uses reflection to register EchProxyPackage
+    // only when the class is present on the classpath at runtime.
+    sourceSets {
+        main {
+            java {
+                if (!echproxyAar.exists()) {
+                    exclude 'com/xiaoyaco3/ech/**'
+                }
+            }
+        }
+    }
 }
 
 dependencies {
@@ -85,8 +106,12 @@ dependencies {
     implementation "androidx.work:work-runtime:2.9.0"
     implementation "androidx.lifecycle:lifecycle-process:2.8.7"
 
-    // gomobile-built ECH proxy (android/app/libs/echproxy.aar). Generated in CI.
-    implementation(name: 'echproxy', ext: 'aar')
+    // gomobile-built ECH proxy (android/app/libs/echproxy.aar). Generated in CI
+    // by `gomobile bind`. Only declare the dependency when the file is present
+    // so non-ECH CI builds and local development still compile.
+    if (echproxyAar.exists()) {
+        implementation(name: 'echproxy', ext: 'aar')
+    }
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

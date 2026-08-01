@@ -10,7 +10,6 @@ import com.facebook.react.ReactNativeHost
 import com.facebook.react.ReactPackage
 import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
 import com.facebook.react.defaults.DefaultReactNativeHost
-import com.xiaoyaco3.ech.EchProxyPackage
 import com.xiaoyaco3.export.FileExportPackage
 import com.swmansion.rnscreens.RNScreensPackage;
 
@@ -21,7 +20,19 @@ class MainApplication : Application(), ReactApplication {
         override fun getPackages(): List<ReactPackage> =
             PackageList(this).packages.apply {
                 add(LibrarySchedulerPackage())
-                add(EchProxyPackage())
+                // ECH native module: only present when the gomobile-built
+                // echproxy.aar was copied into android/app/libs before the
+                // build started (see build.gradle sourceSets exclude rule).
+                // Load it by reflection so the non-ECH APK still compiles and
+                // boots without the missing class. The JS side already handles
+                // NativeModules.EchProxy being absent gracefully.
+                try {
+                    @Suppress("UNCHECKED_CAST")
+                    val pkg = Class.forName("com.xiaoyaco3.ech.EchProxyPackage")
+                        .getDeclaredConstructor()
+                        .newInstance() as ReactPackage
+                    add(pkg)
+                } catch (_: Throwable) { }
                 add(FileExportPackage())
             }
 
