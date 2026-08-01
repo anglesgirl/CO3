@@ -2,6 +2,7 @@ import ky from './echKy';
 import { TimeoutError } from 'ky';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fetchViaWebView } from './WebviewFetcher';
+import { recoverFromBadIPs } from './echKy';
 import { Platform } from 'react-native';
 import {
   deleteCredsPasswd,
@@ -140,6 +141,27 @@ export default async function getUrl(url, noWebview = false, options = {}) {
     console.log(`[NET] ${url} FAILED in ${elapsed}ms: ${err?.message ?? err}`);
 
     // CF 挑战错误码：WebView 能解 JS 挑战，启用 CF 模式。
+    // 但 525 (SSL handshake failed) 通常是自定义IP失效，先尝试恢复代理。
+    if (err?.response?.status === 525) {
+      console.log(`[NET] 525 SSL error — attempting IP recovery before WebView`);
+      try {
+        await recoverFromBadIPs();
+        const recoveryStart = Date.now();
+        const html = await ky.get(url, { ...options, timeout: 30000 }).text();
+        console.log(`[NET] ${url} → ${html.length} chars in ${Date.now() - recoveryStart}ms (post-recovery)`);
+        if (isCFChallenge(html)) {
+          await enableCFMode(hostname);
+          return fetchViaWebView(url, { cfWarning: true });
+        }
+        return html;
+      } catch (recoveryErr) {
+        console.log(`[NET] Recovery also failed: ${recoveryErr?.message ?? recoveryErr}, falling back to WebView`);
+        await enableCFMode(hostname);
+        return fetchViaWebView(url, { cfWarning: true });
+      }
+    }
+
+    // 其他 CF 挑战错误码 (403/418/520/522/503)：WebView 能解 JS 挑战。
     if (cloudflareErrorCodes.includes(err?.response?.status)) {
       console.log(`[NET] CF error ${err?.response?.status}, trying WebView`);
       await enableCFMode(hostname);

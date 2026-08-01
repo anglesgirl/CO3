@@ -101,11 +101,23 @@ export function getEchBase() {
   return echBasePromise || startProxy();
 }
 
-// Eagerly warm up the proxy so it's ready before the first AO3 request, then
-// refresh the remote config in the background (never blocking startup).
+// Eagerly warm up the proxy so it's ready before the first AO3 request.
+//
+// 关键: 先同步远程配置，再启动代理。
+// 之前两个并行执行，代理先用旧配置启动，远程配置拿到新IP后 restartProxy()，
+// 导致代理被杀掉重建。新代理用了有问题的自定义IP → 525错误。
+// 现在先拿到远程配置写入 AsyncStorage，再启动代理，一步到位不重启。
+// syncRemoteConfig 有 5 秒超时，超时则用缓存/默认配置启动。
 export function initEch() {
-  getEchBase().catch(() => {});
-  syncRemoteConfig().catch(() => {});
+  (async () => {
+    try {
+      await Promise.race([
+        syncRemoteConfig(),
+        new Promise(resolve => setTimeout(resolve, 5000)),
+      ]);
+    } catch {}
+    getEchBase().catch(() => {});
+  })();
 }
 
 // Validates a remote value before we trust it — a broken TXT record should not
@@ -262,6 +274,15 @@ async function restartProxy() {
   } catch {}
   echBasePromise = null;
   return startProxy();
+}
+
+// 525 = SSL handshake failed。自定义IP可能不支持ECH或已失效。
+// 清除自定义IP，用DNS重新启动代理，避免持续525导致每次请求都走WebView兜底。
+// 返回新的 echBase，调用方可以用它重试请求。
+export async function recoverFromBadIPs() {
+  console.log('[ECH] 525 detected — clearing custom IPs, restarting with DNS');
+  await AsyncStorage.removeItem(IP_KEY);
+  return restartProxy();
 }
 
 // Change the DoH endpoint and restart the proxy with it. Pass '' to disable DoH.
