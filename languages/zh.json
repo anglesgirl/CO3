@@ -279,6 +279,8 @@
   "update_view_button": "立即查看",
   "update_later_button": "以后再说",
   "update_mirror_button": "镜像下载(国内)",
+  "notice_free_title": "免费声明",
+  "notice_free_body": "本程序完全免费开源,如果你是付费获得的,请给对方打差评并举报。",
   "screen_help_title": "帮助",
   "screen_help_sub": "需要帮助或遇到问题了吗？",
   "screen_help_discord": "在 Discord 上提问",

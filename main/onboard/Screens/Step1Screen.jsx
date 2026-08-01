@@ -83,6 +83,9 @@ export default function Step1({ currentTheme, setScreen }) {
           <Text style={[styles.disclaimerBody, { color: currentTheme.secondaryTextColor }]}>
             对本作品或对作者有任何不满意的，可以随时卸载。
           </Text>
+          <Text style={[styles.disclaimerBody, { color: currentTheme.secondaryTextColor, marginTop: 12 }]}>
+            {t('notice_free_body')}
+          </Text>
         </View>
       </ScrollView>
 

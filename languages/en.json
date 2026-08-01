@@ -279,6 +279,8 @@
   "update_view_button": "View",
   "update_later_button": "Later",
   "update_mirror_button": "Mirror (CN)",
+  "notice_free_title": "Free Notice",
+  "notice_free_body": "This app is completely free and open source. If you paid for it, please leave a negative review and report the seller.",
   "screen_help_title": "Help",
   "screen_help_sub": "Do you need help or do you have an issue ?",
   "screen_help_discord": "Ask on the Discord",

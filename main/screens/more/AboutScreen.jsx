@@ -90,6 +90,25 @@ export default function AboutScreen({ route }) {
             label={t('screen_about_source') + '（原仓库）'}
             theme={currentTheme}
           />
+          <View
+            style={[
+              {
+                marginTop: 16,
+                padding: 12,
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor: currentTheme.borderColor,
+                borderRadius: 10,
+                backgroundColor: currentTheme.secondaryBackgroundColor || currentTheme.backgroundColor,
+              },
+            ]}
+          >
+            <Text style={[{ fontWeight: '700', color: currentTheme.textColor, marginBottom: 6 }]}>
+              {t('notice_free_title')}
+            </Text>
+            <Text style={[{ color: currentTheme.secondaryTextColor, fontSize: 13, lineHeight: 20 }]}>
+              {t('notice_free_body')}
+            </Text>
+          </View>
         </View>
         <Text
           style={[

@@ -261,6 +261,8 @@
   "update_view_button": "Voir",
   "update_later_button": "Plus tard",
   "update_mirror_button": "Miroir (CN)",
+  "notice_free_title": "Avis gratuit",
+  "notice_free_body": "Cette application est entièrement gratuite et open source. Si vous l'avez payée, laissez un avis négatif et signalez le vendeur.",
   "screen_help_title": "Aide",
   "screen_help_sub": "Avez-vous besoin d'aide ou avez-vous le moindre problème ?",
   "screen_help_discord": "Demander sur le Discord",
