@@ -5,10 +5,21 @@ name: "Build Android APK (ECH)"
 on:
   push:
     branches: [co3-b020]
+  release:
+    types: [created]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Tag to attach the ECH APK to'
+        required: false
+        type: string
 
 permissions:
   contents: write
+
+concurrency:
+  group: ech-apk-build
+  cancel-in-progress: true
 
 env:
   NDK_VERSION: "27.1.12297006"
@@ -21,6 +32,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref_name }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -143,3 +156,12 @@ jobs:
           name: ${{ steps.artifact.outputs.artifact_name }}
           path: ${{ steps.artifact.outputs.apk_glob }}
           retention-days: 30
+
+      - name: Attach ECH APKs to GitHub Release
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          files: ${{ steps.artifact.outputs.apk_glob }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
