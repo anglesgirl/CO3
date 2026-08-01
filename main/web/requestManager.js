@@ -119,31 +119,59 @@ export default async function getUrl(url, noWebview = false, options = {}) {
     noWebview = true;
   }
 
-  if (!noWebview && await isCFMode(hostname)) {
-    console.log(`using webview to fetch ${url}`);
-    return fetchViaWebView(url);
-  }
-
+  // 即使 CF 模式开启，也先尝试 ECH 代理（ky），因为它更快且能绕墙。
+  // 只有当 ky 返回 CF 挑战页面时才需要 WebView 来执行 JS 挑战。
+  // 之前的逻辑是 CF 模式一开就完全跳过 ky 直走 WebView，导致 WebView
+  // 裸连 archiveofourown.org 被 GFW 重置 (-6 ERR_CONNECTION_RESET)。
   try {
     const html = await ky.get(url, options).text();
 
     if (isCFChallenge(html)) {
-      console.log(`isCfChalenged fiered with ${html}`);
+      console.log(`CF challenge detected for ${url}, falling back to WebView`);
       await enableCFMode(hostname);
       return fetchViaWebView(url, { cfWarning: true });
     }
 
-    console.log(`fetched ${url} via ky.`);
+    console.log(`fetched ${url} via ky (ECH).`);
     return html;
   } catch (err) {
+    // CF 挑战错误码：WebView 能解 JS 挑战，启用 CF 模式。
     if (cloudflareErrorCodes.includes(err?.response?.status)) {
       await enableCFMode(hostname);
       return fetchViaWebView(url, { cfWarning: true });
     }
+
+    // 超时：不永久切换 CF 模式。ECH 握手首次可能慢，给它多一次机会。
     if (err instanceof TimeoutError) {
-      await enableCFMode(hostname);
-      return fetchViaWebView(url, { cfWarning: true });
+      console.log(`Timeout for ${url}, retrying with longer timeout...`);
+      try {
+        const html = await ky.get(url, { ...options, timeout: 60000 }).text();
+        if (isCFChallenge(html)) {
+          await enableCFMode(hostname);
+          return fetchViaWebView(url, { cfWarning: true });
+        }
+        console.log(`fetched ${url} via ky (ECH) on retry.`);
+        return html;
+      } catch (retryErr) {
+        // 重试仍失败 → WebView 兜底（现在 WebView 也会走 ECH 代理）
+        if (!noWebview) {
+          console.log(`Retry failed, falling back to WebView for ${url}`);
+          return fetchViaWebView(url);
+        }
+        throw retryErr;
+      }
     }
+
+    // 其他网络错误：WebView 兜底（走 ECH），避免直接抛错影响体验。
+    if (!noWebview) {
+      console.log(`ky error for ${url}: ${err?.message ?? err}, trying WebView`);
+      try {
+        return await fetchViaWebView(url);
+      } catch (wvErr) {
+        throw err; // WebView 也失败，抛原始错误
+      }
+    }
+
     throw err;
   }
 }

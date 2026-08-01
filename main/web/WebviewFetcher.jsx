@@ -3,6 +3,29 @@ import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import WebView from 'react-native-webview';
 import { useTranslation } from 'react-i18next';
+import { getEchBase } from './echKy';
+
+const AO3_HOSTS = new Set(['archiveofourown.org', 'www.archiveofourown.org']);
+
+/**
+ * 如果 ECH 代理可用，把 AO3 直链改写为本地代理 URL，
+ * 这样 WebView 也不裸连 archiveofourown.org（否则被墙重置 -6）。
+ * 非 AO3 的 URL 原样返回。
+ */
+async function rewriteForEch(url) {
+  try {
+    const base = await getEchBase();
+    if (!base) return { uri: url, headers: undefined };
+    const u = new URL(url);
+    if (!AO3_HOSTS.has(u.hostname)) return { uri: url, headers: undefined };
+    return {
+      uri: base + u.pathname + u.search,
+      headers: { 'X-Ech-Target': u.hostname },
+    };
+  } catch {
+    return { uri: url, headers: undefined };
+  }
+}
 
 // --- Queue ---
 
@@ -71,7 +94,10 @@ export default function WebviewFetcher() {
 
   const loadCurrent = () => {
     setVisible(false);
-    setSource({ uri: currentRef.current.url });
+    // ECH 代理可用时，WebView 也走代理，避免直连被墙重置。
+    rewriteForEch(currentRef.current.url).then(({ uri, headers }) => {
+      setSource(headers ? { uri, headers } : { uri });
+    });
   };
 
   const processNext = () => {
