@@ -4,7 +4,7 @@ on:
   # The ECH branch has its own workflow, which builds the required gomobile
   # dependency first. Do not also run this non-ECH workflow there.
   push:
-    branches-ignore: [ech-support, co3-b020]
+    branches-ignore: [ech-support, co3-b020, main]
   release:
     types: [created]
   workflow_dispatch:
