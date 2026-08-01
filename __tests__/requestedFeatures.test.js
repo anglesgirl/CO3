@@ -24,12 +24,12 @@ describe('requested feature boundaries', () => {
     expect(source).not.toContain('/invite_requests/new');
   });
 
-  it('uploads only the arm64-v8a APK', () => {
+  it('builds and uploads split APKs for all ABIs', () => {
     const workflow = read('.github/workflows/android-ech.yml');
-    expect(workflow).toContain('-PBUILD_ABI=arm64-v8a');
-    expect(workflow).toContain('xiaoyaco3-ECH-arm64-v8a-${BUILD_UTC}-${SHA_SHORT}.apk');
-    expect(workflow).toContain('path: ${{ steps.artifact.outputs.apk_name }}');
-    expect(workflow).not.toContain('xiaoyaco3-ECH-*.apk');
+    expect(workflow).toContain('armeabi-v7a,arm64-v8a,x86,x86_64');
+    expect(workflow).toContain('apk-out/*.apk');
+    // gomobile must build all four ABIs into the AAR
+    expect(workflow).toContain('android/arm,android/arm64,android/386,android/amd64');
   });
 
   it('uses a new Android version so the previous installation is replaced', () => {
