@@ -33,11 +33,9 @@ describe('requested feature boundaries', () => {
     expect(ech).not.toContain('android/amd64');
     expect(ech).not.toContain('x86,x86_64');
 
-    const std = read('.github/workflows/android-build.yml');
-    expect(std).toContain('arm64-v8a,armeabi-v7a');
-    // 普通 build 不应再尝试 mv 不存在的 x86 产物
-    expect(std).not.toContain('app-x86-release.apk');
-    expect(std).not.toContain('app-x86_64-release.apk');
+    // ECH 是唯一构建流程:非 ECH 的 android-build.yml 已删除,
+    // 防止再产出不带 ECH 原生模块(libgojni.so)的 APK。
+    expect(fs.existsSync(path.join(__dirname, '..', '.github/workflows/android-build.yml'))).toBe(false);
   });
 
   it('uses a new Android version so the previous installation is replaced', () => {
