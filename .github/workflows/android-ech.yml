@@ -3,8 +3,9 @@ name: "Build Android APK (ECH)"
 # Builds the ECH-enabled APK: compiles the Go ECH proxy into an Android AAR with
 # gomobile, then builds the React Native app that loads it.
 on:
+  # ECH 是唯一构建流程:任何分支 push 都构建 ECH 版 APK,
+  # 避免再产出不带 ECH 原生模块(libgojni.so)的"阉割版"。
   push:
-    branches: [co3-b020]
   release:
     types: [created]
   workflow_dispatch:

@@ -2,8 +2,8 @@
   <img src="https://github.com/user-attachments/assets/c168f8ee-cd36-4896-b591-87be5d3ad0fe" alt="Logo for the CO3 project">
 </p>
 <p align="center">
-  <a href="https://github.com/tbvns/CO3/actions/workflows/android-build.yml">
-    <img src="https://github.com/tbvns/CO3/actions/workflows/android-build.yml/badge.svg" alt="Build Android APK">
+  <a href="https://github.com/anglesgirl/CO3/actions/workflows/android-ech.yml">
+    <img src="https://github.com/anglesgirl/CO3/actions/workflows/android-ech.yml/badge.svg" alt="Build Android APK (ECH)">
   </a>
   <a href="https://github.com/tbvns/CO3/actions/workflows/ios-build.yml">
     <img src="https://github.com/tbvns/CO3/actions/workflows/ios-build.yml/badge.svg" alt="Build iOS IPA (Unsigned)" border="0">
@@ -50,7 +50,7 @@ We recommend you use F-Droid to install the client, this will allow for auto-upd
 > Since the dev team doesn't own any Apple device, we are not able to provide proper testing to the platform. Hence, we would really appreciate any feedback for this platform. Some unexpected bug and crashes can appear on this platform, but multiple users reported it working properly.
 
 You can get releases [here](https://github.com/tbvns/CO3/releases). </br>
-You can get android dev builds [here](https://github.com/tbvns/CO3/actions/workflows/android-build.yml). </br>
+You can get android dev builds [here](https://github.com/anglesgirl/CO3/actions/workflows/android-ech.yml). </br>
 You can get IOS dev builds [here](https://github.com/tbvns/CO3/actions/workflows/ios-build.yml).
 
 # Logo and name usage
