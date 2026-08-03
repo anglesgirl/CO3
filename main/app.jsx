@@ -87,12 +87,7 @@ import CategoryScreen from './screens/more/CategoryScreen';
 import BookmarksScreen from './screens/more/BookmarksScreen';
 import AboutScreen from './screens/more/AboutScreen';
 import { debugLog, installDebugConsoleCapture } from './utils/debugLog';
-import {
-  initAnalytics,
-  track,
-  startHeartbeat,
-  stopHeartbeat,
-} from './utils/analytics';
+import {\n  initAnalytics,\n  track,\n  startHeartbeat,\n  stopHeartbeat,\n  cleanupAnalytics,\n  trackEvent,\n} from './utils/analytics';
 
 export const AppContext = createContext();
 const Stack = createNativeStackNavigator();
@@ -592,14 +587,12 @@ const App = () => {
 
   useEffect(() => {
     const backAction = () => {
-      console.log(screens);
       if (screens.length > 0) {
-        return true;
-      } else if (activeScreen === "search") {
-        setActiveScreen("library")
-        console.log("Back on search, opening library as fallback"); //For some reason if I remove this, it doesn't work. Might be the first heisenbug of this codebase
+        setScreens(screen => screen.slice(0, -1));
         return true;
       }
+      // 应用即将退出，上报卸载事件
+      cleanupAnalytics().catch(() => {});
       return false;
     };
 
@@ -619,7 +612,7 @@ const App = () => {
     // 匿名使用统计:尊重用户开关,Key 未填时全程 no-op。
     try {
       await initAnalytics(jsonSettings.analyticsEnabled !== false);
-      track('app_open');
+      // app_launch 已在 initAnalytics 中上报
       startHeartbeat();
     } catch (e) {
       /* 统计初始化失败不影响 App */

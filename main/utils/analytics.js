@@ -1,31 +1,36 @@
 /**
- * 匿名使用统计封装 (PostHog)。
+ * 匿名使用统计 (PostHog v4.61.3)
+ *
+ * 埋点事件：
+ * - app_launch: 应用启动
+ * - app_active: 应用在前台运行（心跳）
+ * - app_background: 应用进入后台
+ * - app_uninstall: 卸载前最后心跳
  *
  * 设计原则:
- * 1. 普通页面/点击事件随便打,避免循环内疯狂打点;
- * 2. Session 会话回放采样 8% 用户,不 100% 开启;
- * 3. 超长属性做字符串截断 (max 200 字符),禁止把整篇小说丢进埋点;
- * 4. 提供开关,允许用户关闭数据采集 (analyticsEnabled);
- * 5. 使用自有域名代理上报 (e.anglesya.win),减少丢事件;
- * 6. 断网时 SDK 自动用 AsyncStorage 本地缓存,网络恢复后补发。
- *
- * - posthog-react-native v4.x 使用 `new PostHog(apiKey, options)` 构造函数。
- * - distinct_id 用本地随机 UUID,不关联任何 AO3 账号或 PII。
+ * 1. 不自动采集，只上报手动埋的事件
+ * 2. 超长属性做字符串截断 (max 200 字符)
+ * 3. 提供开关，允许用户关闭数据采集
+ * 4. 使用自有域名代理上报 (e.anglesya.win)
+ * 5. 每个事件自动添加客户端信息（设备、OS、版本）
+ * 6. 永不阻塞 UI，异常静默失败
  */
-import { Platform } from 'react-native';
+
+import { Platform, AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { POSTHOG_KEY, POSTHOG_HOST, HEARTBEAT_INTERVAL_MS } from '../constant';
+import { POSTHOG_KEY, POSTHOG_HOST, HEARTBEAT_INTERVAL_MS, co3Version } from '../constant';
 
 let PostHogClass = null;
-let posthog = null;       // PostHog 实例 (v4.x)
+let posthog = null;
 let initialized = false;
 let heartbeatTimer = null;
 let distinctId = null;
+let appState = null;
 
 const DISTINCT_ID_KEY = 'analytics_distinct_id';
-const MAX_PROP_LENGTH = 200;             // 属性值最大长度
+const MAX_PROP_LENGTH = 200;
 
-// 动态加载 SDK,失败则保持 null(全程 no-op)。
+// 动态加载 SDK
 try {
   // eslint-disable-next-line global-require
   PostHogClass = require('posthog-react-native').default;
@@ -33,12 +38,15 @@ try {
   PostHogClass = null;
 }
 
+/**
+ * 生成或获取匿名设备 ID
+ */
 async function ensureDistinctId() {
   if (distinctId) return distinctId;
   try {
     let id = await AsyncStorage.getItem(DISTINCT_ID_KEY);
     if (!id) {
-      // 生成匿名 UUID v4
+      // 生成 UUID v4
       id = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
         const r = (Math.random() * 16) | 0;
         const v = c === 'x' ? r : (r & 0x3) | 0x8;
@@ -53,17 +61,20 @@ async function ensureDistinctId() {
   }
 }
 
-function deviceProps() {
+/**
+ * 获取客户端信息（设备、系统、应用版本）
+ */
+function getClientInfo() {
   return {
-    app_version: require('../constant').co3Version,
+    app_version: co3Version,
     os: Platform.OS,
-    os_version: Platform.Version,
+    os_version: String(Platform.Version),
+    platform: Platform.OS === 'android' ? 'Android' : 'iOS',
   };
 }
 
 /**
- * 截断超长属性值,防止把整篇小说/章节内容丢进埋点。
- * 字符串超过 MAX_PROP_LENGTH 时截断并加省略号。
+ * 截断超长属性值，防止把整篇小说丢进埋点
  */
 function truncateProps(props) {
   const out = {};
@@ -77,31 +88,41 @@ function truncateProps(props) {
   return out;
 }
 
-/** 初始化统计。enabled=false 时跳过(尊重用户关闭)。 */
+/**
+ * 初始化统计模块。enabled=false 时跳过。
+ * 在 App 启动时调用。
+ */
 export async function initAnalytics(enabled) {
   if (!enabled) return;
   if (initialized) return;
-  if (!PostHogClass || !POSTHOG_KEY) return; // Key 未填 → no-op
+  if (!PostHogClass || !POSTHOG_KEY) return;
 
   try {
-    // v4.x: 使用构造函数创建实例。
-    // 关键: 传 customStorage 直接指定 AsyncStorage,绕过 SDK 内部的
-    // buildOptimisticAsyncStorage()——它会 require('expo-file-system'),
-    // 而本项目的 expo-file-system 没有原生模块,导致 requireNativeModule
-    // ('FileSystem') 抛 JavascriptException 闪退。
     posthog = new PostHogClass(POSTHOG_KEY, {
       host: POSTHOG_HOST,
-      autocapture: false,        // 原则 1: 不自动采集,只发手动埋的事件
-      maskAllText: true,         // 隐私: 遮挡文本
+      autocapture: false,
+      maskAllText: true,
       captureScreenViews: false,
-      customStorage: AsyncStorage, // 显式指定存储,绕过 expo-file-system 检测
+      customStorage: AsyncStorage,
     });
 
     const id = await ensureDistinctId();
     if (id) {
-      posthog.identify(id, deviceProps());
+      posthog.identify(id, getClientInfo());
     }
+
     initialized = true;
+
+    // 上报应用启动事件
+    track('app_launch', {});
+
+    // 监听应用前后台切换
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    
+    // 保存订阅以便后续清理
+    if (!global.appStateSubscription) {
+      global.appStateSubscription = subscription;
+    }
   } catch (e) {
     console.warn('[Analytics] init failed:', e?.message ?? e);
     initialized = false;
@@ -109,29 +130,52 @@ export async function initAnalytics(enabled) {
 }
 
 /**
+ * 处理应用前后台切换
+ */
+function handleAppStateChange(nextAppState) {
+  if (appState?.match(/inactive|background/) && nextAppState === 'active') {
+    // 从后台返回前台
+    track('app_active', {});
+    startHeartbeat();
+  } else if (appState === 'active' && nextAppState.match(/inactive|background/)) {
+    // 进入后台
+    track('app_background', {});
+    stopHeartbeat();
+  }
+  appState = nextAppState;
+}
+
+/**
  * 上报事件。未初始化时 no-op。
- * 原则 3: 所有属性值自动截断到 200 字符,防止超长内容。
+ * 所有属性值自动截断到 200 字符。
  */
 export function track(event, properties = {}) {
   if (!initialized || !posthog) return;
   try {
-    posthog.capture(event, { ...truncateProps(properties), ...deviceProps() });
+    const fullProps = {
+      ...truncateProps(properties),
+      ...getClientInfo(),
+    };
+    posthog.capture(event, fullProps);
   } catch (e) {
-    /* 静默失败,统计不应影响 App */
+    // 静默失败，统计不应影响 App
   }
 }
 
-/** 启动活跃心跳:前台时定时上报,用于活跃/留存/卸载推断。 */
+/**
+ * 启动活跃心跳：前台时定时上报，用于活跃/留存统计
+ */
 export function startHeartbeat() {
   stopHeartbeat();
   if (!initialized) return;
-  track('app_active');
   heartbeatTimer = setInterval(() => {
-    track('app_active');
+    track('app_active', {});
   }, HEARTBEAT_INTERVAL_MS);
 }
 
-/** 停止心跳(切到后台时调用)。 */
+/**
+ * 停止心跳（进入后台时调用）
+ */
 export function stopHeartbeat() {
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
@@ -139,11 +183,52 @@ export function stopHeartbeat() {
   }
 }
 
-/** 用户在设置里关闭统计时,重置状态并 opt out。 */
+/**
+ * 卸载前的清理：上报最后的应用状态，关闭监听
+ */
+export async function cleanupAnalytics() {
+  stopHeartbeat();
+  if (posthog && initialized) {
+    try {
+      // 上报卸载前的最后事件
+      await new Promise(resolve => {
+        track('app_uninstall', {});
+        // 给 SDK 时间flush事件
+        setTimeout(resolve, 500);
+      });
+    } catch (e) {
+      // ignore
+    }
+  }
+  
+  // 移除应用状态监听
+  if (global.appStateSubscription) {
+    global.appStateSubscription.remove();
+    global.appStateSubscription = null;
+  }
+  
+  initialized = false;
+}
+
+/**
+ * 用户在设置里关闭统计时调用
+ */
 export function disableAnalytics() {
   stopHeartbeat();
   if (posthog && initialized) {
-    try { posthog.optOut(); } catch (e) { /* ignore */ }
+    try {
+      posthog.optOut();
+    } catch (e) {
+      // ignore
+    }
   }
   initialized = false;
+}
+
+/**
+ * 导出自定义事件追踪函数，供外部使用
+ * 用法: trackEvent('feature_used', { feature_name: 'search' })
+ */
+export function trackEvent(eventName, eventProps = {}) {
+  track(eventName, eventProps);
 }
