@@ -59,7 +59,9 @@ jobs:
           git commit -m "Release ${{ steps.version.outputs.tag }}"
           git tag ${{ steps.version.outputs.tag }}
           git push origin main
-          git push origin co3-b020
+          # co3-b020 可能与当前 checkout 分支不同名,用 refspec 直接推,
+          # 不依赖本地是否 checkout 了该分支。
+          git push origin main:co3-b020
           git push origin ${{ steps.version.outputs.tag }}
 
       - name: Create GitHub Release
