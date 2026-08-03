@@ -529,5 +529,17 @@
   "account_create_account": "Créer le compte",
   "account_activate_hint": "AO3 vous a envoyé un lien d'activation. Copiez-le de la même façon et collez-le ci-dessous pour terminer, ou appuyez dessus dans votre messagerie.",
   "account_activate_button": "Activer le compte",
-  "account_copy_link_tip": "Astuce : certaines messageries n'ouvrent pas le lien directement. Appuyez longuement dessus et choisissez « Copier l'adresse du lien » ; sinon, appuyez dessus et cherchez un bouton « Copier le lien »."
+  "account_copy_link_tip": "Astuce : certaines messageries n'ouvrent pas le lien directement. Appuyez longuement dessus et choisissez « Copier l'adresse du lien » ; sinon, appuyez dessus et cherchez un bouton « Copier le lien ».",
+  "translate_option_original": "Original",
+  "translate_option_chinese": "Chinois",
+  "translate_option_bilingual": "Bilingue",
+  "translate_option_bilingual_hint": "Traduction en haut, original en dessous",
+  "update_check_button": "Vérifier les mises à jour",
+  "update_checking": "Vérification…",
+  "update_latest_title": "À jour",
+  "update_latest_message": "Vous avez la dernière version.",
+  "update_skipped_title": "Version ignorée",
+  "update_skipped_message": "Vous avez ignoré cette version. Visitez GitHub pour la télécharger.",
+  "update_check_failed_title": "Échec de la vérification",
+  "update_check_failed_message": "Erreur réseau, réessayez plus tard."
 }

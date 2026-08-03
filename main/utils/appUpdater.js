@@ -27,12 +27,13 @@ function truncate(s, max) {
 // 启动时检查 GitHub latest release 是否有新版本。
 // 24h 内只查一次;用户点「以后再说」会跳过该版本,直到出现更新的版本。
 // 全程静默失败:网络错误、限流、解析异常都不打扰用户。
-export async function checkAppUpdate(t) {
+// force=true 时忽略 24h 间隔(用于「关于」页手动检查)。
+export async function checkAppUpdate(t, force = false) {
   try {
     const now = Date.now();
     const last = await AsyncStorage.getItem(LAST_CHECK_KEY);
-    if (last && now - parseInt(last, 10) < UPDATE_CHECK_INTERVAL_MS) {
-      return;
+    if (!force && last && now - parseInt(last, 10) < UPDATE_CHECK_INTERVAL_MS) {
+      return null;
     }
 
     const res = await fetch(
@@ -44,19 +45,27 @@ export async function checkAppUpdate(t) {
         },
       },
     );
-    if (!res.ok) return;
+    if (!res.ok) {
+      // 手动检查时让用户知道失败原因(启动时仍静默)。
+      if (force) return `http_${res.status}`;
+      return null;
+    }
     const data = await res.json();
     const latestTag = data.tag_name;
-    if (!latestTag) return;
+    if (!latestTag) return null;
 
     await AsyncStorage.setItem(LAST_CHECK_KEY, String(now));
 
-    // 本地已是最新或更新,不提示
-    if (compareVersions(co3Version, latestTag) <= 0) return;
+    // 本地已是最新或更新,不提示(手动检查返回 'latest' 以便 UI 反馈)。
+    if (compareVersions(co3Version, latestTag) <= 0) {
+      return force ? 'latest' : null;
+    }
 
     // 用户已选择跳过此版本
     const skipped = await AsyncStorage.getItem(SKIPPED_KEY);
-    if (skipped === latestTag) return;
+    if (skipped === latestTag) {
+      return force ? 'skipped' : null;
+    }
 
     const body = truncate(data.body || '', 200);
     const hint = t('update_open_hint');
@@ -95,7 +104,9 @@ export async function checkAppUpdate(t) {
       buttons,
       { cancelable: true },
     );
+    return 'available';
   } catch (e) {
     console.log('[appUpdater] check failed:', e?.message || e);
+    return force ? 'error' : null;
   }
 }

@@ -8,12 +8,14 @@ import {
   View,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
+import Toast from 'react-native-toast-message';
 import { co3Version } from '../../constant';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { debugLog, setDebugEnabled } from '../../utils/debugLog';
+import { checkAppUpdate } from '../../utils/appUpdater';
 
 export default function AboutScreen({ route }) {
   const {setScreens, currentTheme, db} = route.params;
@@ -34,6 +36,39 @@ export default function AboutScreen({ route }) {
 
   function onBack() {
     navigation.goBack();
+  }
+
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+
+  async function onCheckUpdate() {
+    if (checkingUpdate) return;
+    setCheckingUpdate(true);
+    try {
+      const result = await checkAppUpdate(t, true);
+      if (result === 'latest') {
+        Toast.show({
+          type: 'success',
+          text1: t('update_latest_title'),
+          text2: t('update_latest_message'),
+        });
+      } else if (result === 'skipped') {
+        Toast.show({
+          type: 'info',
+          text1: t('update_skipped_title'),
+          text2: t('update_skipped_message'),
+        });
+      } else if (result === 'available') {
+        // 弹窗已由 checkAppUpdate 弹出,无需额外提示。
+      } else if (result === 'error' || (result && result.startsWith('http_'))) {
+        Toast.show({
+          type: 'error',
+          text1: t('update_check_failed_title'),
+          text2: result.startsWith('http_') ? `HTTP ${result.slice(5)}` : t('update_check_failed_message'),
+        });
+      }
+    } finally {
+      setCheckingUpdate(false);
+    }
   }
 
   const { t } = useTranslation();
@@ -121,6 +156,25 @@ export default function AboutScreen({ route }) {
         >
           {t('screen_about_version', { co3Version: co3Version })}
         </Text>
+        <TouchableOpacity
+          style={[
+            styles.checkUpdateButton,
+            { backgroundColor: currentTheme.primaryColor },
+          ]}
+          onPress={onCheckUpdate}
+          disabled={checkingUpdate}
+        >
+          <Icon
+            name={checkingUpdate ? 'hourglass-empty' : 'system-update'}
+            size={18}
+            color="#ffffff"
+          />
+          <Text style={styles.checkUpdateText}>
+            {checkingUpdate
+              ? t('update_checking')
+              : t('update_check_button')}
+          </Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
@@ -183,5 +237,22 @@ const styles = StyleSheet.create({
     height: 1,
     width: '100%',
     marginBottom: 20,
-  }
+  },
+  checkUpdateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    marginTop: 20,
+    marginBottom: 30,
+    paddingVertical: 10,
+    paddingHorizontal: 24,
+    borderRadius: 20,
+  },
+  checkUpdateText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 6,
+  },
 });

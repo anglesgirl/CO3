@@ -40,7 +40,10 @@ var androidCertPoolOnce sync.Once
 
 const (
 	dialTimeout = 20 * time.Second
-	publicECHCacheTTL = 12 * time.Hour
+	// ECH 公钥配置缓存 5 小时:公钥轮换频率远低于此,期间连接直接用缓存握手,
+	// 避免每次启动/换 host 都实时查 DoH。兜底配置(server retry_configs / 目标
+	// 自身 ech= / operator fallback)同样缓存,失败后降级普通 TLS。
+	publicECHCacheTTL = 5 * time.Hour
 )
 
 var (
@@ -60,6 +63,12 @@ var (
 	hostConfs  = map[string]*hostConf{}
 	activeDoH  string
 	activeInse bool
+
+	// cachePath 是 ECHConfigList 的磁盘缓存位置(5h TTL),由 Start 传入。
+	// 首次从 cloudflare-ech.com / 目标 HTTPS ech= / server retry_configs 获取后
+	// 落盘,后续连接直接读缓存握手,避免每次启动都实时查 DoH。
+	cachePathMu sync.RWMutex
+	cachePath   string
 )
 
 // hostConf caches what we learned about a secondary upstream: its DoH-resolved
@@ -240,7 +249,7 @@ var cloudflareAS13335CIDRs = []string{
 	"2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
 }
 
-func Start(listen, target, echB64, doh, ipList, cachePath string, insecure bool) error {
+func Start(listen, target, echB64, doh, ipList, cpArg string, insecure bool) error {
 	mu.Lock()
 	if server != nil {
 		mu.Unlock()
@@ -252,7 +261,9 @@ func Start(listen, target, echB64, doh, ipList, cachePath string, insecure bool)
 	// operator-published fallback ECHConfigList for AS13335 targets whose own
 	// HTTPS record has no ech= parameter.
 	_ = target
-	_ = cachePath
+	cachePathMu.Lock()
+	cachePath = cpArg
+	cachePathMu.Unlock()
 	fallback := []byte(nil)
 	if strings.TrimSpace(echB64) != "" {
 		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(echB64))
@@ -465,21 +476,18 @@ func transportFor(host string) (*http.Transport, error) {
 	} else {
 		log.Printf("echproxy: DoH resolve for %s failed: %v", host, err)
 	}
-	// AS13335 is the ECH qualification. The target's own ech= is preferred;
-	// the operator fallback covers Cloudflare hosts that omit HTTPS ech=.
+	// ECH 配置获取顺序(AS13335 主机):
+	//   1. 本地缓存(5h TTL)—— 之前从 cloudflare-ech.com / 目标 ech= / retry 学到的
+	//   2. cloudflare-ech.com 的 HTTPS ech= (Cloudflare 官方 ECH 公钥)
+	//   3. 目标自身 HTTPS 记录的 ech=
+	//   4. operator 下发的 fallback
+	// 拿到后立即落盘,后续连接直接读缓存握手。
 	if hc.as13335 {
-		if b, err := fetchECHViaDoH(host, doh); err == nil && len(b) > 0 {
-			hc.ech = b
-			setConfigInfo("%d bytes for %s, source: target HTTPS ech=", len(b), host)
+		hc.ech, _ = loadECHConfigWithFallbacks(host, doh)
+		if len(hc.ech) > 0 {
+			setConfigInfo("%d bytes for %s", len(hc.ech), host)
 		} else {
-			mu.Lock()
-			hc.ech = append([]byte(nil), fallbackECH...)
-			mu.Unlock()
-			if len(hc.ech) > 0 {
-				setConfigInfo("%d bytes for %s, source: operator fallback", len(hc.ech), host)
-			} else {
-				setConfigInfo("no ECHConfigList for AS13335 host %s", host)
-			}
+			setConfigInfo("no ECHConfigList for AS13335 host %s", host)
 		}
 	} else {
 		setConfigInfo("%s is not AS13335; ordinary TLS via DoH", host)
@@ -543,34 +551,43 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 			NextProtos:         []string{"h2", "http/1.1"},
 			InsecureSkipVerify: insecure,
 		}
+		// ECH 可用则优先 ECH 握手;失败兜底一次(retry_configs)并缓存;
+		// 再失败降级普通 TLS(保护性降级,至少保证连通性)。
 		if hc.as13335 && len(hc.ech) > 0 {
 			cfg.EncryptedClientHelloConfigList = hc.ech
 			cfg.MinVersion = tls.VersionTLS13
-		}
-		if hc.as13335 && len(hc.ech) == 0 {
-			raw.Close()
-			return nil, fmt.Errorf("%s is AS13335 but no ECHConfigList is available", host)
 		}
 		hctx, cancel := context.WithTimeout(ctx, dialTimeout)
 		defer cancel()
 
 		tc := tls.Client(raw, cfg)
-		if err := tc.HandshakeContext(hctx); err != nil {
+		err = tc.HandshakeContext(hctx)
+		if err != nil {
 			var rej *tls.ECHRejectionError
-			if errors.As(err, &rej) && len(rej.RetryConfigList) > 0 {
-				// Production routing may accept one server retry config. It is
-				// host-scoped in hc (never promoted to the shared fallback), and
-				// the second attempt still requires ECH rather than plain TLS.
+			// ECH 被拒且服务器给了 retry_configs:兜底一次,并缓存该配置。
+			if hc.as13335 && errors.As(err, &rej) && len(rej.RetryConfigList) > 0 {
 				raw.Close()
-				setConfigInfo("%d bytes for %s, source: server retry_configs", len(rej.RetryConfigList), host)
+				setConfigInfo("%d bytes for %s, source: server retry_configs (cached)", len(rej.RetryConfigList), host)
+				// 缓存兜底配置,下次直接用它握手。
+				cachePathMu.RLock()
+				cp := cachePath
+				cachePathMu.RUnlock()
+				storePublicECHCache(cp, host, rej.RetryConfigList)
+				hc.ech = append([]byte(nil), rej.RetryConfigList...)
 				raw, retryErr := d.DialContext(ctx, "tcp", cands[0])
 				if retryErr != nil {
 					return nil, fmt.Errorf("%s retry dial failed: %w", host, retryErr)
 				}
-				retryConfig := *cfg
-				retryConfig.EncryptedClientHelloConfigList = rej.RetryConfigList
+				// 显式构造 retry 配置(不复制含锁的 cfg),仅替换 ECH 配置。
+				retryConfig := &tls.Config{
+					ServerName:                     host,
+					MinVersion:                     tls.VersionTLS13,
+					NextProtos:                     []string{"h2", "http/1.1"},
+					InsecureSkipVerify:             insecure,
+					EncryptedClientHelloConfigList: rej.RetryConfigList,
+				}
 				retryCtx, retryCancel := context.WithTimeout(ctx, dialTimeout)
-				retryConn := tls.Client(raw, &retryConfig)
+				retryConn := tls.Client(raw, retryConfig)
 				retryErr = retryConn.HandshakeContext(retryCtx)
 				retryCancel()
 				if retryErr == nil && retryConn.ConnectionState().ECHAccepted {
@@ -579,20 +596,67 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 					return retryConn, nil
 				}
 				raw.Close()
-				return nil, fmt.Errorf("%s retry ECH handshake failed: %w", host, retryErr)
+				// 兜底也失败 → 降级普通 TLS。
+				setShakeInfo("ECH retry failed for %s; downgrading to plain TLS: %v", host, retryErr)
+				return plainTLSHandshake(ctx, host, d, cands, insecure, hc.as13335 && len(hc.ech) > 0)
 			}
 			raw.Close()
+			// ECH 握手失败(非 retry 场景)→ 降级普通 TLS。
+			if hc.as13335 && len(hc.ech) > 0 {
+				setShakeInfo("ECH handshake failed for %s; downgrading to plain TLS: %v", host, err)
+				return plainTLSHandshake(ctx, host, d, cands, insecure, true)
+			}
 			return nil, fmt.Errorf("%s handshake failed: %w", host, err)
 		}
 		if hc.as13335 && !tc.ConnectionState().ECHAccepted {
 			raw.Close()
-			return nil, fmt.Errorf("%s ECH was not accepted", host)
+			// ECH 配置被服务器忽略(未接受)→ 降级普通 TLS。
+			setShakeInfo("ECH not accepted for %s; downgrading to plain TLS", host)
+			return plainTLSHandshake(ctx, host, d, cands, insecure, true)
 		}
 		if hc.as13335 {
 			setShakeInfo("ok via DoH ECHAccepted=true source=%s", orNone(configInfo))
 		}
 		return tc, nil
 	}
+}
+
+// plainTLSHandshake dials each candidate and performs an ordinary TLS handshake
+// (no ECH). Used as the last-resort fallback so a broken/rotated ECH config
+// can never fully block access; the connection still goes through DoH-resolved
+// addresses, so the poisoned system resolver is bypassed.
+func plainTLSHandshake(ctx context.Context, host string, d *net.Dialer, cands []string, insecure bool, wasECH bool) (net.Conn, error) {
+	var lastErr error
+	for _, c := range cands {
+		raw, err := d.DialContext(ctx, "tcp", c)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		cfg := &tls.Config{
+			ServerName:         host,
+			MinVersion:         tls.VersionTLS12,
+			NextProtos:         []string{"h2", "http/1.1"},
+			InsecureSkipVerify: insecure,
+		}
+		tctx, cancel := context.WithTimeout(ctx, dialTimeout)
+		tc := tls.Client(raw, cfg)
+		err = tc.HandshakeContext(tctx)
+		cancel()
+		if err != nil {
+			raw.Close()
+			lastErr = err
+			continue
+		}
+		if wasECH {
+			setShakeInfo("ok via %s plain TLS (ECH downgraded)", c)
+		}
+		return tc, nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("no dial candidates")
+	}
+	return nil, fmt.Errorf("plain TLS handshake failed: %w", lastErr)
 }
 
 // --- ECH transport --------------------------------------------------------
@@ -695,8 +759,9 @@ func echDialContext(sni string, echList []byte, cachePath string, insecure bool)
 			})
 			return tc, nil
 		}
-		setShakeInfo("FAILED after %d ECH candidate(s): %v", len(candidates), lastErr)
-		return nil, fmt.Errorf("ECH handshake failed after %d candidate(s): %w", len(candidates), lastErr)
+		setShakeInfo("FAILED after %d ECH candidate(s): %v; downgrading to plain TLS", len(candidates), lastErr)
+		// 所有 ECH 候选都失败 → 降级普通 TLS(保护性降级,保证连通)。
+		return plainTLSHandshake(ctx, sni, d, candidates, insecure, true)
 	}
 }
 
@@ -927,6 +992,59 @@ func storePublicECHCache(path, host string, config []byte) {
 	if err = tmp.Chmod(0600); err != nil { tmp.Close(); return }
 	if err = tmp.Close(); err != nil { return }
 	_ = os.Rename(name, path)
+}
+
+// cloudflareECHHost 是 Cloudflare 官方的 ECH 公钥发布点。它的 HTTPS 记录里
+// 带 ech= 参数,代表 Cloudflare 边缘的当前 ECH 公钥,适用于所有 Cloudflare
+// 托管的 AS13335 目标(archiveofourown.org 即其中之一)。
+const cloudflareECHHost = "cloudflare-ech.com"
+
+// loadECHConfigWithFallbacks returns the ECHConfigList for an AS13335 host,
+// trying in order:
+//  1. the local 5h disk cache (learned from a previous fetch or retry_configs)
+//  2. cloudflare-ech.com's HTTPS ech= (Cloudflare's official ECH public key)
+//  3. the target's own HTTPS ech= record
+//  4. the operator-published fallback ECHConfigList
+//
+// The first successful source is persisted to the cache so subsequent
+// connections handshake straight from cache without another DoH round-trip.
+func loadECHConfigWithFallbacks(host, doh string) ([]byte, string) {
+	cachePathMu.RLock()
+	cp := cachePath
+	cachePathMu.RUnlock()
+
+	// 1. Cache first:握手用缓存配置,不发 DoH。
+	if cp != "" {
+		if b, ok := loadPublicECHCache(cp, host); ok && len(b) > 0 {
+			return b, "cache"
+		}
+	}
+
+	// 2. Cloudflare 官方 ECH 公钥(适用所有 CF 站点)。
+	if doh != "" {
+		if b, err := fetchECHViaDoH(cloudflareECHHost, doh); err == nil && len(b) > 0 {
+			storePublicECHCache(cp, host, b)
+			return b, "cloudflare-ech.com"
+		}
+	}
+
+	// 3. 目标自身 HTTPS 记录的 ech=。
+	if doh != "" {
+		if b, err := fetchECHViaDoH(host, doh); err == nil && len(b) > 0 {
+			storePublicECHCache(cp, host, b)
+			return b, "target HTTPS ech="
+		}
+	}
+
+	// 4. operator fallback。
+	mu.Lock()
+	defer mu.Unlock()
+	if len(fallbackECH) > 0 {
+		b := append([]byte(nil), fallbackECH...)
+		storePublicECHCache(cp, host, b)
+		return b, "operator fallback"
+	}
+	return nil, "no ECHConfigList available"
 }
 
 func loadECHConfig(host, echB64, doh, cachePath string) ([]byte, string, error) {

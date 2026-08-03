@@ -14,6 +14,7 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useTranslation } from 'react-i18next';
 import Toast from 'react-native-toast-message';
 import { translateText } from '../../web/translate';
+import TranslateMenu from '../common/TranslateMenu';
 
 const windowHeight = Dimensions.get('window').height;
 
@@ -31,8 +32,9 @@ const BookDetailsModal = ({
   const MAX_SCROLL_HEIGHT = windowHeight * 0.7;
   const [scrollHeight, setScrollHeight] = useState(MAX_SCROLL_HEIGHT);
   const [translatedDescription, setTranslatedDescription] = useState(null);
-  const [showTranslated, setShowTranslated] = useState(false);
+  const [transMode, setTransMode] = useState('original'); // 'original' | 'translated' | 'bilingual'
   const [translating, setTranslating] = useState(false);
+  const [menuVisible, setMenuVisible] = useState(false);
 
   const handleContentSizeChange = (_w, h) => {
     setScrollHeight(Math.min(h, MAX_SCROLL_HEIGHT));
@@ -50,20 +52,20 @@ const BookDetailsModal = ({
 
   useEffect(() => {
     setTranslatedDescription(null);
-    setShowTranslated(false);
+    setTransMode('original');
   }, [book.id, book.workId]);
 
-  const handleTranslate = useCallback(async () => {
+  const handleTranslate = useCallback(async (mode) => {
     if (translating) return;
-    if (translatedDescription) {
-      setShowTranslated(value => !value);
+    if (mode === 'original') {
+      setTransMode('original');
       return;
     }
     setTranslating(true);
     try {
       const translated = await translateText(book.description);
       setTranslatedDescription(translated);
-      setShowTranslated(true);
+      setTransMode(mode);
     } catch (error) {
       Toast.show({
         type: 'error',
@@ -73,7 +75,7 @@ const BookDetailsModal = ({
     } finally {
       setTranslating(false);
     }
-  }, [book.description, t, translatedDescription, translating]);
+  }, [book.description, t, translating]);
 
   let modalTitle = t("component_book_details_modal_title", {title: book.title});
   if (mode === 'summary') {
@@ -271,7 +273,7 @@ const BookDetailsModal = ({
                           </Text>
                           <TouchableOpacity
                             style={[styles.translateButton, { borderColor: theme.primaryColor }]}
-                            onPress={handleTranslate}
+                            onPress={() => { if (!translating) setMenuVisible(true); }}
                             disabled={translating}
                           >
                             <Icon
@@ -282,19 +284,38 @@ const BookDetailsModal = ({
                             <Text style={[styles.translateText, { color: theme.primaryColor }]}>
                               {translating
                                 ? t('translate_translating')
-                                : showTranslated
+                                : transMode !== 'original'
                                   ? t('translate_show_original')
                                   : t('translate_button')}
                             </Text>
                           </TouchableOpacity>
                         </View>
-                        <Text
-                          style={[styles.description, { color: theme.textColor }]}
-                        >
-                          {showTranslated && translatedDescription
-                            ? translatedDescription
-                            : book.description}
-                        </Text>
+                        {transMode === 'bilingual' && translatedDescription ? (
+                          <View>
+                            <Text
+                              style={[styles.description, { color: theme.textColor }]}
+                            >
+                              {translatedDescription}
+                            </Text>
+                            <Text
+                              style={[
+                                styles.description,
+                                styles.originalBlock,
+                                { color: theme.secondaryTextColor },
+                              ]}
+                            >
+                              {book.description}
+                            </Text>
+                          </View>
+                        ) : (
+                          <Text
+                            style={[styles.description, { color: theme.textColor }]}
+                          >
+                            {transMode !== 'original' && translatedDescription
+                              ? translatedDescription
+                              : book.description}
+                          </Text>
+                        )}
                       </View>
                     )}
 
@@ -351,6 +372,14 @@ const BookDetailsModal = ({
           </View>
         </SafeAreaView>
       )}
+      <TranslateMenu
+        visible={menuVisible}
+        onClose={() => setMenuVisible(false)}
+        theme={theme}
+        currentMode={transMode}
+        onSelect={handleTranslate}
+        t={t}
+      />
     </Modal>
   );
 };
@@ -466,6 +495,12 @@ const styles = StyleSheet.create({
   description: {
     fontSize: 14,
     lineHeight: 20,
+  },
+  originalBlock: {
+    marginTop: 8,
+    fontSize: 12,
+    lineHeight: 17,
+    opacity: 0.8,
   },
   metadataContainer: {
     flexDirection: 'row',

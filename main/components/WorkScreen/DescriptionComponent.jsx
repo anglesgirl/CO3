@@ -14,6 +14,7 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
 import Toast from 'react-native-toast-message';
 import { useTranslation } from 'react-i18next';
 import { translateHtmlCached, translateText } from '../../web/translate';
+import TranslateMenu from '../common/TranslateMenu';
 
 const COLLAPSED_HEIGHT = 90;
 
@@ -40,14 +41,16 @@ export const WorkDescription = React.memo(({ work, currentTheme, jsonSettings })
   const [fullHeight, setFullHeight] = useState(0);
 
   // Translation of the summary (on demand, cached per work).
+  // mode: 'original' | 'translated' | 'bilingual'
   const [translated, setTranslated] = useState(null); // { html, text }
-  const [showTranslated, setShowTranslated] = useState(false);
+  const [transMode, setTransMode] = useState('original');
   const [translating, setTranslating] = useState(false);
+  const [menuVisible, setMenuVisible] = useState(false);
 
-  const onTranslate = useCallback(async () => {
+  const onTranslate = useCallback(async (mode) => {
     if (translating) return;
-    if (translated) {
-      setShowTranslated(v => !v);
+    if (mode === 'original') {
+      setTransMode('original');
       return;
     }
     setTranslating(true);
@@ -60,7 +63,7 @@ export const WorkDescription = React.memo(({ work, currentTheme, jsonSettings })
         work.description ? translateText(work.description) : Promise.resolve(null),
       ]);
       setTranslated({ html, text });
-      setShowTranslated(true);
+      setTransMode(mode);
     } catch (e) {
       Toast.show({
         type: 'error',
@@ -70,7 +73,12 @@ export const WorkDescription = React.memo(({ work, currentTheme, jsonSettings })
     } finally {
       setTranslating(false);
     }
-  }, [translating, translated, work, t]);
+  }, [translating, work, t]);
+
+  const openTranslateMenu = useCallback(() => {
+    if (translating) return;
+    setMenuVisible(true);
+  }, [translating]);
 
   const animatedHeight = useSharedValue(COLLAPSED_HEIGHT);
 
@@ -107,26 +115,56 @@ export const WorkDescription = React.memo(({ work, currentTheme, jsonSettings })
 
   if (!work?.description) return null;
 
-  const shownHtml = showTranslated && translated?.html ? translated.html : work.descriptionHTML;
-  const shownText = showTranslated && translated?.text ? translated.text : work.description;
+  // 双语模式:译文块在上,原文块(浅色小字)在下。
+  const isBilingual = transMode === 'bilingual';
+  const isTranslated = transMode !== 'original' && translated;
+  const shownHtml = isTranslated ? translated.html : work.descriptionHTML;
+  const shownText = isTranslated ? translated.text : work.description;
 
   const renderedContent = useMemo(() => {
+    const main = jsonSettings?.preferHtml ? (
+      <HtmlTextRenderer
+        currentTheme={currentTheme}
+        html={shownHtml}
+        extraTagsStyles={HTML_TAG_STYLES}
+      />
+    ) : (
+      <Text style={[styles.description, { color: currentTheme.textColor }]}>
+        {shownText}
+      </Text>
+    );
+
+    if (!isBilingual) return <View style={styles.contentPadding}>{main}</View>;
+
+    // 双语:译文 + 原文(浅色小字)两段叠放。
+    const originalBlock = jsonSettings?.preferHtml ? (
+      <HtmlTextRenderer
+        currentTheme={currentTheme}
+        html={work.descriptionHTML}
+        extraTagsStyles={{
+          ...HTML_TAG_STYLES,
+          p: { ...HTML_TAG_STYLES.p, color: currentTheme.secondaryTextColor },
+        }}
+      />
+    ) : (
+      <Text
+        style={[
+          styles.description,
+          styles.originalBlock,
+          { color: currentTheme.secondaryTextColor },
+        ]}
+      >
+        {work.description}
+      </Text>
+    );
+
     return (
       <View style={styles.contentPadding}>
-        {jsonSettings?.preferHtml ? (
-          <HtmlTextRenderer
-            currentTheme={currentTheme}
-            html={shownHtml}
-            extraTagsStyles={HTML_TAG_STYLES}
-          />
-        ) : (
-          <Text style={[styles.description, { color: currentTheme.textColor }]}>
-            {shownText}
-          </Text>
-        )}
+        {main}
+        {originalBlock}
       </View>
     );
-  }, [shownHtml, shownText, currentTheme, jsonSettings?.preferHtml]);
+  }, [shownHtml, shownText, isBilingual, work, currentTheme, jsonSettings?.preferHtml]);
 
   const isActuallyTall = fullHeight > COLLAPSED_HEIGHT;
 
@@ -165,18 +203,18 @@ export const WorkDescription = React.memo(({ work, currentTheme, jsonSettings })
       <View style={styles.actionRow}>
         <TouchableOpacity
           style={styles.translateButton}
-          onPress={onTranslate}
+          onPress={openTranslateMenu}
           disabled={translating}
         >
           <Icon
             name={translating ? 'hourglass-empty' : 'translate'}
             size={20}
-            color={showTranslated ? currentTheme.primaryColor : currentTheme.iconColor}
+            color={transMode !== 'original' ? currentTheme.primaryColor : currentTheme.iconColor}
           />
           <Text style={{ color: currentTheme.iconColor, fontSize: 12, marginLeft: 4 }}>
             {translating
               ? t('translate_translating')
-              : showTranslated
+              : transMode !== 'original'
                 ? t('translate_show_original')
                 : t('translate_button')}
           </Text>
@@ -192,6 +230,15 @@ export const WorkDescription = React.memo(({ work, currentTheme, jsonSettings })
           </TouchableOpacity>
         )}
       </View>
+
+      <TranslateMenu
+        visible={menuVisible}
+        onClose={() => setMenuVisible(false)}
+        theme={currentTheme}
+        currentMode={transMode}
+        onSelect={onTranslate}
+        t={t}
+      />
     </View>
   );
 });
@@ -221,6 +268,12 @@ const styles = StyleSheet.create({
   description: {
     fontSize: 14,
     lineHeight: 20,
+  },
+  originalBlock: {
+    marginTop: 8,
+    fontSize: 12,
+    lineHeight: 17,
+    opacity: 0.8,
   },
   descriptionGradient: {
     position: 'absolute',

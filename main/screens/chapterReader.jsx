@@ -22,6 +22,7 @@ import Toast from 'react-native-toast-message';
 import { useTranslation } from 'react-i18next';
 import { translateHtmlCached } from '../web/translate';
 import { userErrorMessage } from '../utils/userError';
+import TranslateMenu from '../components/common/TranslateMenu';
 
 const PULL_THRESHOLD = 150;
 const PROGRESS_SAVE_DEBOUNCE = 1000;
@@ -112,10 +113,11 @@ const ChapterReader = ({
   const [jsonSettings, setJsonSettings] = useState();
 
   // Translation state: translatedHtml holds the rendered translation, and
-  // transMode cycles original → translated → bilingual → original.
+  // transMode selects original → translated → bilingual (via TranslateMenu).
   const [translatedHtml, setTranslatedHtml] = useState(null);
   const [transMode, setTransMode] = useState('original'); // 'original' | 'translated' | 'bilingual'
   const [translating, setTranslating] = useState(false);
+  const [menuVisible, setMenuVisible] = useState(false);
 
   // Reset when the chapter changes.
   useEffect(() => {
@@ -123,57 +125,38 @@ const ChapterReader = ({
     setTransMode('original');
   }, [chapterID, htmlContent]);
 
-  const handleTranslate = async () => {
+  const translateChapter = async (mode) => {
     if (translating) return;
-    if (transMode === 'original') {
-      // First tap: fetch the translation if we don't have it yet.
-      if (!translatedHtml) {
-        setTranslating(true);
-        try {
-          const out = await translateHtmlCached(
-            `ch_${chapterID || workId}`,
-            htmlContent,
-          );
-          setTranslatedHtml(out);
-        } catch (e) {
-          Toast.show({
-            type: 'error',
-            text1: t('translate_failed'),
-            text2: e?.message ?? String(e),
-          });
-          setTranslating(false);
-          return;
-        }
-        setTranslating(false);
-      }
-      setTransMode('translated');
-    } else if (transMode === 'translated') {
-      // Second tap: bilingual view (reuses the cached translation + originals).
-      setTranslating(true);
-      try {
-        const out = await translateHtmlCached(
-          `ch_${chapterID || workId}`,
-          htmlContent,
-          undefined,
-          undefined,
-          true,
-        );
-        setTranslatedHtml(out);
-      } catch (e) {
-        Toast.show({
-          type: 'error',
-          text1: t('translate_failed'),
-          text2: e?.message ?? String(e),
-        });
-        setTranslating(false);
-        return;
-      }
-      setTranslating(false);
-      setTransMode('bilingual');
-    } else {
-      // Third tap: back to original.
+    if (mode === 'original') {
       setTransMode('original');
+      return;
     }
+    setTranslating(true);
+    try {
+      const bilingual = mode === 'bilingual';
+      const out = await translateHtmlCached(
+        `ch_${chapterID || workId}`,
+        htmlContent,
+        undefined,
+        undefined,
+        bilingual,
+      );
+      setTranslatedHtml(out);
+      setTransMode(mode);
+    } catch (e) {
+      Toast.show({
+        type: 'error',
+        text1: t('translate_failed'),
+        text2: e?.message ?? String(e),
+      });
+    } finally {
+      setTranslating(false);
+    }
+  };
+
+  const handleTranslate = () => {
+    if (translating) return;
+    setMenuVisible(true);
   };
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -789,6 +772,15 @@ const ChapterReader = ({
             libraryDAO={libraryDAO} progressDAO={progressDAO} setScreens={setScreens} settingsDAO={settingsDAO} workDAO={workDAO}
           />
         </Modal>
+
+        <TranslateMenu
+          visible={menuVisible}
+          onClose={() => setMenuVisible(false)}
+          theme={currentTheme}
+          currentMode={transMode}
+          onSelect={translateChapter}
+          t={t}
+        />
       </View>
     </GestureHandlerRootView>
   );

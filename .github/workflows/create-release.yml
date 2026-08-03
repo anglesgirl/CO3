@@ -26,16 +26,17 @@ jobs:
             echo "Continuing anyway..."
           fi
 
-      - name: Compute versionCode (total number of releases)
+      - name: Compute versionCode (increment from current build.gradle)
         id: version
         run: |
-          # Count all tags that start with B or V (your release tags)
-          RELEASE_COUNT=$(git tag --list 'B*' --list 'V*' | wc -l)
-          # New versionCode = previous max + 1
-          VERSION_CODE=$((RELEASE_COUNT + 1))
+          # 从 build.gradle 读当前 versionCode 再 +1,保证单调递增。
+          # (不能用 tag 计数:tag 数不等于 versionCode,且 versionCode 降级
+          #  会导致 Android 拒绝覆盖安装。)
+          CURRENT_VC=$(grep -oP 'versionCode \K[0-9]+' android/app/build.gradle | head -1)
+          VERSION_CODE=$((CURRENT_VC + 1))
           echo "versionCode=$VERSION_CODE" >> $GITHUB_OUTPUT
           echo "tag=${{ github.event.inputs.version_tag }}" >> $GITHUB_OUTPUT
-          echo "📦 Tag: ${{ github.event.inputs.version_tag }} | versionCode: $VERSION_CODE"
+          echo "📦 Tag: ${{ github.event.inputs.version_tag }} | versionCode: $CURRENT_VC -> $VERSION_CODE"
 
       - name: Update JS version constant
         run: |

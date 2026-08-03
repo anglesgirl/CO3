@@ -570,5 +570,17 @@
   "account_create_account": "创建账号",
   "account_activate_hint": "AO3 已给你发送激活邮件。用同样的方法复制里面的激活链接并粘贴到下方，即可完成激活；也可以直接在邮箱里点击它。",
   "account_activate_button": "激活账号",
-  "account_copy_link_tip": "提示：国内邮箱通常无法直接点开链接。请长按链接，选择「复制链接地址」；如果无法长按，点击后在页面里找到「复制链接」按钮。"
+  "account_copy_link_tip": "提示：国内邮箱通常无法直接点开链接。请长按链接，选择「复制链接地址」；如果无法长按，点击后在页面里找到「复制链接」按钮。",
+  "translate_option_original": "显示原文",
+  "translate_option_chinese": "中文",
+  "translate_option_bilingual": "双语",
+  "translate_option_bilingual_hint": "译文在上，原文在下",
+  "update_check_button": "检查更新",
+  "update_checking": "正在检查更新…",
+  "update_latest_title": "已是最新版本",
+  "update_latest_message": "当前已是最新版本，无需更新。",
+  "update_skipped_title": "已跳过该版本",
+  "update_skipped_message": "你之前选择跳过此版本，如需要可前往 GitHub 手动下载。",
+  "update_check_failed_title": "检查更新失败",
+  "update_check_failed_message": "网络异常，请稍后重试。"
 }
