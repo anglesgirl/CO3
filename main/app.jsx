@@ -594,8 +594,12 @@ const App = () => {
 
   useEffect(() => {
     const backAction = () => {
+      console.log(screens);
       if (screens.length > 0) {
-        setScreens(screen => screen.slice(0, -1));
+        return true;
+      } else if (activeScreen === "search") {
+        setActiveScreen("library")
+        console.log("Back on search, opening library as fallback");
         return true;
       }
       // 应用即将退出，上报卸载事件
@@ -609,7 +613,7 @@ const App = () => {
     );
 
     return () => backHandler.remove();
-  }, [screens]);
+  }, [screens, activeScreen]);
 
   const initializeApp = async () => {
     const jsonSettings = await getJsonSettings();
