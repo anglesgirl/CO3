@@ -87,7 +87,14 @@ import CategoryScreen from './screens/more/CategoryScreen';
 import BookmarksScreen from './screens/more/BookmarksScreen';
 import AboutScreen from './screens/more/AboutScreen';
 import { debugLog, installDebugConsoleCapture } from './utils/debugLog';
-import {\n  initAnalytics,\n  track,\n  startHeartbeat,\n  stopHeartbeat,\n  cleanupAnalytics,\n  trackEvent,\n} from './utils/analytics';
+import {
+  initAnalytics,
+  track,
+  startHeartbeat,
+  stopHeartbeat,
+  cleanupAnalytics,
+  trackEvent,
+} from './utils/analytics';
 
 export const AppContext = createContext();
 const Stack = createNativeStackNavigator();
