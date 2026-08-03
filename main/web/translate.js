@@ -49,8 +49,10 @@ export async function setTargetLang(lang) {
 
 // --- core call ------------------------------------------------------------
 
-// translateChunk sends one string and returns its translation.
-async function translateChunk(text, target, endpoint) {
+// translateChunkPairs sends one string and returns per-segment
+// { translated, original } pairs. The gtx endpoint echoes the original text
+// (segment [1]), which lets us build bilingual output with zero extra calls.
+async function translateChunkPairs(text, target, endpoint) {
   const url =
     `${endpoint}?client=gtx&sl=auto&tl=${encodeURIComponent(target)}` +
     `&dt=t&q=${encodeURIComponent(text)}`;
@@ -64,7 +66,17 @@ async function translateChunk(text, target, endpoint) {
   if (!Array.isArray(data) || !Array.isArray(data[0])) {
     throw new Error('unexpected translate response');
   }
-  return data[0].map(seg => (Array.isArray(seg) ? seg[0] : '')).join('');
+  return data[0].map(seg =>
+    Array.isArray(seg)
+      ? { translated: seg[0] ?? '', original: seg[1] ?? '' }
+      : { translated: '', original: '' },
+  );
+}
+
+// translateChunk sends one string and returns its translation.
+async function translateChunk(text, target, endpoint) {
+  const pairs = await translateChunkPairs(text, target, endpoint);
+  return pairs.map(p => p.translated).join('');
 }
 
 // Runs jobs with a small concurrency limit so we don't hammer the endpoint.
@@ -133,8 +145,12 @@ function isTranslatable(s) {
  * Text nodes are grouped into batches separated by a newline; if the provider
  * doesn't return the same number of lines we fall back to translating that
  * batch's pieces individually, so a mismatch can never scramble the chapter.
+ *
+ * When `bilingual` is true, each text node is emitted as
+ *   <span class="co3-tr">译文</span><span class="co3-orig">原文</span>
+ * so a stylesheet can render the original as muted text under the translation.
  */
-export async function translateHtml(html, target, endpoint, onProgress) {
+export async function translateHtml(html, target, endpoint, onProgress, bilingual = false) {
   if (!html) return html;
   const tl = target || (await getTargetLang());
   const ep = endpoint || (await getEndpoint());
@@ -168,23 +184,44 @@ export async function translateHtml(html, target, endpoint, onProgress) {
     const cores = batch.map(i => tokens[i].v.trim());
     const joined = cores.join('\n');
     let results = null;
+    let originals = null;
     try {
-      const out = await translateChunk(joined, tl, ep);
-      const lines = out.split('\n').filter(l => l !== '');
-      if (lines.length === cores.length) results = lines;
+      const out = await translateChunkPairs(joined, tl, ep);
+      const lines = out.map(p => p.translated).filter(l => l !== '');
+      if (lines.length === cores.length) {
+        results = lines;
+        originals = out.map(p => p.original);
+      }
     } catch {
       // fall through to per-node translation
     }
     if (!results) {
-      results = await mapLimit(cores, 1, c =>
-        translateChunk(c, tl, ep).catch(() => c),
-      );
+      const pairs = await mapLimit(cores, 1, async c => {
+        try {
+          const p = await translateChunkPairs(c, tl, ep);
+          return { translated: p[0]?.translated ?? c, original: p[0]?.original ?? c };
+        } catch {
+          return { translated: c, original: c };
+        }
+      });
+      results = pairs.map(p => p.translated);
+      originals = pairs.map(p => p.original);
     }
     batch.forEach((tokenIdx, k) => {
       const original = tokens[tokenIdx].v;
       const lead = original.match(/^\s*/)[0];
       const trail = original.match(/\s*$/)[0];
-      tokens[tokenIdx].v = lead + (results[k] ?? original.trim()) + trail;
+      const translated = results[k] ?? original.trim();
+      if (bilingual) {
+        const origText = originals?.[k] ?? original.trim();
+        tokens[tokenIdx].v =
+          lead +
+          `<span class="co3-tr">${translated}</span>` +
+          `<span class="co3-orig">${origText}</span>` +
+          trail;
+      } else {
+        tokens[tokenIdx].v = lead + translated + trail;
+      }
     });
     done += 1;
     onProgress?.(done, batches.length);
@@ -217,12 +254,12 @@ export async function setCached(key, source, value) {
 }
 
 /** Translates HTML with a cache keyed on the source text. */
-export async function translateHtmlCached(cacheKey, html, target, onProgress) {
+export async function translateHtmlCached(cacheKey, html, target, onProgress, bilingual = false) {
   const tl = target || (await getTargetLang());
-  const k = `${cacheKey}_${tl}`;
+  const k = `${cacheKey}_${tl}${bilingual ? '_bi' : ''}`;
   const hit = await getCached(k, html);
   if (hit) return hit;
-  const out = await translateHtml(html, tl, undefined, onProgress);
+  const out = await translateHtml(html, tl, undefined, onProgress, bilingual);
   await setCached(k, html, out);
   return out;
 }

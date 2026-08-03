@@ -112,39 +112,67 @@ const ChapterReader = ({
   const [jsonSettings, setJsonSettings] = useState();
 
   // Translation state: translatedHtml holds the rendered translation, and
-  // showTranslated toggles between it and the original.
+  // transMode cycles original → translated → bilingual → original.
   const [translatedHtml, setTranslatedHtml] = useState(null);
-  const [showTranslated, setShowTranslated] = useState(false);
+  const [transMode, setTransMode] = useState('original'); // 'original' | 'translated' | 'bilingual'
   const [translating, setTranslating] = useState(false);
 
   // Reset when the chapter changes.
   useEffect(() => {
     setTranslatedHtml(null);
-    setShowTranslated(false);
+    setTransMode('original');
   }, [chapterID, htmlContent]);
 
   const handleTranslate = async () => {
     if (translating) return;
-    if (translatedHtml) {
-      setShowTranslated(v => !v); // already have it — just toggle
-      return;
-    }
-    setTranslating(true);
-    try {
-      const out = await translateHtmlCached(
-        `ch_${chapterID || workId}`,
-        htmlContent,
-      );
-      setTranslatedHtml(out);
-      setShowTranslated(true);
-    } catch (e) {
-      Toast.show({
-        type: 'error',
-        text1: t('translate_failed'),
-        text2: e?.message ?? String(e),
-      });
-    } finally {
+    if (transMode === 'original') {
+      // First tap: fetch the translation if we don't have it yet.
+      if (!translatedHtml) {
+        setTranslating(true);
+        try {
+          const out = await translateHtmlCached(
+            `ch_${chapterID || workId}`,
+            htmlContent,
+          );
+          setTranslatedHtml(out);
+        } catch (e) {
+          Toast.show({
+            type: 'error',
+            text1: t('translate_failed'),
+            text2: e?.message ?? String(e),
+          });
+          setTranslating(false);
+          return;
+        }
+        setTranslating(false);
+      }
+      setTransMode('translated');
+    } else if (transMode === 'translated') {
+      // Second tap: bilingual view (reuses the cached translation + originals).
+      setTranslating(true);
+      try {
+        const out = await translateHtmlCached(
+          `ch_${chapterID || workId}`,
+          htmlContent,
+          undefined,
+          undefined,
+          true,
+        );
+        setTranslatedHtml(out);
+      } catch (e) {
+        Toast.show({
+          type: 'error',
+          text1: t('translate_failed'),
+          text2: e?.message ?? String(e),
+        });
+        setTranslating(false);
+        return;
+      }
       setTranslating(false);
+      setTransMode('bilingual');
+    } else {
+      // Third tap: back to original.
+      setTransMode('original');
     }
   };
 
@@ -445,6 +473,12 @@ const ChapterReader = ({
     document.body.style.color = '${currentTheme.textColor}';
     document.body.style.padding = '20px';
     document.body.style.paddingBottom = '120px';
+    // Bilingual translation styles: translation on top, muted original below.
+    const biStyle = document.createElement('style');
+    biStyle.textContent = '.co3-tr{display:block;margin-bottom:0.15em;}' +
+      '.co3-orig{display:block;color:${currentTheme.secondaryTextColor};' +
+      'font-size:0.82em;line-height:1.45;margin-bottom:0.9em;opacity:0.75;}';
+    document.head.appendChild(biStyle);
     ${ jsonSettings && !jsonSettings.allowSelectingText &&
     "document.body.style.webkitUserSelect = 'none'; document.body.style.userSelect = 'none'"
     }
@@ -579,7 +613,9 @@ const ChapterReader = ({
           name={translating ? 'hourglass-empty' : 'translate'}
           size={22}
           color={
-            showTranslated ? currentTheme.primaryColor : currentTheme.iconColor
+            transMode !== 'original'
+              ? currentTheme.primaryColor
+              : currentTheme.iconColor
           }
         />
       </TouchableOpacity>
@@ -704,7 +740,7 @@ const ChapterReader = ({
           allowFileAccess={true}
           source={{
             html:
-              (showTranslated && translatedHtml ? translatedHtml : htmlContent) ||
+              (transMode !== 'original' && translatedHtml ? translatedHtml : htmlContent) ||
               `<p>${t('reader_error_fallback')}</p>`,
           }}
           style={styles.webView}
