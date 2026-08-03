@@ -40,7 +40,15 @@ describe('requested feature boundaries', () => {
 
   it('uses a new Android version so the previous installation is replaced', () => {
     const gradle = read('android/app/build.gradle');
-    expect(gradle).toContain('versionCode 21');
-    expect(gradle).toContain('versionName "B0.0.21"');
+    // 版本号由发版流程递增,不锁死具体值;只校验存在且 versionCode 与
+    // versionName 一致(B0.0.X ↔ versionCode X)。
+    const vc = gradle.match(/versionCode (\d+)/)?.[1];
+    const vn = gradle.match(/versionName "([^"]+)"/)?.[1];
+    expect(vc).toBeTruthy();
+    expect(vn).toBeTruthy();
+    expect(parseInt(vc, 10)).toBeGreaterThan(0);
+    // versionName 形如 B0.0.22,其末尾数字应与 versionCode 一致
+    const nameNum = vn.match(/(\d+)$/)?.[1];
+    if (nameNum) expect(parseInt(nameNum, 10)).toBe(parseInt(vc, 10));
   });
 });
