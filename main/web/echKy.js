@@ -75,7 +75,6 @@ export async function getCustomIPs() {
   }
 }
 
-let echBasePromise = null; // Promise<string|null> — memoised
 let lastStartAttempt = 0;  // 上次启动尝试时间戳(ms)，用于失败后冷却重试
 const START_RETRY_COOLDOWN_MS = 30_000; // 启动失败后 30 秒内不重复尝试，之后惰性重试
 
