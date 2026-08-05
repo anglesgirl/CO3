@@ -475,6 +475,23 @@ func transportFor(host string) (*http.Transport, error) {
 		setDNSInfo("%s: %d DoH address(es), AS13335=%v", host, len(ips), hc.as13335)
 	} else {
 		log.Printf("echproxy: DoH resolve for %s failed: %v", host, err)
+		// DoH 失败时用种子 TXT 下发的优选 IP 兜底直连（不抛错断网）。
+		// 与 Han1meViewer 已验证方案一致：宁可走种子 IP 直连 + ECH，
+		// 也不要因为 DoH 被墙/抖动就完全断网。
+		mu.Lock()
+		fallbackIPs := append([]string(nil), customIPs...)
+		mu.Unlock()
+		if len(fallbackIPs) > 0 {
+			hc.ips = fallbackIPs
+			// 种子 IP 一般是 Cloudflare 边缘，按 AS13335 处理以启用 ECH。
+			hc.as13335 = allCloudflareAS13335(fallbackIPs)
+			setDNSInfo("%s: DoH failed, using %d seed IP(s) fallback, AS13335=%v",
+				host, len(fallbackIPs), hc.as13335)
+		} else {
+			hc.ips = nil
+			hc.as13335 = false
+			setDNSInfo("%s: DoH failed and no seed IP fallback", host)
+		}
 	}
 	// ECH 配置获取顺序(AS13335 主机):
 	//   1. 本地缓存(5h TTL)—— 之前从 cloudflare-ech.com / 目标 ech= / retry 学到的

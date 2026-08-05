@@ -75,7 +75,17 @@ export async function getCustomIPs() {
   }
 }
 
+let echBasePromise = null; // Promise<string|null> — memoised
+let lastStartAttempt = 0;  // 上次启动尝试时间戳(ms)，用于失败后冷却重试
+const START_RETRY_COOLDOWN_MS = 30_000; // 启动失败后 30 秒内不重复尝试，之后惰性重试
+
+// 代理是否处于"启动失败需重试"状态。失败后返回 false，冷却期过后返回 true。
+function shouldRetryStart() {
+  return Date.now() - lastStartAttempt >= START_RETRY_COOLDOWN_MS;
+}
+
 function startProxy() {
+  lastStartAttempt = Date.now();
   echBasePromise = (async () => {
     if (Platform.OS !== 'android') return null; // iOS: not wired yet
     const mod = NativeModules.EchProxy;
@@ -91,6 +101,9 @@ function startProxy() {
       return base;
     } catch (e) {
       console.warn(`[ECH] proxy failed to start in ${Date.now() - t0}ms:`, e?.message ?? e);
+      // 失败不永久 memoise：置空并清掉 promise，让下次请求走 shouldRetryStart 冷却后重试。
+      // 否则一次失败(DoH 抖动/被墙)会让整个 App 会话永久断网。
+      echBasePromise = null;
       return null;
     }
   })();
@@ -98,7 +111,10 @@ function startProxy() {
 }
 
 export function getEchBase() {
-  return echBasePromise || startProxy();
+  if (echBasePromise) return echBasePromise;
+  if (shouldRetryStart()) return startProxy();
+  // 冷却期内不重复启动，返回一个立即失败的 promise（调用方会走 WebView 兜底）。
+  return Promise.resolve(null);
 }
 
 // Eagerly warm up the proxy so it's ready before the first AO3 request, then
