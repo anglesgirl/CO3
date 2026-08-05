@@ -61,13 +61,17 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add android/app/build.gradle
           git add main/constant.js
-          git commit -m "Release ${{ steps.version.outputs.tag }}"
-          git tag ${{ steps.version.outputs.tag }}
+          if ! git diff --cached --quiet; then
+            git commit -m "Release ${{ steps.version.outputs.tag }}"
+          else
+            echo "No changes to commit (files already updated)"
+          fi
+          git tag ${{ steps.version.outputs.tag }} 2>/dev/null || echo "Tag already exists locally"
           git push origin main
           # co3-b020 可能与当前 checkout 分支不同名,用 refspec 直接推,
           # 不依赖本地是否 checkout 了该分支。
           git push origin main:co3-b020
-          git push origin ${{ steps.version.outputs.tag }}
+          git push origin ${{ steps.version.outputs.tag }} 2>/dev/null || echo "Tag already exists on remote"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
