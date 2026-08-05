@@ -64,9 +64,10 @@ jobs:
           git commit -m "Release ${{ steps.version.outputs.tag }}" || echo "No changes to commit"
           git tag -f ${{ steps.version.outputs.tag }}
           git push origin main
-          # co3-b020 可能与当前 checkout 分支不同名,用 refspec 直接推,
-          # 不依赖本地是否 checkout 了该分支。
-          git push origin main:co3-b020
+          # co3-b020 是发布触发用分支（android-ech.yml 的 workflow_dispatch ref），
+          # 正式构建 checkout 的是 release_tag，不看 co3-b020 内容。
+          # 用 force push 保持它与 main 永远一致，防止再次分叉导致 push 被拒。
+          git push --force origin main:co3-b020
           git push origin -f ${{ steps.version.outputs.tag }}
 
       - name: Create GitHub Release
