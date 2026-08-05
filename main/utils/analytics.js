@@ -66,6 +66,7 @@ async function ensureDistinctId() {
  */
 function getClientInfo() {
   return {
+    app: 'co3',
     app_version: co3Version,
     os: Platform.OS,
     os_version: String(Platform.Version),
