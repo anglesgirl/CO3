@@ -4,6 +4,11 @@ import { co3Version, GITHUB_REPO, UPDATE_CHECK_INTERVAL_MS } from '../constant';
 
 const LAST_CHECK_KEY = 'appUpdateLastCheck';
 const SKIPPED_KEY = 'appUpdateSkippedVersion';
+const RATE_LIMIT_KEY = 'appUpdateRateLimited';
+
+// GitHub 匿名 API 限流 60 次/小时。收到 429 后 6 小时内不再自动检查，
+// 避免每次启动都打 API 触发限流（手动检查仍可强制触发）。
+const RATE_LIMIT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
 // 比较形如 "B0.0.20" / "V1.2.3" 的版本号。
 // 返回 >0 表示 b 比 a 新,<0 表示 b 更旧,0 表示相同。
@@ -35,6 +40,11 @@ export async function checkAppUpdate(t, force = false) {
     if (!force && last && now - parseInt(last, 10) < UPDATE_CHECK_INTERVAL_MS) {
       return null;
     }
+    // 429 冷却期内自动检查直接跳过（手动检查不受限）
+    const rateLimitedAt = await AsyncStorage.getItem(RATE_LIMIT_KEY);
+    if (!force && rateLimitedAt && now - parseInt(rateLimitedAt, 10) < RATE_LIMIT_COOLDOWN_MS) {
+      return null;
+    }
 
     const res = await fetch(
       `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
@@ -45,6 +55,12 @@ export async function checkAppUpdate(t, force = false) {
         },
       },
     );
+    if (res.status === 429 || res.status === 403) {
+      // 限流：记录冷却时间，避免每次启动都打 API
+      await AsyncStorage.setItem(RATE_LIMIT_KEY, String(now));
+      if (force) return `http_${res.status}`;
+      return null;
+    }
     if (!res.ok) {
       // 手动检查时让用户知道失败原因(启动时仍静默)。
       if (force) return `http_${res.status}`;
@@ -71,11 +87,12 @@ export async function checkAppUpdate(t, force = false) {
     const hint = t('update_open_hint');
     const message = body ? `${body}\n\n${hint}` : hint;
 
-    // GitHub 直连在国内常打不开,提供镜像入口。
-    // gh-proxy 会把 release 页面里的资源按相同路径代理。
-    const mirrorUrl = data.html_url
-      ? `https://gh-proxy.com/${data.html_url}`
-      : null;
+    // APK 直链：GitHub API 的 assets[].browser_download_url 就是可直接下载的
+    // APK 文件地址（比 release 网页更快、更省流量）。GitHub 直连国内常打不开，
+    // 用 gh-proxy 镜像同一条 APK 下载链接。
+    const apkAsset = data.assets && data.assets.length > 0 ? data.assets[0] : null;
+    const downloadUrl = apkAsset ? apkAsset.browser_download_url : null;
+    const mirrorUrl = downloadUrl ? `https://gh-proxy.com/${downloadUrl}` : null;
 
     const buttons = [
       {
