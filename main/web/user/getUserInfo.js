@@ -7,7 +7,11 @@ async function scrapeUserPage(url, username) {
   const res = await getUrl(url);
 
   const doc = new DomParser().parseFromString(res, "text/html");
-  const avatar = Array.from(doc.getElementsByTagName("img")).filter(img => img?.getAttribute("class") === "icon")[0];
+  // 头像必须在 #main 主体内找：页面 header 里当前登录用户自己的头像
+  // 也是 class="icon" 且 DOM 顺序靠前，全文档取第一个会拿到"自己"的头像。
+  // （AO3 登录态下 header 头像在 #main 之外，限定作用域即可避开。）
+  const mainScope = doc.getElementById("main") || doc;
+  const avatar = Array.from(mainScope.getElementsByTagName("img")).filter(img => img?.getAttribute("class") === "icon")[0];
   const bio = Array.from(doc.getElementsByTagName("blockquote"))
     .filter(a => a.getAttribute("class") === `userstuff` && a.parentNode.getAttribute("id") !== "admin-banner")[0];
 
