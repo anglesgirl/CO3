@@ -72,9 +72,9 @@ export async function checkAppUpdate(t, force = false) {
     const message = body ? `${body}\n\n${hint}` : hint;
 
     // GitHub 直连在国内常打不开,提供镜像入口。
-    // ghproxy 会把 release 页面里的资源按相同路径代理。
+    // gh-proxy 会把 release 页面里的资源按相同路径代理。
     const mirrorUrl = data.html_url
-      ? `https://ghproxy.com/${data.html_url}`
+      ? `https://gh-proxy.com/${data.html_url}`
       : null;
 
     const buttons = [
