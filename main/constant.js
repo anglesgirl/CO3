@@ -1,4 +1,4 @@
-export const co3Version = "B0.0.23"
+export const co3Version = "B0.0.24"
 
 // ---- 匿名使用统计 (PostHog) ----
 // 注册 PostHog 账号后,把 Project API Key 填到这里即可启用统计(形如 phc_xxx)。
