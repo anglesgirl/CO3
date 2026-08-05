@@ -26,17 +26,22 @@ jobs:
             echo "Continuing anyway..."
           fi
 
-      - name: Compute versionCode (increment from current build.gradle)
+      - name: Compute versionCode (from tag last number)
         id: version
         run: |
-          # 从 build.gradle 读当前 versionCode 再 +1,保证单调递增。
-          # (不能用 tag 计数:tag 数不等于 versionCode,且 versionCode 降级
-          #  会导致 Android 拒绝覆盖安装。)
-          CURRENT_VC=$(grep -oP 'versionCode \K[0-9]+' android/app/build.gradle | head -1)
-          VERSION_CODE=$((CURRENT_VC + 1))
+          # 从 tag (B0.0.23) 取最后一位作为 versionCode,保证与 versionName 一致。
+          # 这样同一 tag 重跑不会导致 versionCode 递增、测试失败。
+          TAG="${{ github.event.inputs.version_tag }}"
+          if [[ "$TAG" =~ ^[BV][0-9]+\.[0-9]+\.([0-9]+)$ ]]; then
+            VERSION_CODE=${BASH_REMATCH[1]}
+          else
+            # 回退:从 build.gradle 读当前 versionCode 再 +1
+            CURRENT_VC=$(grep -oP 'versionCode \K[0-9]+' android/app/build.gradle | head -1)
+            VERSION_CODE=$((CURRENT_VC + 1))
+          fi
           echo "versionCode=$VERSION_CODE" >> $GITHUB_OUTPUT
-          echo "tag=${{ github.event.inputs.version_tag }}" >> $GITHUB_OUTPUT
-          echo "📦 Tag: ${{ github.event.inputs.version_tag }} | versionCode: $CURRENT_VC -> $VERSION_CODE"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "📦 Tag: $TAG | versionCode: $VERSION_CODE"
 
       - name: Update JS version constant
         run: |
@@ -75,7 +80,7 @@ jobs:
       - name: Trigger iOS build
         run: |
           curl -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Authorization: token ${ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/${{ github.repository }}/actions/workflows/ios-build.yml/dispatches \
             -d '{
@@ -88,7 +93,7 @@ jobs:
       - name: Trigger Android ECH build
         run: |
           curl -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Authorization: token ${ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/${{ github.repository }}/actions/workflows/android-ech.yml/dispatches \
             -d '{
