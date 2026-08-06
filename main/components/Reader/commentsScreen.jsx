@@ -2,13 +2,13 @@ import {
   ActivityIndicator,
   FlatList,
   Image,
-  SafeAreaView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { useEffect, useState } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { fetchComments } from '../../web/worksScreen/fetchComments';
 import HtmlTextRenderer from '../common/HtmlTextRenderer';
 import { getJsonSettings } from '../../storage/jsonSettings';
@@ -32,6 +32,9 @@ export const CommentsScreen = ({
   chapterDAO,
 }) => {
   const navigation = useNavigation();
+  // iOS 上 RN 自带 SafeAreaView 已废弃且 Modal 全屏时 insets 不生效，
+  // 返回箭头会被状态栏/刘海遮住（用户反馈"没有返回按钮无法退出"）。
+  const insets = useSafeAreaInsets();
 
   const [loading, setLoading] = useState(true);
   const [cannotNext, setCannotNext] = useState(true);
@@ -267,14 +270,17 @@ export const CommentsScreen = ({
   }
 
   return (
-    <SafeAreaView
+    <View
       style={[
         styles.container,
         { backgroundColor: currentTheme.backgroundColor },
       ]}
     >
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => setCommentsVisible(false)}>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top, 20) }]}>
+        <TouchableOpacity
+          onPress={() => setCommentsVisible(false)}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        >
           <Icon name="arrow-back" size={24} color={currentTheme.textColor} />
         </TouchableOpacity>
         <Text style={[styles.title, { color: currentTheme.textColor }]}>
@@ -299,7 +305,7 @@ export const CommentsScreen = ({
           )
         }
       />
-    </SafeAreaView>
+    </View>
   );
 };
 

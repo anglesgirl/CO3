@@ -24,7 +24,13 @@ import Foundation
 import React
 
 @objc(EchProxyModule)
-class EchProxyModule: NSObject {
+class EchProxyModule: NSObject, RCTBridgeModule {
+
+  @objc
+  static func moduleName() -> String! { "EchProxy" }
+
+  @objc
+  static func requiresMainQueueSetup() -> Bool { false }
 
   private let ioQueue = DispatchQueue(label: "com.anglesya.co3.echproxy")
 

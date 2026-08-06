@@ -1,4 +1,4 @@
-import { Alert, Linking } from 'react-native';
+import { Alert, Linking, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { co3Version, GITHUB_REPO, UPDATE_CHECK_INTERVAL_MS } from '../constant';
 
@@ -87,11 +87,13 @@ export async function checkAppUpdate(t, force = false) {
     const hint = t('update_open_hint');
     const message = body ? `${body}\n\n${hint}` : hint;
 
-    // APK 直链：GitHub API 的 assets[].browser_download_url 就是可直接下载的
-    // APK 文件地址（比 release 网页更快、更省流量）。GitHub 直连国内常打不开，
-    // 用 gh-proxy 镜像同一条 APK 下载链接。
-    const apkAsset = data.assets && data.assets.length > 0 ? data.assets[0] : null;
-    const downloadUrl = apkAsset ? apkAsset.browser_download_url : null;
+    // 按平台选资产：iOS 取 .ipa，Android 取 .apk——assets[0] 是发布顺序的第一个，
+    // iOS 用户拿到 APK 会装不上（2026-08-06 苹果用户反馈"显示的是安卓更新内容"）。
+    const isIOS = Platform.OS === 'ios';
+    const asset =
+      data.assets &&
+      data.assets.find(a => (isIOS ? /\.ipa$/i.test(a.name) : /\.apk$/i.test(a.name)));
+    const downloadUrl = asset ? asset.browser_download_url : null;
     const mirrorUrl = downloadUrl ? `https://gh-proxy.com/${downloadUrl}` : null;
 
     const buttons = [
