@@ -10,20 +10,33 @@ const AO3_HOSTS = new Set(['archiveofourown.org', 'www.archiveofourown.org']);
 /**
  * 如果 ECH 代理可用，把 AO3 直链改写为本地代理 URL，
  * 这样 WebView 也不裸连 archiveofourown.org（否则被墙重置 -6）。
- * 非 AO3 的 URL 或代理不可用时原样返回（不 throw）。
+ *
+ * 2026-08-06 修正：AO3 域名在代理不可用时**直接抛错**（fail-closed），
+ * 不再静默直连——国内用户没有系统 DoH 时直连必失败（DNS 污染），
+ * 静默直连只会造成"看起来能打开其实半残"的假象。非 AO3 域名
+ * （图片/静态资源等）仍允许直连。
  */
 async function rewriteForEch(url) {
   try {
     const base = await getEchBase();
-    if (!base) return { uri: url, headers: undefined };
     const u = new URL(url);
-    if (!AO3_HOSTS.has(u.hostname)) return { uri: url, headers: undefined };
-    return {
-      uri: base + u.pathname + u.search,
-      headers: { 'X-Ech-Target': u.hostname },
-    };
-  } catch {
+    if (AO3_HOSTS.has(u.hostname)) {
+      if (!base) {
+        console.log(`[WV] ECH proxy unavailable, refusing direct WebView load of ${u.hostname}`);
+        throw new Error('ECH proxy unavailable; refusing direct WebView request');
+      }
+      return {
+        uri: base + u.pathname + u.search,
+        headers: { 'X-Ech-Target': u.hostname },
+      };
+    }
     return { uri: url, headers: undefined };
+  } catch (error) {
+    if (error instanceof TypeError) {
+      // URL parse failure: not a valid URL at all, let the caller handle it.
+      return { uri: url, headers: undefined };
+    }
+    throw error;
   }
 }
 
@@ -96,11 +109,18 @@ export default function WebviewFetcher() {
     setVisible(false);
     const wvStart = Date.now();
     // ECH 代理可用时，WebView 也走代理，避免直连被墙重置。
-    rewriteForEch(currentRef.current.url).then(({ uri, headers }) => {
-      const proxied = uri !== currentRef.current.url;
-      console.log(`[WV] loading ${currentRef.current.url} → ${proxied ? 'proxy' : 'direct'} (${Date.now() - wvStart}ms)`);
-      setSource(headers ? { uri, headers } : { uri });
-    });
+    // 2026-08-06：AO3 域名代理不可用时 rewriteForEch 会抛错（fail-closed），
+    // 这里 settle 错误让调用方感知（不再静默直连）。
+    rewriteForEch(currentRef.current.url)
+      .then(({ uri, headers }) => {
+        const proxied = uri !== currentRef.current.url;
+        console.log(`[WV] loading ${currentRef.current.url} → ${proxied ? 'proxy' : 'direct'} (${Date.now() - wvStart}ms)`);
+        setSource(headers ? { uri, headers } : { uri });
+      })
+      .catch((e) => {
+        console.log(`[WV] refusing ${currentRef.current.url}: ${e?.message ?? e}`);
+        settle(null, new WebViewFetchError(0, e?.message ?? 'ECH proxy unavailable', currentRef.current.url));
+      });
   };
 
   const processNext = () => {
