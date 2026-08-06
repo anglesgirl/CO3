@@ -57,6 +57,10 @@ jobs:
           gomobile bind -v -target=ios \
             -o ../ios/EchProxyBridge/Echproxy.xcframework ./echproxy
           ls -la ../ios/EchProxyBridge/
+          echo "=== Echproxy.h (generated API) ==="
+          cat ../ios/EchProxyBridge/Echproxy.xcframework/ios-arm64/*/Headers/Echproxy.h \
+            || cat ../ios/EchProxyBridge/Echproxy.xcframework/*/Headers/Echproxy.h 2>/dev/null \
+            || find ../ios/EchProxyBridge -name "*.h" -exec cat {} \;
 
       - name: Setup Ruby (for CocoaPods)
         uses: ruby/setup-ruby@v1

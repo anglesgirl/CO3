@@ -6,12 +6,14 @@
 //  mirroring the Android module (EchProxyModule.kt) so the same JS code path
 //  (echKy.js) works on iOS.
 //
-//  gomobile iOS bindings generated from Go funcs in ech/echproxy:
+//  gomobile iOS bindings (verified via gobind -lang=objc, 2026-08-06):
 //    Start(listen, target, echB64, doh, ipList, cpArg string, insecure bool) error
-//      -> BOOL EchproxyStart(NSString*, ..., NSError** _Nullable error)
-//    Stop() error                                  -> BOOL EchproxyStop(NSError** error)
-//    FetchTxt(doh, name string) (string, error)    -> NSString* _Nullable EchproxyFetchTxt(...)
-//    LastStatus() string                           -> NSString* _Nonnull EchproxyLastStatus()
+//      -> BOOL EchproxyStart(NSString*, ..., BOOL insecure, NSError** _Nullable error)
+//    Stop() error                                 -> BOOL EchproxyStop(NSError** error)
+//    FetchTxt(doh, name string) (string, error)
+//      -> NSString* _Nonnull EchproxyFetchTxt(NSString*, NSString*, NSError** _Nullable error)
+//         (on failure: empty string + NSError set — NOT nullable!)
+//    LastStatus() string                          -> NSString* _Nonnull EchproxyLastStatus()
 //
 //  JS usage (identical to Android):
 //    import { NativeModules } from 'react-native';
@@ -90,11 +92,13 @@ class EchProxyModule: NSObject {
   ) {
     ioQueue.async {
       var err: NSError?
+      // gomobile maps (string, error) to nonnull NSString* + NSError** out:
+      // on failure it returns an empty string with error set.
       let result = EchproxyFetchTxt(doh, name, &err)
-      if let r = result {
-        resolve(r)
+      if let e = err {
+        reject("ECH_TXT_FAILED", e.localizedDescription, e)
       } else {
-        reject("ECH_TXT_FAILED", err?.localizedDescription ?? "fetchTxt returned nil", err)
+        resolve(result)
       }
     }
   }
@@ -119,17 +123,18 @@ class EchProxyModule: NSObject {
     addr.sin_addr.s_addr = INADDR_ANY
     let bindResult = withUnsafePointer(to: &addr) {
       $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-        bind(socketFD, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        Darwin.bind(socketFD, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
       }
     }
     guard bindResult == 0 else { return 0 }
     var actual = sockaddr_in()
     var len = socklen_t(MemoryLayout<sockaddr_in>.size)
-    getsockname(socketFD, withUnsafeMutablePointer(to: &actual) {
+    let nameResult = withUnsafeMutablePointer(to: &actual) {
       $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-        getsockname(socketFD, $0, &len)
+        Darwin.getsockname(socketFD, $0, &len)
       }
-    })
+    }
+    if nameResult != 0 { return 0 }
     return Int32(UInt16(bigEndian: actual.sin_port))
   }
 
