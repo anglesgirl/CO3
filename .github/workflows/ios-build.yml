@@ -9,8 +9,8 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Tag to attach the IPA to'
-        required: true
+        description: 'Tag to attach the IPA to (leave empty to build main branch without attaching)'
+        required: false
         type: string
 
 permissions:
