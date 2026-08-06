@@ -38,6 +38,26 @@ jobs:
       - name: Generate codegen artifacts
         run: npx react-native codegen --platform ios --outputPath .
 
+      - name: Setup Go 1.24
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Build ECH proxy iOS framework (gomobile)
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          cd ech
+          # Add x/mobile as a module dependency (required by gomobile bind).
+          # NOTE: do not `go mod tidy` afterwards — it would strip this unused-by-source require.
+          go get golang.org/x/mobile/bind@latest
+          mkdir -p ../ios/EchProxyBridge
+          # -target=ios builds a universal xcframework (simulator + device).
+          gomobile bind -v -target=ios \
+            -o ../ios/EchProxyBridge/Echproxy.xcframework ./echproxy
+          ls -la ../ios/EchProxyBridge/
+
       - name: Setup Ruby (for CocoaPods)
         uses: ruby/setup-ruby@v1
         with:

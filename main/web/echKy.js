@@ -87,7 +87,6 @@ function shouldRetryStart() {
 function startProxy() {
   lastStartAttempt = Date.now();
   echBasePromise = (async () => {
-    if (Platform.OS !== 'android') return null; // iOS: not wired yet
     const mod = NativeModules.EchProxy;
     if (!mod || typeof mod.start !== 'function') return null;
     try {
@@ -146,7 +145,6 @@ function isValidIPList(s) {
 // Skipped entirely when the user has set things by hand. Failures are ignored:
 // we keep whatever settings already work.
 export async function syncRemoteConfig() {
-  if (Platform.OS !== 'android') return;
   let domain = await getConfigDomain();
   if (domain === 'co3.xn--oiqt18e8e2a.eu.org') {
     domain = DEFAULT_CONFIG_DOMAIN;
@@ -200,13 +198,14 @@ export async function syncRemoteConfig() {
 
 // echUrl rewrites an AO3 URL so it goes through the local ECH proxy. Use it for
 // raw fetch() calls (form POSTs, cookie-sensitive requests) that can't use the
-// `echKy` instance. Falls back to the original URL when the proxy isn't running.
+// `echKy` instance. Throws when the proxy isn't running (fail-closed on both
+// Android and iOS).
 export async function echUrl(url) {
   try {
     const base = await getEchBase();
     const u = new URL(url);
     if (!base) {
-      if (Platform.OS === 'android' && u.protocol === 'https:') {
+      if (u.protocol === 'https:') {
         throw new Error('ECH proxy unavailable; refusing direct HTTPS request');
       }
       return url;
@@ -214,8 +213,7 @@ export async function echUrl(url) {
     if (!AO3_HOSTS.has(u.hostname)) return url;
     return base + u.pathname + u.search;
   } catch (error) {
-    if (Platform.OS === 'android') throw error;
-    return url;
+    throw error;
   }
 }
 
@@ -226,7 +224,7 @@ export async function echRequest(url) {
     const base = await getEchBase();
     const parsed = new URL(url);
     if (!base) {
-      if (Platform.OS === 'android' && parsed.protocol === 'https:') {
+      if (parsed.protocol === 'https:') {
         throw new Error('ECH proxy unavailable; refusing direct HTTPS request');
       }
       return { url, headers: {} };
@@ -236,25 +234,23 @@ export async function echRequest(url) {
       headers: { 'X-Ech-Target': parsed.hostname },
     };
   } catch (error) {
-    if (Platform.OS === 'android') throw error;
-    return { url, headers: {} };
+    throw error;
   }
 }
 
 // echFetch sends a request for ANY HTTPS host through the local proxy, so it
-// gets DoH resolution and ECH only when the target qualifies. Android refuses
-// a direct HTTPS fallback when the proxy is unavailable.
+// gets DoH resolution and ECH only when the target qualifies. Refuses a direct
+// HTTPS fallback when the proxy is unavailable (fail-closed, Android + iOS).
 export async function echFetch(url, options = {}) {
   const base = await getEchBase();
   let u;
   try {
     u = new URL(url);
   } catch (error) {
-    if (Platform.OS === 'android') throw error;
-    return fetch(url, options);
+    throw error;
   }
   if (!base) {
-    if (Platform.OS === 'android' && u.protocol === 'https:') {
+    if (u.protocol === 'https:') {
       throw new Error('ECH proxy unavailable; refusing direct HTTPS request');
     }
     return fetch(url, options);
@@ -403,11 +399,8 @@ const echKy = ky.create({
         }
         if (u.protocol !== 'https:') return;
         if (!base) {
-          if (Platform.OS === 'android') {
-            console.log(`[ECH] proxy unavailable, refusing direct HTTPS to ${u.hostname}`);
-            throw new Error('ECH proxy unavailable; refusing direct HTTPS request');
-          }
-          return;
+          console.log(`[ECH] proxy unavailable, refusing direct HTTPS to ${u.hostname}`);
+          throw new Error('ECH proxy unavailable; refusing direct HTTPS request');
         }
         const rewritten = new Request(base + u.pathname + u.search, request);
         rewritten.headers.set('X-Ech-Target', u.hostname);

@@ -17,6 +17,10 @@ end
 target 'CO3' do
   config = use_native_modules!
 
+  # Local bridge pod: exposes gomobile ECH proxy (Echproxy.xcframework) to JS.
+  # The framework is produced by CI (ios-build.yml) before pod install.
+  pod 'EchProxyBridge', :path => './EchProxyBridge'
+
   use_react_native!(
     :path => config[:reactNativePath],
     # An absolute path to your application root.
