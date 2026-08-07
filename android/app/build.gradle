@@ -41,8 +41,8 @@ android {
         applicationId "com.anglesya.co3"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 25
-        versionName "B0.0.25"
+        versionCode 28
+        versionName "B0.0.28"
     }
 
     splits {
