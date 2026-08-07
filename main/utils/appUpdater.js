@@ -70,6 +70,18 @@ export async function checkAppUpdate(t, force = false) {
     const latestTag = data.tag_name;
     if (!latestTag) return null;
 
+    // 平台资产过滤：iOS 取 .ipa，Android 取 .apk。
+    // 若该 release 没有本平台的安装包（如 iOS-only 修复版），
+    // 不提示更新——否则安卓会误报"有新版本"却只给 iOS 下载链接。
+    const isIOS = Platform.OS === 'ios';
+    const asset =
+      data.assets &&
+      data.assets.find(a => (isIOS ? /\.ipa$/i.test(a.name) : /\.apk$/i.test(a.name)));
+    if (!asset) {
+      await AsyncStorage.setItem(LAST_CHECK_KEY, String(now));
+      return force ? 'no_asset' : null;
+    }
+
     await AsyncStorage.setItem(LAST_CHECK_KEY, String(now));
 
     // 本地已是最新或更新,不提示(手动检查返回 'latest' 以便 UI 反馈)。
@@ -87,13 +99,7 @@ export async function checkAppUpdate(t, force = false) {
     const hint = t('update_open_hint');
     const message = body ? `${body}\n\n${hint}` : hint;
 
-    // 按平台选资产：iOS 取 .ipa，Android 取 .apk——assets[0] 是发布顺序的第一个，
-    // iOS 用户拿到 APK 会装不上（2026-08-06 苹果用户反馈"显示的是安卓更新内容"）。
-    const isIOS = Platform.OS === 'ios';
-    const asset =
-      data.assets &&
-      data.assets.find(a => (isIOS ? /\.ipa$/i.test(a.name) : /\.apk$/i.test(a.name)));
-    const downloadUrl = asset ? asset.browser_download_url : null;
+    const downloadUrl = asset.browser_download_url;
     const mirrorUrl = downloadUrl ? `https://gh-proxy.com/${downloadUrl}` : null;
 
     const buttons = [
