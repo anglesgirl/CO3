@@ -89,7 +89,10 @@ export function getLastStartError() {
 }
 
 // 代理是否处于"启动失败需重试"状态。失败后返回 false，冷却期过后返回 true。
+// 例外：上次失败是 "already running"（原生代理其实活着，只是 JS 丢了端口）
+// 时不进冷却——那种情况重试一次就能拿回端口，罚 30 秒等待毫无意义。
 function shouldRetryStart() {
+  if (lastStartError && /already running/i.test(lastStartError)) return true;
   return Date.now() - lastStartAttempt >= START_RETRY_COOLDOWN_MS;
 }
 
@@ -159,7 +162,11 @@ export function getEchBase() {
 // Eagerly warm up the proxy so it's ready before the first AO3 request, then
 // refresh the remote config in the background (never blocking startup).
 export function initEch() {
-  getEchBase().catch(() => {});
+  // 只在没有进行中的启动时才触发，避免 App 启动瞬间多处 import 同时
+  // 调用造成并发 start()（原生侧会抛 "echproxy already running"，
+  // JS 侧则丢掉端口 → 之后 30s 冷却里全部请求 fail-closed。
+  // 2026-08-11 iOS 真机日志实测到这个竞态）。
+  if (!echBasePromise) getEchBase().catch(() => {});
   syncRemoteConfig().catch(() => {});
 }
 

@@ -22,6 +22,12 @@ class EchProxyModule(private val reactContext: ReactApplicationContext) :
 
     private val io = Executors.newSingleThreadExecutor()
 
+    companion object {
+        /** 已启动的端口（进程级，跨 JS 重载存活）。0 = 未启动。 */
+        @Volatile
+        private var runningPort: Int = 0
+    }
+
     override fun getName() = "EchProxy"
 
     /**
@@ -36,16 +42,40 @@ class EchProxyModule(private val reactContext: ReactApplicationContext) :
     fun start(port: Int, doh: String, ipList: String, promise: Promise) {
         io.execute {
             try {
+                // 代理已在运行（JS 重载 / 启动竞态后常见）：直接复用已知端口。
+                // Echproxy.start() 在已运行时抛 "echproxy already running"，
+                // 而 JS 侧丢了端口号会不断重试 → 永远拿不到 base，全部请求
+                // fail-closed（2026-08-11 iOS 真机日志实测到同一问题，
+                // Android 同样代码路径，一并加固）。
+                val known = runningPort
+                if (known != 0 && isListening(known)) {
+                    promise.resolve(known)
+                    return@execute
+                }
+
                 val chosen = if (port != 0) port else freePort()
-                Echproxy.start(
-                    "127.0.0.1:$chosen",   // listen
-                    "archiveofourown.org", // target
-                    "",                     // echB64 (empty -> DoH / fallback + retry_configs)
-                    doh,                    // DoH JSON endpoint (from JS; may be empty)
-                    ipList,                 // preferred edge IPs (from JS; may be empty)
-                    java.io.File(reactContext.filesDir, "ech-public-config.json").absolutePath,
-                    false,                  // insecure
-                )
+                val cachePath =
+                    java.io.File(reactContext.filesDir, "ech-public-config.json").absolutePath
+                try {
+                    Echproxy.start(
+                        "127.0.0.1:$chosen",   // listen
+                        "archiveofourown.org", // target
+                        "",                     // echB64 (empty -> DoH / fallback + retry_configs)
+                        doh,                    // DoH JSON endpoint (from JS; may be empty)
+                        ipList,                 // preferred edge IPs (from JS; may be empty)
+                        cachePath,
+                        false,                  // insecure
+                    )
+                } catch (e: Throwable) {
+                    // 已在运行但端口未知 → 停掉再启，比让整个 App 断网好。
+                    if (e.message?.contains("already running", ignoreCase = true) != true) throw e
+                    runCatching { Echproxy.stop() }
+                    Echproxy.start(
+                        "127.0.0.1:$chosen", "archiveofourown.org", "",
+                        doh, ipList, cachePath, false,
+                    )
+                }
+                runningPort = chosen
                 promise.resolve(chosen)
             } catch (e: Throwable) {
                 promise.reject("ECH_START_FAILED", e.message, e)
@@ -58,11 +88,22 @@ class EchProxyModule(private val reactContext: ReactApplicationContext) :
         io.execute {
             try {
                 Echproxy.stop()
+                runningPort = 0   // 端口已失效，别再复用
                 promise.resolve(true)
             } catch (e: Throwable) {
                 promise.reject("ECH_STOP_FAILED", e.message, e)
             }
         }
+    }
+
+    /** 端口上是否真的有人在听（记住的端口在进程被回收后可能已失效）。 */
+    private fun isListening(port: Int): Boolean = try {
+        java.net.Socket().use { socket ->
+            socket.connect(java.net.InetSocketAddress("127.0.0.1", port), 300)
+            true
+        }
+    } catch (_: Throwable) {
+        false
     }
 
     /**
