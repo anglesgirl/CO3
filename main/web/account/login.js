@@ -1,7 +1,7 @@
 import { fetchLoginAuthenticityToken } from './fetchAuthenticityToken';
 import Toast from 'react-native-toast-message';
 import {
-  deleteCredsPasswd, hasStoredPassword,
+  deleteCredsPasswd, deleteCredsToken, hasStoredPassword,
   setCredsPasswd,
   setCredsToken,
   setLastLogin,
@@ -21,38 +21,58 @@ export const handleLogin = async (username, password) => {
   try {
     const sessionToken = await login(username, password);
 
-    if (sessionToken) {
-      await setCredsToken(sessionToken);
-      const hadStoredPassword = await hasStoredPassword();
-      if (!hadStoredPassword) {
-        // Clear the old password/identity pair before writing the new
-        // canonical identity. Do not let this erase the identity we are about
-        // to store.
-        await deleteCredsPasswd();
-      }
-
-      // Login accepts email, but all authenticated AO3 user routes require the
-      // canonical username. Store that identity separately from the credential.
-      const canonicalUsername = await resolveAuthenticatedUsername(sessionToken);
-      const accountUsername = canonicalUsername || username;
-      await setUsernameOnly(accountUsername);
-
-      if (hadStoredPassword) {
-        await setCredsToken(sessionToken);
-      }
-
-      await setLastLogin();
-      Toast.show({
-        type: 'success',
-        text1: t('general_success'),
-        text2: t('screen_account_login_success'),
-      })
-    } else {
-      throw t('screen_account_login_failed_invalid_server_error');
+    if (!sessionToken) {
+      throw new Error(t('screen_account_login_failed_invalid_server_error'));
     }
+
+    await setCredsToken(sessionToken);
+
+    // ⚠️ 用「能否解析出已登录用户名」验证会话真的有效，而不是"拿到 cookie 就算登录"。
+    // AO3 在密码错误时也会下发 session cookie（实测 302 → /auth_error），
+    // 只有真正登录后首页才会渲染 greeting/用户菜单里的 /users/<name> 链接。
+    const canonicalUsername = await resolveAuthenticatedUsername(sessionToken);
+    if (!canonicalUsername) {
+      // 会话无效：清掉刚存的 token，避免 App 之后带着废 cookie 请求，
+      // 表现成"登录成功但处处不正常"。
+      try { await deleteCredsToken(); } catch {}
+      const e = new Error(t('screen_account_login_failed_invalid_creds_or_server_error'));
+      e.code = 'SESSION_NOT_AUTHENTICATED';
+      throw e;
+    }
+
+    const hadStoredPassword = await hasStoredPassword();
+    if (!hadStoredPassword) {
+      // Clear the old password/identity pair before writing the new
+      // canonical identity. Do not let this erase the identity we are about
+      // to store.
+      await deleteCredsPasswd();
+    }
+
+    // Login accepts email, but all authenticated AO3 user routes require the
+    // canonical username. Store that identity separately from the credential.
+    await setUsernameOnly(canonicalUsername);
+
+    if (hadStoredPassword) {
+      await setCredsToken(sessionToken);
+    }
+
+    await setLastLogin();
+    Toast.show({
+      type: 'success',
+      text1: t('general_success'),
+      text2: t('screen_account_login_success'),
+    })
   } catch (error) {
-    console.error('Login error:', error);
-    throw t('screen_account_login_failed_generic');
+    console.error('Login error:', error?.message ?? error);
+    // 保留可区分的错误信息，别把"密码错误 / 人机验证 / 网络失败"全糊成一句
+    // 通用文案——用户看不出该改密码还是该换网络。
+    if (error?.code === 'BAD_CREDENTIALS') {
+      throw t('screen_account_login_failed_invalid_creds_or_server_error');
+    }
+    if (error?.code === 'CF_CHALLENGE') {
+      throw error; // 调用方据此走人机验证流程
+    }
+    throw error?.message || t('screen_account_login_failed_generic');
   }
 };
 
@@ -85,6 +105,20 @@ export async function resolveAuthenticatedUsername(sessionToken) {
   return parseAuthenticatedUsername(await response.text());
 }
 
+/**
+ * 会话是否真的处于已登录态。用于登录后校验和会话过期检测。
+ * 返回 { ok, username }。
+ */
+export async function checkSession(sessionToken) {
+  try {
+    const username = await resolveAuthenticatedUsername(sessionToken);
+    return { ok: !!username, username: username ?? null };
+  } catch (e) {
+    console.warn('[login] session check failed:', e?.message ?? e);
+    return { ok: false, username: null };
+  }
+}
+
 export default async function login(username, password) {
   try {
     // Prepare the form data
@@ -97,60 +131,75 @@ export default async function login(username, password) {
 
     // Send the login request through the ECH proxy (a direct fetch would be
     // blocked on networks where AO3 is censored).
+    //
+    // 2026-08-11：**不再伪装 Chrome User-Agent**。TLS 握手由 Go 代理完成，
+    // 声称自己是 Chrome 会产生 UA/指纹不一致，正是 Cloudflare 判定自动化的
+    // 特征之一（accountRequests.js 里已有同样结论并照此实现）。实测
+    // 不带 UA 直取登录页同样 HTTP 200。
     const response = await fetch(await echUrl('https://archiveofourown.org/users/login'), {
       method: 'POST',
       body: formData,
       credentials: 'include', // Important for cookies
+      redirect: 'manual',     // 需要读 302 的 Location 判断成功/失败
       headers: {
         Accept:
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate',
         Referer: 'https://archiveofourown.org/users/login',
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-      }, //Yea cloudflare was hard on this one, so i'm officially a web browser YaY
-      //Like fr i'm a win 10 machine on chrome wdym
-      //We just need to pray cloudflare will leave me alone
+      },
     });
 
-    // Still on the login page (proxied or not) means the credentials failed.
-    if (response.url && response.url.endsWith('/users/login')) {
-      throw new Error('Wrong username or password');
+    const setCookieHeader = response.headers.get('set-cookie') || '';
+    const location = response.headers.get('location') || '';
+
+    // ⚠️ 关键修正（2026-08-11 实测 AO3 真实响应）：
+    // 密码错误时 AO3 也会 302 并**照样下发 _otwarchive_session**，只是
+    // Location 指向 /auth_error。旧逻辑「拿到 session cookie 就算成功」
+    // 会把失败当成功保存，之后所有请求都是未登录态 —— 这正是"登录了但不正常"。
+    // 成功的标志是 user_credentials=1；这里同时用 Location 兜底判断。
+    const loggedOutRedirect = /\/auth_error|\/users\/login/i.test(location);
+    const grantedCredentials = /user_credentials=1/i.test(setCookieHeader);
+
+    if (loggedOutRedirect && !grantedCredentials) {
+      const e = new Error('Wrong username or password');
+      e.code = 'BAD_CREDENTIALS';
+      throw e;
     }
 
-    // Extract the session cookie from the response headers
-    const setCookieHeader = response.headers.get('set-cookie');
-    if (setCookieHeader) {
-      // Look for the otwarchive session cookie
-      const cookies = setCookieHeader.split(',');
-      for (let cookie of cookies) {
-        const trimmedCookie = cookie.trim();
-        if (
-          trimmedCookie.includes('otwarchive') &&
-          trimmedCookie.includes('session=')
-        ) {
-          // Extract the session value
-          const sessionMatch = trimmedCookie.match(/session=([^;]+)/);
-          if (sessionMatch) {
-            return sessionMatch[1]; // Return the session cookie value
-          }
-        }
-      }
+    // 仍停在登录页（非 302 情况）也说明认证没过。
+    if (response.url && response.url.endsWith('/users/login') && !grantedCredentials) {
+      const e = new Error('Wrong username or password');
+      e.code = 'BAD_CREDENTIALS';
+      throw e;
     }
 
-    if (response.ok) {
-      if (response.redirected || !response.url.endsWith('/users/login')) {
-        console.log(
-          'Login appears successful but session cookie not found in headers',
-        );
-        return null;
-      }
+    // Cloudflare 人机验证：403/503 或挑战页 —— 与凭据错误区分开，
+    // 让调用方可以弹 WebView 过验证而不是提示"密码错误"。
+    if (response.status === 403 || response.status === 503) {
+      const e = new Error(`AO3/Cloudflare blocked the login request (HTTP ${response.status}).`);
+      e.code = 'CF_CHALLENGE';
+      throw e;
+    }
+
+    // Extract the session cookie from the response headers.
+    // 注意：多个 Set-Cookie 被合并成一行时以 ", " 分隔，但 cookie 的 Expires
+    // 里本身含逗号（"Tue, 25 Aug 2026 ..."），按 ',' 硬split 会把一条 cookie
+    // 切成两半 → 匹配失败。改为直接在整串里正则取值。
+    const sessionMatch = setCookieHeader.match(/_otwarchive_session=([^;,\s]+)/i);
+    if (sessionMatch) {
+      return sessionMatch[1];
+    }
+
+    if (response.status >= 200 && response.status < 400) {
+      console.log(
+        'Login appears successful but session cookie not found in headers',
+      );
+      return null;
     }
 
     throw new Error(`Login failed: ${response.status} ${response.statusText}`);
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('Login error:', error?.message ?? error);
     throw error;
   }
 }
@@ -165,7 +214,7 @@ export async function validateCookie(sessionToken) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
-    // Send a request to the website with the provided cookies
+    // 2026-08-11：不再伪装 Chrome UA（与 login() 一致，避免 CF 指纹不符）。
     const response = await fetch(await echUrl('https://archiveofourown.org/'), {
       method: 'GET',
       signal: controller.signal,
@@ -173,8 +222,6 @@ export async function validateCookie(sessionToken) {
       headers: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'Cookie': `user_credentials=1; _otwarchive_session=${sessionToken}` // Attach both cookies
       }
     });
@@ -182,24 +229,33 @@ export async function validateCookie(sessionToken) {
     // Check the response headers for the "set-cookie" header
     const setCookieHeader = response.headers.get('set-cookie');
     if (setCookieHeader) {
-      // Look for the "user_credentials" cookie being cleared
-      const cookies = setCookieHeader.split(',');
-      for (let cookie of cookies) {
-        const trimmedCookie = cookie.trim();
-        if (trimmedCookie.startsWith('user_credentials=') && trimmedCookie.includes('max-age=0')) {
-          console.log("Cookie invalid !")
-          return false;
-        }
+      // user_credentials 被清空 => 会话无效。
+      // 注意不能按 ',' 切分（Expires 里含逗号），直接整串正则。
+      if (/user_credentials=[^;,]*;[^,]*max-age=0/i.test(setCookieHeader)) {
+        console.log("Cookie invalid !")
+        return false;
       }
     }
 
-    console.log("Cookie verified !")
+    // 更可靠的判据：页面里能不能解析出当前登录用户。仅靠 set-cookie 猜测
+    // （原注释里作者自己写的 "guess"）在 AO3 改版后经常误判为有效。
+    const html = await response.text();
+    if (parseAuthenticatedUsername(html)) {
+      console.log("Cookie verified (authenticated markup found)")
+      return true;
+    }
 
-    // If the "user_credentials" cookie is not cleared, the token is valid
-    return true;
+    // 没有登录标记：可能是 CF 挑战页，也可能确实掉登录。挑战页不算失效。
+    if (html.includes('_cf_chl_opt') || /challenge-platform/.test(html)) {
+      console.log("Cookie check inconclusive (Cloudflare challenge page)")
+      return true;
+    }
+
+    console.log("Cookie invalid (no authenticated markup)")
+    return false;
 
   } catch (error) {
-    console.error('Error validating cookie:', error);
+    console.error('Error validating cookie:', error?.message ?? error);
     throw error;
   } finally {
     clearTimeout(timeout);

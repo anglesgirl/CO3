@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
-  Linking,
+  Linking, // 仍被其它入口使用（openExternalLink 内部也用它开非 AO3 链接）
   Modal,
   Platform,
   StatusBar,
@@ -22,6 +22,8 @@ import Toast from 'react-native-toast-message';
 import { useTranslation } from 'react-i18next';
 import { translateHtmlCached } from '../web/translate';
 import { userErrorMessage } from '../utils/userError';
+import { openExternalLink } from '../utils/openExternalLink';
+import InAppBrowser from '../components/common/InAppBrowser';
 import TranslateMenu from '../components/common/TranslateMenu';
 
 const PULL_THRESHOLD = 150;
@@ -90,6 +92,25 @@ const ChapterReader = ({
                          workDAO,
                        }) => {
   const { t } = useTranslation();
+
+  // 应用内浏览器（AO3 链接必须走 ECH 代理，见 openExternalLink 注释）
+  const [inAppUrl, setInAppUrl] = useState(null);
+
+  const openLink = (url) => {
+    openExternalLink(url)
+      .then(({ ao3 }) => {
+        // AO3 链接不能丢给系统浏览器（外部进程无 ECH 代理，污染网络下打不开），
+        // 用 App 内 WebView 打开。
+        if (ao3) setInAppUrl(url);
+      })
+      .catch((e) => {
+        Toast.show({
+          type: 'error',
+          text1: t('reader_error_opening_link'),
+          text2: userErrorMessage(e, t),
+        });
+      });
+  };
 
   const [barsVisible, setBarsVisible] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
@@ -739,19 +760,13 @@ const ChapterReader = ({
           onOpenWindow={ (syntheticEvent) => {
             const { nativeEvent } = syntheticEvent;
             const { targetUrl } = nativeEvent
-            Linking.openURL(targetUrl);
+            openLink(targetUrl);
           }}
           onShouldStartLoadWithRequest={(req) => {
             const url = req.url ?? '';
             if (url === 'about:blank' || url.startsWith('about:blank#')) return true;
             if (url.startsWith('http://') || url.startsWith('https://')) {
-              Linking.openURL(url).catch((e) => {
-                Toast.show({
-                  type: "error",
-                  text1: t('reader_error_opening_link'),
-                  text2: userErrorMessage(e, t),
-                });
-              });
+              openLink(url);
             }
             return false;
           }}
@@ -760,6 +775,13 @@ const ChapterReader = ({
         {renderTopBar()}
         {renderBottomBar()}
         {renderCommentsButton()}
+
+        {/* AO3 链接用应用内浏览器打开（走 ECH 代理） */}
+        <InAppBrowser
+          url={inAppUrl}
+          visible={!!inAppUrl}
+          onClose={() => setInAppUrl(null)}
+        />
 
         <Modal
           transparent={false}
