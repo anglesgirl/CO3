@@ -61,6 +61,20 @@ jobs:
           cat ../ios/EchProxyBridge/Echproxy.xcframework/ios-arm64/*/Headers/Echproxy.h \
             || cat ../ios/EchProxyBridge/Echproxy.xcframework/*/Headers/Echproxy.h 2>/dev/null \
             || find ../ios/EchProxyBridge -name "*.h" -exec cat {} \;
+          echo "=== module.modulemap (Swift import Echproxy 依赖它) ==="
+          find ../ios/EchProxyBridge -name "module.modulemap" -exec sh -c 'echo "--- {}"; cat {}' \;
+
+      - name: Verify native module registration is present
+        run: |
+          # 防回归：Swift 模块必须有 ObjC 注册宏，否则运行时
+          # NativeModules.EchProxy === undefined，ECH 静默不启动。
+          test -f ios/EchProxyBridge/EchProxyBridge.m \
+            || { echo "::error::ios/EchProxyBridge/EchProxyBridge.m missing — EchProxy native module will NOT register"; exit 1; }
+          grep -q "RCT_EXTERN_REMAP_MODULE(EchProxy, EchProxyModule" ios/EchProxyBridge/EchProxyBridge.m \
+            || { echo "::error::RCT_EXTERN_REMAP_MODULE(EchProxy, EchProxyModule, ...) not found"; exit 1; }
+          grep -q "^import Echproxy" ios/EchProxyBridge/EchProxyModule.swift \
+            || { echo "::error::EchProxyModule.swift missing 'import Echproxy'"; exit 1; }
+          echo "✅ EchProxy bridge registration + framework import verified"
 
       - name: Setup Ruby (for CocoaPods)
         uses: ruby/setup-ruby@v1

@@ -88,9 +88,24 @@ function startProxy() {
   lastStartAttempt = Date.now();
   echBasePromise = (async () => {
     const mod = NativeModules.EchProxy;
-    if (!mod || typeof mod.start !== 'function') return null;
+    if (!mod || typeof mod.start !== 'function') {
+      // 原来这里静默 return null，iOS 上桥没注册时完全看不出问题（页面直接
+      // 走兜底/失败），排查了很久。现在明确打日志 + 上报事件。
+      console.warn(
+        `[ECH] native module unavailable on ${Platform.OS} — proxy cannot start ` +
+        `(mod=${mod ? 'present-but-no-start' : 'undefined'}). ` +
+        `iOS: 检查 EchProxyBridge.m 的 RCT_EXTERN_REMAP_MODULE 注册是否编进包里。`,
+      );
+      trackEvent('ech_proxy_start', {
+        ok: false,
+        error: `native_module_missing:${Platform.OS}`,
+      });
+      return null;
+    }
+    // t0 必须在 try 外面：原来声明在 try 里，catch 块又引用 t0 计算耗时，
+    // 一旦 start 抛错就会变成 ReferenceError（把真正的失败原因吃掉）。
+    const t0 = Date.now();
     try {
-      const t0 = Date.now();
       const doh = (await getDohCandidates()).join(',');
       const ips = await getCustomIPs();
       console.log(`[ECH] starting proxy (doh=${doh || '(none)'}, ip=${ips || '(dns)'})`);

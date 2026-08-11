@@ -22,6 +22,10 @@
 
 import Foundation
 import React
+// gomobile 产出的 Echproxy.xcframework 带 Modules/module.modulemap（CI 日志已核实），
+// 因此可作为 Swift module 导入。少了这行，EchproxyStart/Stop/FetchTxt/LastStatus
+// 这些 C 函数在 Swift 里根本不可见（编译期就找不到符号）。
+import Echproxy
 
 @objc(EchProxyModule)
 class EchProxyModule: NSObject, RCTBridgeModule {
