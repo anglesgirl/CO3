@@ -63,8 +63,15 @@ export default function DebugScreen() {
         filename: fileName,
       });
     } catch (error) {
+      // 用户主动取消分享面板不是错误（iOS 返回 "User did not share"，
+      // Android 返回 USER_CANCELLED / "User did not share"）。
+      const msg = error?.message ?? String(error);
+      if (/cancel|did not share|USER_CANCELLED/i.test(msg)) {
+        console.log('分享日志已取消');
+        return;
+      }
       console.warn('分享日志失败:', error);
-      Alert.alert('分享失败', error?.message ?? String(error));
+      Alert.alert('分享失败', msg);
     }
   };
 
