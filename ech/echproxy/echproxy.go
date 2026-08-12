@@ -40,6 +40,8 @@ var androidCertPoolOnce sync.Once
 
 const (
 	dialTimeout = 20 * time.Second
+	// DoH 查询超时独立控制：网络差时 20s 太慢，5s 失败后走缓存或种子 IP 兜底。
+	dohTimeout = 5 * time.Second
 	// ECH 公钥配置缓存 5 小时:公钥轮换频率远低于此,期间连接直接用缓存握手,
 	// 避免每次启动/换 host 都实时查 DoH。兜底配置(server retry_configs / 目标
 	// 自身 ech= / operator fallback)同样缓存,失败后降级普通 TLS。
@@ -818,7 +820,7 @@ func dohQuery(endpoint, name, qtype string) (*dohResp, error) {
 		req.Header.Set("accept", "application/dns-json")
 		transport := &http.Transport{}
 		if pool := loadAndroidCertPool(); pool != nil { transport.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12} }
-		resp, err := (&http.Client{Timeout: dialTimeout, Transport: transport}).Do(req)
+		resp, err := (&http.Client{Timeout: dohTimeout, Transport: transport}).Do(req)
 		if err != nil {
 			lastErr = err
 			continue
@@ -853,35 +855,49 @@ func resolveViaDoH(host, endpoint string) ([]string, error) {
 	if strings.TrimSpace(endpoint) == "" {
 		return nil, errors.New("no DoH endpoint configured")
 	}
-	var v4, v6 []string
-	var firstErr error
 
-	if dr, err := dohQuery(endpoint, host, "A"); err == nil {
-		for _, a := range dr.Answer {
-			if a.Type == 1 && net.ParseIP(a.Data) != nil {
-				v4 = append(v4, a.Data)
-			}
-		}
-	} else {
-		firstErr = err
+	// A 和 AAAA 并行查询，缩短首次请求延迟。
+	type result struct {
+		ips []string
+		err error
 	}
+	ch4 := make(chan result, 1)
+	ch6 := make(chan result, 1)
 
-	if dr, err := dohQuery(endpoint, host, "AAAA"); err == nil {
-		for _, a := range dr.Answer {
-			if a.Type == 28 && net.ParseIP(a.Data) != nil {
-				v6 = append(v6, a.Data)
+	go func() {
+		var ips []string
+		if dr, err := dohQuery(endpoint, host, "A"); err == nil {
+			for _, a := range dr.Answer {
+				if a.Type == 1 && net.ParseIP(a.Data) != nil {
+					ips = append(ips, a.Data)
+				}
 			}
+			ch4 <- result{ips: ips}
+		} else {
+			ch4 <- result{err: err}
 		}
-	} else if firstErr == nil {
-		firstErr = err
-	}
+	}()
+	go func() {
+		var ips []string
+		if dr, err := dohQuery(endpoint, host, "AAAA"); err == nil {
+			for _, a := range dr.Answer {
+				if a.Type == 28 && net.ParseIP(a.Data) != nil {
+					ips = append(ips, a.Data)
+				}
+			}
+			ch6 <- result{ips: ips}
+		} else {
+			ch6 <- result{err: err}
+		}
+	}()
 
-	out := append(v4, v6...) // IPv4 first — broken/poisoned IPv6 is common
+	r4, r6 := <-ch4, <-ch6
+	out := append(r4.ips, r6.ips...) // IPv4 first — broken/poisoned IPv6 is common
 	if len(out) == 0 {
-		if firstErr == nil {
-			firstErr = errors.New("no A/AAAA records returned")
+		if r4.err != nil {
+			return nil, r4.err
 		}
-		return nil, firstErr
+		return nil, errors.New("no A/AAAA records returned")
 	}
 	return out, nil
 }
