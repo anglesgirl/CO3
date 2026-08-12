@@ -8,7 +8,10 @@ import {
   View,
 } from 'react-native';
 import { useEffect, useState } from 'react';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+// 注意：RN 0.85 核心包已移除 SafeAreaView 导出，必须从
+// react-native-safe-area-context 导入，否则 JSX 引用未定义变量
+// 直接 ReferenceError 闪退（用户实测安卓评论页崩溃即此因）。
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { fetchComments } from '../../web/worksScreen/fetchComments';
 import HtmlTextRenderer from '../common/HtmlTextRenderer';
 import { getJsonSettings } from '../../storage/jsonSettings';
