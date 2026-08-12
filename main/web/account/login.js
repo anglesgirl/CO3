@@ -104,7 +104,10 @@ export default async function login(username, password, retries = 0) {
     const response = await fetch(await echUrl('https://archiveofourown.org/users/login'), {
       method: 'POST',
       body: formData,
-      credentials: 'include', // Important for cookies
+      // RN 层不带 cookie: 会话 cookie 由 Go 代理 cookiejar 统一管理。
+      // 若这里 include, OkHttp 会把 127.0.0.1 的 Set-Cookie 存到 RN 层,
+      // 登出后清不掉, 下次登录仍被 AO3 判定 "already logged in"。
+      credentials: 'omit',
       headers: {
         Accept:
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -186,7 +189,7 @@ export async function validateCookie(sessionToken) {
     const response = await fetch(await echUrl('https://archiveofourown.org/'), {
       method: 'GET',
       signal: controller.signal,
-      credentials: 'include', // Include cookies in the request
+      credentials: 'omit', // RN 层不存 cookie; 会话 cookie 只在 Go 代理 jar
       headers: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',

@@ -19,7 +19,7 @@ export default async function sendKudo(workId) {
     const response = await fetch(targetUrl, {
       method: 'POST',
       body: formData,
-      credentials: 'include',
+      credentials: 'omit', // cookie 由 Go 代理 jar 管理
       headers: {
         Accept:
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',

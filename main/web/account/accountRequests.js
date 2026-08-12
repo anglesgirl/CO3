@@ -76,7 +76,7 @@ async function postForm(path, fields, referer) {
   const res = await fetch(await echUrl(BASE + path), {
     method: 'POST',
     body,
-    credentials: 'include',
+    credentials: 'omit', // cookie 由 Go 代理 jar 管理
     headers: { ...BROWSER_HEADERS, Referer: referer },
   });
   const html = await res.text();

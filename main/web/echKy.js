@@ -388,6 +388,11 @@ export async function fetchRemoteConfig(domain) {
 const echKy = ky.create({
   // Generous timeout: the first request may have to bootstrap the ECH handshake.
   timeout: 30000,
+  // AO3 的 session cookie 由 Go 代理的 cookiejar 统一管理。RN fetch 层
+  // (Android OkHttp java.net.CookieManager) 会把 127.0.0.1 的 Set-Cookie 也存
+  // 一份, 登出/清 jar 清不掉它 → 重试登录仍带旧 cookie ("already logged in")。
+  // credentials:'omit' 让 RN 层完全不碰 cookie, 全部交给代理 jar。
+  credentials: 'omit',
   hooks: {
     beforeRequest: [
       async (request) => {

@@ -26,7 +26,7 @@ export async function markForLater(work) {
     const sessionHeaders = await getSessionHeaders();
 
     const pageResponse = await fetch(await echUrl(url), {
-      credentials: 'include',
+      credentials: 'omit', // cookie 由 Go 代理 jar 管理
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         ...sessionHeaders,
@@ -47,7 +47,7 @@ export async function markForLater(work) {
     const response = await fetch(await echUrl(markUrl), {
       method: 'POST',
       body: formData,
-      credentials: 'include',
+      credentials: 'omit', // cookie 由 Go 代理 jar 管理
       headers: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Referer': url,

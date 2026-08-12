@@ -51,7 +51,7 @@ export default function DebugScreen() {
         : '暂无日志';
       
       const fileName = `CO3-debug-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.log`;
-      const filePath = `${RNFS.CacheDirectoryPath}/${fileName}`;
+      const filePath = `${RNFS.CachesDirectoryPath}/${fileName}`;
       
       await RNFS.writeFile(filePath, logText, 'utf8');
       

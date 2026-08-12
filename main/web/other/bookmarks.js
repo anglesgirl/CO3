@@ -144,7 +144,7 @@ export async function removeBookmark(work) {
     const response = await fetch(await echUrl(deleteUrl), {
       method: 'POST',
       body,
-      credentials: 'include',
+      credentials: 'omit', // cookie 由 Go 代理 jar 管理
       headers: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -236,7 +236,7 @@ export async function bookmark(work) {
     console.log('[AO3 bookmark] loading form', url);
     await debugLog('bookmark', `GET form ${url}`);
     const pageResponse = await fetch(await echUrl(url), {
-      credentials: 'include',
+      credentials: 'omit', // cookie 由 Go 代理 jar 管理
       // Keep this GET byte-for-byte aligned with the last confirmed-working
       // Android bookmark flow. The later verification runs only after POST.
       headers: { 'User-Agent': userAgent, ...sessionHeaders },
@@ -275,7 +275,7 @@ export async function bookmark(work) {
     const postResponse = await fetch(await echUrl(postUrl), {
       method: 'POST',
       body: formData,
-      credentials: 'include',
+      credentials: 'omit', // cookie 由 Go 代理 jar 管理
       headers: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Content-Type': 'application/x-www-form-urlencoded',
