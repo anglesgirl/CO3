@@ -76,7 +76,9 @@ async function translateChunkPairs(text, target, endpoint) {
 // translateChunk sends one string and returns its translation.
 async function translateChunk(text, target, endpoint) {
   const pairs = await translateChunkPairs(text, target, endpoint);
-  return pairs.map(p => p.translated).join('');
+  const translated = pairs.map(p => p.translated).join('');
+  // Google 可能整段返回空译文；不要用空串覆盖原文（否则纯文本摘要整段消失）。
+  return translated && translated.trim() ? translated : text;
 }
 
 // Runs jobs with a small concurrency limit so we don't hammer the endpoint.
@@ -199,7 +201,15 @@ export async function translateHtml(html, target, endpoint, onProgress, bilingua
       const pairs = await mapLimit(cores, 1, async c => {
         try {
           const p = await translateChunkPairs(c, tl, ep);
-          return { translated: p[0]?.translated ?? c, original: p[0]?.original ?? c };
+          // Google 可能对短文本返回空串译文（''）。'??' 只对 null/undefined
+          // 回退原文，空串会被原样写入 → 该文本节点消失（摘要有片段被跳过）。
+          // 必须把 '' 也一并回退为原文。
+          const t = p[0]?.translated;
+          const o = p[0]?.original;
+          return {
+            translated: (t && t.trim()) ? t : c,
+            original: (o && o.trim()) ? o : c,
+          };
         } catch {
           return { translated: c, original: c };
         }
