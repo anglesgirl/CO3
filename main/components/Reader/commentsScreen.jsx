@@ -335,11 +335,6 @@ const styles = StyleSheet.create({
   commentsContainer: {
     marginTop: 10,
     paddingBottom: 20,
-    position: 'absolute',
-    width: '100%',
-    left: 0,
-    flex: 1,
-    justifyContent: 'center',
     gap: 10,
   },
   commentContainer: {
