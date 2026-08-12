@@ -10,7 +10,7 @@ import {
 } from '../../storage/Credentials';
 import { navigationRef } from '../../app';
 import i18n from 'i18next';
-import { echUrl } from '../echKy';
+import { echUrl, clearAuthCookies } from '../echKy';
 import { fetchViaWebView } from '../WebviewFetcher';
 
 export const handleLogin = async (username, password) => {

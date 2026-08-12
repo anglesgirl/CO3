@@ -217,6 +217,18 @@ export default function WebviewFetcher() {
     if (!url) return true;
     try {
       const u = new URL(url);
+
+      // Cloudflare 验证回调：cdn-cgi/challenge-platform 和 challenges.cloudflare.com
+      // 必须直接放行，不能改写为代理——CF 验证的 JS 通过 XHR/fetch/form-POST 提交
+      // 到这些端点来证明浏览器合法性，走代理会破坏验证签名导致永远通不过。
+      if (
+        (AO3_HOSTS.has(u.hostname) && u.pathname.startsWith('/cdn-cgi/')) ||
+        u.hostname === 'challenges.cloudflare.com'
+      ) {
+        console.log(`[WV] allow CF challenge nav: ${url}`);
+        return true;
+      }
+
       // Cloudflare 验证通过后常以绝对地址重定向回 https://archiveofourown.org。
       // 这种导航必须改写为本地 ECH 代理地址，否则直连暴露 SNI 会被墙重置。
       // 代理地址本身（http://127.0.0.1:<port>/...）不在此列，正常放行。
