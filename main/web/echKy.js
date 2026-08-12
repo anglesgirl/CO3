@@ -78,30 +78,63 @@ export async function getCustomIPs() {
 
 let lastStartAttempt = 0;  // 上次启动尝试时间戳(ms)，用于失败后冷却重试
 const START_RETRY_COOLDOWN_MS = 30_000; // 启动失败后 30 秒内不重复尝试，之后惰性重试
+// 记住首次启动失败的原因。initEch() 在模块导入时就跑（App 启动瞬间），
+// 那时用户还没打开调试日志 → 原因丢失，之后只剩"proxy unavailable"这种
+// 无从下手的下游日志。存下来让调试页/后续日志能报出真正的根因。
+let lastStartError = null;
+let startAttempts = 0;
+
+export function getLastStartError() {
+  return lastStartError;
+}
 
 // 代理是否处于"启动失败需重试"状态。失败后返回 false，冷却期过后返回 true。
+// 例外：上次失败是 "already running"（原生代理其实活着，只是 JS 丢了端口）
+// 时不进冷却——那种情况重试一次就能拿回端口，罚 30 秒等待毫无意义。
 function shouldRetryStart() {
+  if (lastStartError && /already running/i.test(lastStartError)) return true;
   return Date.now() - lastStartAttempt >= START_RETRY_COOLDOWN_MS;
 }
 
 function startProxy() {
   lastStartAttempt = Date.now();
+  startAttempts += 1;
   echBasePromise = (async () => {
     const mod = NativeModules.EchProxy;
-    if (!mod || typeof mod.start !== 'function') return null;
+    if (!mod || typeof mod.start !== 'function') {
+      // 原来这里静默 return null，iOS 上桥没注册时完全看不出问题（页面直接
+      // 走兜底/失败），排查了很久。现在明确打日志 + 上报事件 + 记住原因。
+      const available = Object.keys(NativeModules || {}).length;
+      lastStartError =
+        `native module unavailable on ${Platform.OS} ` +
+        `(EchProxy=${mod ? 'present-but-no-start()' : 'undefined'}, ${available} native modules registered). ` +
+        (Platform.OS === 'ios'
+          ? 'iOS: EchProxyBridge.m 的 RCT_EXTERN_REMAP_MODULE 注册没生效。'
+          : 'Android: EchProxyPackage 是否加入 getPackages()。');
+      console.warn(`[ECH] ${lastStartError}`);
+      trackEvent('ech_proxy_start', {
+        ok: false,
+        error: `native_module_missing:${Platform.OS}`,
+      });
+      return null;
+    }
+    // t0 必须在 try 外面：原来声明在 try 里，catch 块又引用 t0 计算耗时，
+    // 一旦 start 抛错就会变成 ReferenceError（把真正的失败原因吃掉）。
+    const t0 = Date.now();
     try {
-      const t0 = Date.now();
       const doh = (await getDohCandidates()).join(',');
       const ips = await getCustomIPs();
-      console.log(`[ECH] starting proxy (doh=${doh || '(none)'}, ip=${ips || '(dns)'})`);
+      console.log(`[ECH] starting proxy (attempt ${startAttempts}, doh=${doh || '(none)'}, ip=${ips || '(dns)'})`);
       const port = await mod.start(0, doh, ips); // 0 = auto-pick a free port
       const base = `http://127.0.0.1:${port}`;
       const ms = Date.now() - t0;
       console.log(`[ECH] proxy started on ${base} in ${ms}ms`);
+      lastStartError = null;
       trackEvent('ech_proxy_start', { ok: true, ms, doh: !!doh, ip: !!ips });
       return base;
     } catch (e) {
       const ms = Date.now() - t0;
+      lastStartError = `start() failed after ${ms}ms: ${e?.message ?? e}`;
       console.warn(`[ECH] proxy failed to start in ${ms}ms:`, e?.message ?? e);
       // 失败不永久 memoise：置空并清掉 promise，让下次请求走 shouldRetryStart 冷却后重试。
       // 否则一次失败(DoH 抖动/被墙)会让整个 App 会话永久断网。
@@ -117,13 +150,23 @@ export function getEchBase() {
   if (echBasePromise) return echBasePromise;
   if (shouldRetryStart()) return startProxy();
   // 冷却期内不重复启动，返回一个立即失败的 promise（调用方会走 WebView 兜底）。
+  // 打出上次失败原因——否则日志里只有一串 "proxy unavailable"，看不到根因
+  // （首次失败发生在 App 启动瞬间，用户往往还没开调试日志）。
+  console.log(
+    `[ECH] proxy in cooldown (${Math.round((START_RETRY_COOLDOWN_MS - (Date.now() - lastStartAttempt)) / 1000)}s left). ` +
+    `last error: ${lastStartError ?? '(unknown)'}`,
+  );
   return Promise.resolve(null);
 }
 
 // Eagerly warm up the proxy so it's ready before the first AO3 request, then
 // refresh the remote config in the background (never blocking startup).
 export function initEch() {
-  getEchBase().catch(() => {});
+  // 只在没有进行中的启动时才触发，避免 App 启动瞬间多处 import 同时
+  // 调用造成并发 start()（原生侧会抛 "echproxy already running"，
+  // JS 侧则丢掉端口 → 之后 30s 冷却里全部请求 fail-closed。
+  // 2026-08-11 iOS 真机日志实测到这个竞态）。
+  if (!echBasePromise) getEchBase().catch(() => {});
   syncRemoteConfig().catch(() => {});
 }
 
@@ -265,11 +308,19 @@ export async function echFetch(url, options = {}) {
 // Latest native handshake/status line (e.g. "... ECHAccepted=true ...").
 export async function getEchStatus() {
   const mod = NativeModules.EchProxy;
-  if (!mod || typeof mod.status !== 'function') return 'unavailable';
+  if (!mod || typeof mod.status !== 'function') {
+    // 明确区分"桥没注册"和"原生报错"，别都返回 unavailable 让人猜。
+    const names = Object.keys(NativeModules || {});
+    return (
+      `unavailable: EchProxy native module not registered on ${Platform.OS} ` +
+      `(${names.length} modules; EchProxy=${mod ? 'present-but-no-status()' : 'undefined'})` +
+      (lastStartError ? `\nlast start error: ${lastStartError}` : '')
+    );
+  }
   try {
     return await mod.status();
-  } catch {
-    return 'error';
+  } catch (e) {
+    return `error: ${e?.message ?? e}`;
   }
 }
 
@@ -439,7 +490,15 @@ export async function echSelfTest() {
   const base = await getEchBase();
   if (!base) {
     trackEvent('ech_self_test', { ok: false, reason: 'proxy_unavailable' });
-    return `ECH proxy unavailable (non-Android or failed to start).`;
+    // 把真正的原因带出来：桥没注册 / start() 报错 / 冷却中。
+    const status = await getEchStatus();
+    return (
+      `ECH proxy unavailable.\n` +
+      `platform: ${Platform.OS}\n` +
+      `reason: ${lastStartError ?? '(no recorded error — proxy may not have been started yet)'}\n` +
+      `DoH: ${doh || '(none)'}\n` +
+      `native status: ${status}`
+    );
   }
   const t0 = Date.now();
   try {

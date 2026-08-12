@@ -22,6 +22,10 @@
 
 import Foundation
 import React
+// gomobile 产出的 Echproxy.xcframework 带 Modules/module.modulemap（CI 日志已核实），
+// 因此可作为 Swift module 导入。少了这行，EchproxyStart/Stop/FetchTxt/LastStatus
+// 这些 C 函数在 Swift 里根本不可见（编译期就找不到符号）。
+import Echproxy
 
 @objc(EchProxyModule)
 class EchProxyModule: NSObject, RCTBridgeModule {
@@ -34,6 +38,24 @@ class EchProxyModule: NSObject, RCTBridgeModule {
 
   private let ioQueue = DispatchQueue(label: "com.anglesya.co3.echproxy")
 
+  /// 已启动的端口。gomobile 侧 Start() 在代理已运行时返回
+  /// "echproxy already running"，而 JS 侧（echKy.js）在 JS 重载 / 启动竞态后
+  /// 会丢掉端口号并重试 —— 于是每次都撞 already running，永远拿不到 base，
+  /// 全部请求 fail-closed（2026-08-11 iOS 真机日志实测到的现象：
+  /// "[ECH] proxy failed to start in 2ms: echproxy already running"）。
+  /// 记住端口，撞 already running 时直接复用；没有记录则先 Stop 再 Start。
+  private static var runningPort: Int32 = 0
+  private static let portLock = NSLock()
+
+  private static func rememberPort(_ port: Int32) {
+    portLock.lock(); runningPort = port; portLock.unlock()
+  }
+
+  private static func knownPort() -> Int32 {
+    portLock.lock(); defer { portLock.unlock() }
+    return runningPort
+  }
+
   @objc(start:withDoh:withIpList:withResolver:withRejecter:)
   func start(
     port: NSNumber,
@@ -43,6 +65,14 @@ class EchProxyModule: NSObject, RCTBridgeModule {
     reject: @escaping RCTPromiseRejectBlock
   ) {
     ioQueue.async {
+      // 代理已经在跑（JS 重载后常见）：直接复用已知端口，不要报
+      // "echproxy already running" —— 那会让 JS 永远拿不到 base。
+      let known = Self.knownPort()
+      if known != 0, Self.isListening(port: known) {
+        resolve(known)
+        return
+      }
+
       let chosenPort: Int32
       if port.intValue != 0 {
         chosenPort = port.int32Value
@@ -54,7 +84,7 @@ class EchProxyModule: NSObject, RCTBridgeModule {
       let cachePath = Self.cachePath()
 
       var err: NSError?
-      let ok = EchproxyStart(
+      var ok = EchproxyStart(
         listen,
         "archiveofourown.org",  // target
         "",                     // echB64 (empty -> DoH / fallback + retry_configs)
@@ -65,12 +95,47 @@ class EchProxyModule: NSObject, RCTBridgeModule {
         &err
       )
 
+      // 已在运行但端口未知（例如 JS 重载、或上一次 start 的端口没记住）：
+      // 停掉旧实例再启一个，比让整个 App 断网好。
+      if !ok, Self.isAlreadyRunning(err) {
+        var stopErr: NSError?
+        _ = EchproxyStop(&stopErr)
+        err = nil
+        ok = EchproxyStart(
+          listen, "archiveofourown.org", "", doh, ipList, cachePath, false, &err
+        )
+      }
+
       if ok {
+        Self.rememberPort(chosenPort)
         resolve(chosenPort)
       } else {
         reject("ECH_START_FAILED", err?.localizedDescription ?? "unknown error", err)
       }
     }
+  }
+
+  private static func isAlreadyRunning(_ error: NSError?) -> Bool {
+    guard let message = error?.localizedDescription.lowercased() else { return false }
+    return message.contains("already running")
+  }
+
+  /// 端口上是否真的有人在听 —— 记住的端口在 App 被系统回收后可能已失效。
+  private static func isListening(port: Int32) -> Bool {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else { return false }
+    defer { close(fd) }
+    var addr = sockaddr_in()
+    addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_port = UInt16(port).bigEndian
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+    let result = withUnsafePointer(to: &addr) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+      }
+    }
+    return result == 0
   }
 
   @objc(stopWithResolver:withRejecter:)
@@ -81,6 +146,7 @@ class EchProxyModule: NSObject, RCTBridgeModule {
     ioQueue.async {
       var err: NSError?
       let ok = EchproxyStop(&err)
+      Self.rememberPort(0)   // 端口已失效，别再复用
       if ok {
         resolve(true)
       } else {
