@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import login, { resolveAuthenticatedUsername, validateCookie } from '../../web/account/login';
+import { clearAuthCookies } from '../../web/echKy';
 import AccountSetupModal from '../../components/Account/AccountSetupModal';
 import {
   deleteCredsPasswd,
@@ -188,6 +189,15 @@ const LoginScreen = ({ route }) => {
     try {
       await deleteCredsToken();
       await deleteCredsPasswd();
+
+      // AO3's session cookie lives in the proxy's in-memory cookie jar, not
+      // just in local credentials. Without clearing it, the next login request
+      // still carries the old cookie and AO3 responds "already logged in",
+      // which makes re-login/account-switch impossible. Restarting the proxy
+      // recreates the jar and drops the stale session.
+      await clearAuthCookies().catch(e =>
+        console.warn('Failed to clear proxy cookies on logout:', e?.message ?? e),
+      );
 
       setIsLoggedIn(false);
       setUsername('');

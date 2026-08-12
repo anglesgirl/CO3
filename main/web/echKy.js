@@ -283,6 +283,14 @@ async function restartProxy() {
   return startProxy();
 }
 
+// Clear all cookies held by the proxy's in-memory cookie jar. The jar is
+// recreated on every Start(), so a restart both drops AO3 session cookies and
+// picks up any fresh DoH/IP settings. Call this on logout so that a subsequent
+// login request does not arrive still "already logged in" with the old cookie.
+export async function clearAuthCookies() {
+  await restartProxy();
+}
+
 // Change the DoH endpoint and restart the proxy with it. Pass '' to disable DoH.
 // `manual` marks it as a user edit, which stops remote config from overriding it.
 export async function setDoh(doh, manual = true) {

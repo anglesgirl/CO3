@@ -1,5 +1,5 @@
 import {
-  ScrollView, Text, TouchableOpacity, View, Alert,
+  ScrollView, Text, TouchableOpacity, View, Alert, Clipboard,
 } from 'react-native';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigation } from '@react-navigation/native';
@@ -59,6 +59,7 @@ export default function DebugScreen() {
         title: 'CO3 调试日志',
         subject: 'CO3 Debug Logs',
         url: `file://${filePath}`,
+        type: 'text/plain',
         filename: fileName,
       });
     } catch (error) {
@@ -72,17 +73,8 @@ export default function DebugScreen() {
       const logText = logs.length
         ? logs.map(log => `[${log.time}] ${log.scope}: ${log.message}`).join('\n\n')
         : '暂无日志';
-      await RNFS.writeFile(
-        `${RNFS.CacheDirectoryPath}/CO3-debug-temp.txt`,
-        logText,
-        'utf8'
-      );
-      // 在 RN 中无法直接写入剪贴板，通过 Share 分享纯文本作为替代
-      await Share.open({
-        title: 'CO3 调试日志',
-        subject: 'CO3 Debug Logs',
-        message: logText,
-      });
+      Clipboard.setString(logText);
+      Alert.alert('已复制', '日志文本已复制到剪贴板。');
     } catch (error) {
       console.warn('复制日志失败:', error);
       Alert.alert('复制失败', error?.message ?? String(error));

@@ -1,4 +1,4 @@
-import ky from '../echKy';
+import ky, { clearAuthCookies } from '../echKy';
 import getUrl from '../requestManager';
 import { fetchViaWebView } from '../WebviewFetcher';
 
@@ -27,13 +27,23 @@ function extractLoginToken(html) {
   }
 }
 
-export async function fetchLoginAuthenticityToken() {
+export async function fetchLoginAuthenticityToken(retried = false) {
   try {
     let html = await ky.get('https://archiveofourown.org/users/login').text();
     html = html.replace('<br \\>', ''); // Before you ask, no. I don't know. I don't need them anyway. /shrug
 
     if (html.includes('You are already logged in to an account. Please log out and try again.')) {
-      throw 'already logged in.';
+      // AO3 thinks this proxy session is already authenticated. This happens
+      // when the proxy's in-memory cookie jar still holds a previous login even
+      // though local credentials were cleared (e.g. reinstall, token gone).
+      // Drop the stale session cookies and retry once; without this, re-login /
+      // account-switch is impossible ("already logged in." error).
+      if (!retried) {
+        console.log('[AUTH] proxy jar holds a stale session, clearing cookies and retrying');
+        await clearAuthCookies();
+        return fetchLoginAuthenticityToken(true);
+      }
+      throw new Error('already logged in.');
     }
 
     // CF challenge 页面：弹 WebView 验证窗口让用户完成验证。
