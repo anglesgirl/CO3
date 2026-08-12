@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { WebView } from 'react-native-webview';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { debugLog } from '../utils/debugLog';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import Svg, { Circle } from 'react-native-svg';
@@ -90,6 +91,9 @@ const ChapterReader = ({
                          workDAO,
                        }) => {
   const { t } = useTranslation();
+  // topBar 是 position:absolute 不在 SafeAreaView 内，硬编码 paddingTop
+  // 在灵动岛机型（iPhone 14 Pro+ 状态栏 ~59px）会被遮挡，改用真实 insets。
+  const insets = useSafeAreaInsets();
 
   const [barsVisible, setBarsVisible] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
@@ -552,6 +556,7 @@ const ChapterReader = ({
         {
           backgroundColor: `${currentTheme.backgroundColor}E6`,
           opacity: fadeAnim,
+          paddingTop: Math.max(insets.top, 20),
         },
       ]}
       pointerEvents={barsVisible ? 'auto' : 'none'}

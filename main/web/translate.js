@@ -107,6 +107,18 @@ export async function translateText(text, target, endpoint) {
   const parts = [];
   let buf = '';
   for (const para of text.split(/\n{2,}/)) {
+    // 超长单段（无空行分隔）也要硬切：gtx 是 GET，URL 超长会整体
+    // 失败/截断 → 摘要后半段丢失（"摘要不全"根因）。
+    if (para.length > BATCH_CHARS) {
+      if (buf) {
+        parts.push(buf);
+        buf = '';
+      }
+      for (let i = 0; i < para.length; i += BATCH_CHARS) {
+        parts.push(para.slice(i, i + BATCH_CHARS));
+      }
+      continue;
+    }
     if ((buf + para).length > BATCH_CHARS && buf) {
       parts.push(buf);
       buf = '';
@@ -138,8 +150,11 @@ function tokenizeHtml(html) {
 }
 
 // Only translate text that actually contains letters.
+// 必须覆盖 CJK：日文假名(ひらがな/カタカナ)、汉字、韩文——否则日文等
+// 非拉丁文本节点被当成"无可翻译内容"跳过，整段不翻译。
+// 范围：拉丁+扩展、希腊、西里尔、日文假名、CJK统一表意文字、韩文音节。
 function isTranslatable(s) {
-  return /[A-Za-zÀ-ÿЀ-ӿ]/.test(s);
+  return /[A-Za-zÀ-ÿ\u0370-\u03FF\u0400-\u04FF\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/.test(s);
 }
 
 /**
