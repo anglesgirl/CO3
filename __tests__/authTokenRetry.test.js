@@ -1,3 +1,9 @@
+jest.mock('@react-native-cookies/cookies', () => ({
+  __esModule: true,
+  default: {
+    clearAll: jest.fn(async () => true),
+  },
+}));
 jest.mock('../main/web/echKy', () => ({
   __esModule: true,
   // ky.get(url) returns a Response-like object synchronously; .text() is async.

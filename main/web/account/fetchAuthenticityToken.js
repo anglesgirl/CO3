@@ -1,6 +1,7 @@
 import ky, { clearAuthCookies } from '../echKy';
 import getUrl from '../requestManager';
 import { fetchViaWebView } from '../WebviewFetcher';
+import CookieManager from '@react-native-cookies/cookies';
 
 let DomParser = require('react-native-html-parser').DOMParser;
 
@@ -52,6 +53,17 @@ export async function fetchLoginAuthenticityToken(retried = false) {
     if (isCFChallenge(html)) {
       console.log('[AUTH] CF challenge on login form, opening verification window');
       try {
+        // 关键：WebView 加载登录页前必须清掉残留的 AO3 会话 cookie。
+        // 否则 AO3 判定"已登录"会 302 直接跳到用户主页（日志可见
+        // "[WV] nav: .../users/anglesya"），CF 验证窗口永不弹出，
+        // WebView 拿到的是主页 HTML，提取不到登录表单 → 误报 CF challenge。
+        // 同时清代理 jar（旧 session）和 WebView/系统 cookie store。
+        await clearAuthCookies();
+        await Promise.all([
+          CookieManager.clearAll().catch(() => {}),
+          CookieManager.clearAll(true).catch(() => {}), // iOS WKWebView store
+        ]);
+        console.log('[AUTH] cleared stale AO3 cookies before WebView verification');
         html = await fetchViaWebView('https://archiveofourown.org/users/login');
         if (!isCFChallenge(html)) {
           const token = extractLoginToken(html);

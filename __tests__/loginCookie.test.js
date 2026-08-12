@@ -4,6 +4,14 @@ jest.mock('../main/web/account/fetchAuthenticityToken', () => ({
 jest.mock('../main/storage/Credentials', () => ({}));
 jest.mock('../main/app', () => ({ navigationRef: {} }));
 jest.mock('react-native-toast-message', () => ({ show: jest.fn() }));
+jest.mock('@react-native-cookies/cookies', () => ({
+  __esModule: true,
+  default: {
+    clearAll: jest.fn(async () => true),
+    set: jest.fn(async () => true),
+    clearByName: jest.fn(async () => true),
+  },
+}));
 jest.mock('i18next', () => ({ t: key => key }));
 jest.mock('../main/web/WebviewFetcher', () => ({
   fetchViaWebView: jest.fn(async () => '<html><body>verified</body></html>'),

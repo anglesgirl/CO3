@@ -1,5 +1,6 @@
 import { fetchLoginAuthenticityToken } from './fetchAuthenticityToken';
 import Toast from 'react-native-toast-message';
+import CookieManager from '@react-native-cookies/cookies';
 import {
   deleteCredsPasswd, hasStoredPassword,
   setCredsPasswd,
@@ -129,6 +130,13 @@ export default async function login(username, password, retries = 0) {
       bodyText.includes('_cf_chl_opt') || bodyText.includes('challenge-platform')
     ) {
       console.log('[LOGIN] CF challenge on POST, opening verification window');
+      // 与 GET 表单同源：清掉残留 AO3 会话，否则 AO3 判定已登录直接
+      // 跳用户主页，验证窗口不弹出。
+      await clearAuthCookies();
+      await Promise.all([
+        CookieManager.clearAll().catch(() => {}),
+        CookieManager.clearAll(true).catch(() => {}),
+      ]);
       await fetchViaWebView('https://archiveofourown.org/users/login');
       // 验证完成后重试登录（authenticity_token 会重新获取）。
       return login(username, password, retries + 1);
