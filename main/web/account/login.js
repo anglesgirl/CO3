@@ -10,6 +10,7 @@ import {
 import { navigationRef } from '../../app';
 import i18n from 'i18next';
 import { echUrl } from '../echKy';
+import { fetchViaWebView } from '../WebviewFetcher';
 
 export const handleLogin = async (username, password) => {
   const t = i18n.t;
@@ -85,7 +86,10 @@ export async function resolveAuthenticatedUsername(sessionToken) {
   return parseAuthenticatedUsername(await response.text());
 }
 
-export default async function login(username, password) {
+export default async function login(username, password, retries = 0) {
+  if (retries > 2) {
+    throw new Error('Login failed: Cloudflare challenge could not be completed.');
+  }
   try {
     // Prepare the form data
     const formData = new FormData();
@@ -113,6 +117,19 @@ export default async function login(username, password) {
       //Like fr i'm a win 10 machine on chrome wdym
       //We just need to pray cloudflare will leave me alone
     });
+
+    // Cloudflare 在 POST 上也发起了 challenge：先弹 WebView 验证窗口，
+    // 验证通过后 cf_clearance 已写入代理 cookie jar，重试一次 POST。
+    const bodyText = await response.clone().text();
+    if (
+      response.status === 403 || response.status === 503 ||
+      bodyText.includes('_cf_chl_opt') || bodyText.includes('challenge-platform')
+    ) {
+      console.log('[LOGIN] CF challenge on POST, opening verification window');
+      await fetchViaWebView('https://archiveofourown.org/users/login');
+      // 验证完成后重试登录（authenticity_token 会重新获取）。
+      return login(username, password, retries + 1);
+    }
 
     // Still on the login page (proxied or not) means the credentials failed.
     if (response.url && response.url.endsWith('/users/login')) {

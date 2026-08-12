@@ -5,6 +5,9 @@ jest.mock('../main/storage/Credentials', () => ({}));
 jest.mock('../main/app', () => ({ navigationRef: {} }));
 jest.mock('react-native-toast-message', () => ({ show: jest.fn() }));
 jest.mock('i18next', () => ({ t: key => key }));
+jest.mock('../main/web/WebviewFetcher', () => ({
+  fetchViaWebView: jest.fn(async () => '<html><body>verified</body></html>'),
+}));
 jest.mock('../main/web/echKy', () => ({
   echUrl: jest.fn(async () => 'http://127.0.0.1:12345/'),
 }));

@@ -776,9 +776,12 @@ func echDialContext(sni string, echList []byte, cachePath string, insecure bool)
 			})
 			return tc, nil
 		}
-		setShakeInfo("FAILED after %d ECH candidate(s): %v; downgrading to plain TLS", len(candidates), lastErr)
-		// 所有 ECH 候选都失败 → 降级普通 TLS(保护性降级,保证连通)。
-		return plainTLSHandshake(ctx, sni, d, candidates, insecure, true)
+		// 所有 ECH 候选都失败 → 直接报错，绝不降级到普通 TLS。
+		// 降级会暴露真实 SNI (archiveofourown.org)，导致 Cloudflare 返回
+		// Challenge 页面；WebView 无法在挑战窗口外完成验证，登录会陷入
+		// 无限循环。宁可请求失败，也不降级暴露 SNI。
+		setShakeInfo("FAILED after %d ECH candidate(s): %v; refusing plain TLS fallback to avoid Cloudflare challenge", len(candidates), lastErr)
+		return nil, fmt.Errorf("all %d ECH candidates failed for %s; last error: %w (plain TLS fallback DISABLED to prevent Cloudflare challenge)", len(candidates), sni, lastErr)
 	}
 }
 

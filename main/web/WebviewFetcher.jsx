@@ -137,7 +137,9 @@ export default function WebviewFetcher() {
 
   const onWarningDismiss = () => {
     setShowCFWarning(false);
-    loadCurrent();
+    // 保持 WebView 可见：用户需要在这个窗口里完成 Cloudflare 验证，
+    // 验证通过后页面会自动重定向到目标页并触发 success。
+    // 不能重新 loadCurrent() —— 那会重新进入 challenge 循环。
   };
 
   const settle = (value, error) => {
@@ -181,11 +183,14 @@ export default function WebviewFetcher() {
     try {
       const data = JSON.parse(nativeEvent.data);
       if (data.type === 'challenge') {
+        // 核心修复：无论 cfWarning 与否，都必须让 WebView 可见，
+        // 用户需要在这个窗口里完成 Cloudflare 验证（点选/自动通过）。
+        // 之前 cfWarning=true 时只弹警告、WebView 保持隐藏，
+        // 导致用户永远无法完成验证 → 登录无限失败。
         if (currentRef.current?.cfWarning) {
           setShowCFWarning(true);
-        } else {
-          setVisible(true);
         }
+        setVisible(true);
         return;
       }
       if (data.type === 'success') {
@@ -199,6 +204,39 @@ export default function WebviewFetcher() {
     } catch (e) {
       settle(null, e);
     }
+  };
+
+  // 禁止系统浏览器弹出：CF 验证窗口内所有导航都留在 WebView 里。
+  const onOpenWindow = () => {
+    // 吞掉 window.open —— 绝不跳到系统浏览器。
+    console.log('[WV] blocked window.open (system browser)');
+  };
+
+  const onShouldStartLoadWithRequest = (request) => {
+    const url = request?.url ?? '';
+    if (!url) return true;
+    try {
+      const u = new URL(url);
+      // Cloudflare 验证通过后常以绝对地址重定向回 https://archiveofourown.org。
+      // 这种导航必须改写为本地 ECH 代理地址，否则直连暴露 SNI 会被墙重置。
+      // 代理地址本身（http://127.0.0.1:<port>/...）不在此列，正常放行。
+      if (AO3_HOSTS.has(u.hostname) && u.protocol === 'https:') {
+        console.log(`[WV] intercept AO3 nav → rewrite ${url}`);
+        rewriteForEch(url)
+          .then(({ uri, headers }) => {
+            if (headers) {
+              console.log(`[WV] reload via proxy: ${uri}`);
+              setSource({ uri, headers });
+            } else {
+              console.log(`[WV] target not proxiable, staying: ${url}`);
+            }
+          })
+          .catch((e) => console.log(`[WV] rewrite failed: ${e?.message ?? e}`));
+        return false; // 阻止当前导航，改写后重新加载
+      }
+    } catch {}
+    console.log(`[WV] nav: ${url}`);
+    return true;
   };
 
   return (
@@ -231,6 +269,8 @@ export default function WebviewFetcher() {
             onHttpError={onHttpError}
             onError={onError}
             onMessage={onMessage}
+            onOpenWindow={onOpenWindow}
+            onShouldStartLoadWithRequest={onShouldStartLoadWithRequest}
             javaScriptEnabled
             domStorageEnabled
             sharedCookiesEnabled
