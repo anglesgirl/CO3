@@ -2,21 +2,17 @@ import {
   ActivityIndicator,
   FlatList,
   Image,
+  SafeAreaView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { useEffect, useState } from 'react';
-// 注意：RN 0.85 核心包已移除 SafeAreaView 导出，必须从
-// react-native-safe-area-context 导入，否则 JSX 引用未定义变量
-// 直接 ReferenceError 闪退（用户实测安卓评论页崩溃即此因）。
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { fetchComments } from '../../web/worksScreen/fetchComments';
 import HtmlTextRenderer from '../common/HtmlTextRenderer';
 import { getJsonSettings } from '../../storage/jsonSettings';
 import Icon from 'react-native-vector-icons/MaterialIcons';
-import UserInfoScreen from '../../screens/UserInfo';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 
@@ -35,9 +31,6 @@ export const CommentsScreen = ({
   chapterDAO,
 }) => {
   const navigation = useNavigation();
-  // iOS 上 RN 自带 SafeAreaView 已废弃且 Modal 全屏时 insets 不生效，
-  // 返回箭头会被状态栏/刘海遮住（用户反馈"没有返回按钮无法退出"）。
-  const insets = useSafeAreaInsets();
 
   const [loading, setLoading] = useState(true);
   const [cannotNext, setCannotNext] = useState(true);
@@ -69,8 +62,11 @@ export const CommentsScreen = ({
   };
 
   const renderAuthorPic = authorImg => {
-    if (!authorImg) return null;
-    return <Image style={styles.commentPic} source={{ uri: authorImg }} />;
+    let url =
+      'https://archiveofourown.org/images/skins/iconsets/default/icon_user.png';
+    if (authorImg?.startsWith('https://archiveofourown.org/')) url = authorImg;
+
+    return <Image style={styles.commentPic} src={url} />;
   };
 
   const handlePress = comment => {
@@ -152,8 +148,7 @@ export const CommentsScreen = ({
                 activeOpacity={0}
                 onPress={() => {
                   comment.username
-                    ? (
-                      navigation.push("User", {
+                    ? navigation.push('User', {
                         username: comment.username,
                         currentTheme: currentTheme,
                         setScreens: setScreens,
@@ -165,7 +160,7 @@ export const CommentsScreen = ({
                         libraryDAO: libraryDAO,
                         workDAO: workDAO,
                         chapterDAO: chapterDAO,
-                      }))
+                      })
                     : null;
                 }}
               >
@@ -273,17 +268,14 @@ export const CommentsScreen = ({
   }
 
   return (
-    <View
+    <SafeAreaView
       style={[
         styles.container,
         { backgroundColor: currentTheme.backgroundColor },
       ]}
     >
-      <View style={[styles.header, { paddingTop: Math.max(insets.top, 20) }]}>
-        <TouchableOpacity
-          onPress={() => setCommentsVisible(false)}
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-        >
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => setCommentsVisible(false)}>
           <Icon name="arrow-back" size={24} color={currentTheme.textColor} />
         </TouchableOpacity>
         <Text style={[styles.title, { color: currentTheme.textColor }]}>
@@ -308,7 +300,7 @@ export const CommentsScreen = ({
           )
         }
       />
-    </View>
+    </SafeAreaView>
   );
 };
 
