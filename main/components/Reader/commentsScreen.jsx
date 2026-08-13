@@ -240,6 +240,14 @@ export const CommentsScreen = ({
           { backgroundColor: currentTheme.backgroundColor },
         ]}
       >
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => setCommentsVisible(false)}>
+            <Icon name="arrow-back" size={24} color={currentTheme.textColor} />
+          </TouchableOpacity>
+          <Text style={[styles.title, { color: currentTheme.textColor }]}>
+            {t('component_comments_title')}
+          </Text>
+        </View>
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={currentTheme.primaryColor} />
           <Text style={[styles.loadingText, { color: currentTheme.textColor }]}>
@@ -258,6 +266,14 @@ export const CommentsScreen = ({
           { backgroundColor: currentTheme.backgroundColor },
         ]}
       >
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => setCommentsVisible(false)}>
+            <Icon name="arrow-back" size={24} color={currentTheme.textColor} />
+          </TouchableOpacity>
+          <Text style={[styles.title, { color: currentTheme.textColor }]}>
+            {t('component_comments_title')}
+          </Text>
+        </View>
         <View style={styles.loadingContainer}>
           <Text style={[styles.loadingText, { color: currentTheme.textColor }]}>
             {t('component_comments_none')}
