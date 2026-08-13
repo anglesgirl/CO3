@@ -66,9 +66,9 @@ function enqueue(item) {
   triggerNext?.();
 }
 
-export function fetchViaWebView(url, { cfWarning = false, requireLoginForm = false, preVerify = false, interactiveLogin = false, direct = false, html = null, baseUrl = null, fields = null, autoClose = false } = {}) {
+export function fetchViaWebView(url, { cfWarning = false, requireLoginForm = false, preVerify = false, interactiveLogin = false, direct = false, html = null, baseUrl = null, fields = null, autoClose = false, translate = null } = {}) {
   return new Promise((resolve, reject) =>
-    enqueue({ url, resolve, reject, cfWarning, requireLoginForm, preVerify, interactiveLogin, direct, html, baseUrl, fields, autoClose }),
+    enqueue({ url, resolve, reject, cfWarning, requireLoginForm, preVerify, interactiveLogin, direct, html, baseUrl, fields, autoClose, translate }),
   );
 }
 
@@ -166,6 +166,70 @@ function buildFormFiller(fields) {
       }
       if (form) form.submit();
     }, 150);
+  })();
+  true;`;
+}
+
+// 页面汉化（interactiveLogin + translate 时注入）：把官方页面文本翻译成
+// 目标语言（默认中文）。逐条调 Google gtx 端点 —— 走本地代理(相对路径 +
+// X-Ech-Target 头), GFW 内也能通。只翻译静态文本节点 + input placeholder,
+// 已含中文/纯符号跳过; 翻译结果写回并标记 data-ech-tr 防重复。
+function buildPageTranslator(targetLang) {
+  const tl = JSON.stringify(targetLang || 'zh-CN');
+  return `(function(){
+    if (window.__echPageTranslated) return;
+    window.__echPageTranslated = true;
+    var tl = ${tl};
+    var items = [];
+    function add(node, el, ph, text) {
+      text = (text || '').trim();
+      if (!text || text.length < 2) return;
+      if (/[\\u4e00-\\u9fff]/.test(text)) return; // 已含中文
+      if (/^[\\s\\d\\p{P}\\p{S}]+$/u.test(text)) return; // 纯符号/数字
+      items.push({ node: node, el: el, ph: ph, text: text });
+    }
+    // 1) 可见文本节点
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: function(n) {
+        var p = n.parentElement;
+        if (!p) return NodeFilter.FILTER_REJECT;
+        if (/^(SCRIPT|STYLE|NOSCRIPT|TEXTAREA|SELECT|CODE|PRE)$/.test(p.tagName)) return NodeFilter.FILTER_REJECT;
+        if (p.getAttribute && p.getAttribute('data-ech-tr')) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    var nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (var i = 0; i < nodes.length; i++) add(nodes[i], null, false, nodes[i].nodeValue);
+    // 2) input/textarea placeholder
+    var inputs = document.querySelectorAll('input[placeholder], textarea[placeholder]');
+    for (var j = 0; j < inputs.length; j++) {
+      var ph = inputs[j].getAttribute('placeholder');
+      if (ph) add(null, inputs[j], true, ph);
+    }
+    if (!items.length) return;
+    // 逐条翻译(登录/注册/重置页文本量小,准确性优先; 走本地代理很快)
+    async function run() {
+      for (var s = 0; s < items.length; s++) {
+        var it = items[s];
+        try {
+          var url = '/translate_a/single?client=gtx&sl=auto&tl=' + encodeURIComponent(tl) + '&dt=t&q=' + encodeURIComponent(it.text);
+          var res = await fetch(url, { headers: { 'X-Ech-Target': 'translate.googleapis.com' } });
+          if (!res.ok) continue;
+          var data = await res.json();
+          if (!Array.isArray(data) || !Array.isArray(data[0])) continue;
+          var tr = data[0].map(function(x){ return Array.isArray(x) ? x[0] : ''; }).join('');
+          if (!tr || tr === it.text) continue;
+          if (it.ph) {
+            it.el.setAttribute('placeholder', tr);
+          } else if (it.node && it.node.parentElement) {
+            it.node.parentElement.setAttribute('data-ech-tr', '1');
+            it.node.nodeValue = tr;
+          }
+        } catch (e) {}
+      }
+    }
+    run();
   })();
   true;`;
 }
@@ -425,11 +489,12 @@ export default function WebviewFetcher() {
   };
 
   // 交互式登录成功：用户已在 WebView 里完成登录（导航离开 /users/login
-  // 或 jar 轮询到 session）。读 jar 里的 session 并结束。
-  const finishInteractiveLogin = (reason) => {
+  // 或 jar 轮询到 session）。读 jar 里的 session 并结束；navigatedTo 是
+  // 登录后的跳转路径(如 /users/anglesya), 供调用方提取规范用户名。
+  const finishInteractiveLogin = (reason, navigatedTo = null) => {
     const session = parseSessionFromJar(lastJarInfoRef.current);
     console.log(`[WV] interactive login done (${reason}), session=${session ? 'found' : 'MISSING'}`);
-    settle({ session }, null);
+    settle({ session, navigatedTo }, null);
   };
 
   // 官方域名直连登录成功：cookie 在 WebView store（不走代理 jar），
@@ -523,6 +588,14 @@ export default function WebviewFetcher() {
         }
       }, 250);
     }
+    // 页面汉化: 官方账号页文本翻译成目标语言(用户要求 2026-08-13)。
+    if (auto?.interactiveLogin && auto?.translate) {
+      setTimeout(() => {
+        if (currentRef.current === auto && webViewRef.current) {
+          webViewRef.current.injectJavaScript(buildPageTranslator(auto.translate));
+        }
+      }, 600);
+    }
   };
 
   const onHttpError = ({ nativeEvent }) => {
@@ -607,13 +680,21 @@ export default function WebviewFetcher() {
     }
   };
 
-  // 用户手动关闭验证窗口(卡住/不想验证时兜底)。
+  // 用户手动关闭窗口。登录流程: 未完成登录 = 失败。非登录官方页
+  // (注册/激活/忘记密码/邀请): 用户完成操作后自己关闭 = 正常完成。
   const onCloseWindow = () => {
-    console.log('[WV] user closed verification window');
-    settle(
-      null,
-      new WebViewFetchError(0, 'Verification window closed by user', currentRef.current?.url),
-    );
+    const item = currentRef.current;
+    const isLoginFlow = (item?.startPath || '/users/login') === '/users/login';
+    if (item?.interactiveLogin && !isLoginFlow) {
+      console.log('[WV] official page closed by user (completed)');
+      settle({ ok: true, closedByUser: true }, null);
+    } else {
+      console.log('[WV] user closed verification window');
+      settle(
+        null,
+        new WebViewFetchError(0, 'Verification window closed by user', item?.url),
+      );
+    }
   };
 
   // 禁止系统浏览器弹出：CF 验证窗口内所有导航都留在 WebView 里。
@@ -636,42 +717,37 @@ export default function WebviewFetcher() {
         return false;
       }
 
-      // 交互式登录/官方表单页：AO3 域导航离开起始表单路径（且非 CF 验证
-      // 路径）→ 提交成功。登录: AO3 登录成功必然 302 到 /users/{username}
-      // 或首页,密码错误则 302 回 /users/login（继续等待用户重试）。其他
-      // 官方表单(密码重置/注册/激活): 成功 302 离开表单路径,失败(校验
-      // 错误/无效链接)渲染同页不导航。此刻 Set-Cookie 已随代理转发写入
-      // jar(登录),读 jar 拿 session 结束窗口。direct 模式 cookie 在
-      // WebView store,成功由 CookieManager 读取。
+      // 交互式登录：仅登录流程用"导航离开 /users/login"判定成功。
+      // 非登录官方页(注册/激活/忘记密码/邀请)不做导航自动判定——页面
+      // 自身跳转/结果页/错误页都放行显示, 用户看完手动关闭(= 完成)。
+      // 登录成功: AO3 302 到 /users/{username} 或首页; 密码错误 302 回
+      // /users/login(继续等待重试)。此刻 Set-Cookie 已随代理转发写入
+      // jar, 读 jar 拿 session 结束窗口。direct 模式 cookie 在 WebView
+      // store, 成功由 CookieManager 读取。
       if (
         currentRef.current?.interactiveLogin &&
         (u.hostname === 'archiveofourown.org' || u.hostname === 'www.archiveofourown.org') &&
         u.protocol === 'https:'
       ) {
-        const p = u.pathname;
-        if (!p.startsWith('/users/login') && !p.startsWith('/users/session') && !p.startsWith('/cdn-cgi/')) {
-          const item = currentRef.current;
-          const startPath = item?.startPath || '/users/login';
-          const isLoginFlow = startPath === '/users/login';
-          // 登录流程: 离开 /users/login 即成功; 其他表单页: 离开起始路径即成功
-          const leftForm = isLoginFlow || p !== startPath;
-          if (leftForm) {
-            console.log(`[WV] interactive form: navigated to ${p} — success`);
+        const item = currentRef.current;
+        const isLoginFlow = (item?.startPath || '/users/login') === '/users/login';
+        if (isLoginFlow) {
+          const p = u.pathname;
+          if (!p.startsWith('/users/login') && !p.startsWith('/users/session') && !p.startsWith('/cdn-cgi/')) {
+            console.log(`[WV] interactive login: navigated to ${p} — success`);
             if (item?.direct) {
               // 官方域名直连：登录 cookie 在 WebView store，读出来返回。
               finishDirectLogin();
-            } else if (isLoginFlow) {
+            } else {
               getJarInfo()
                 .then((txt) => { lastJarInfoRef.current = txt ?? ''; })
                 .catch(() => {})
-                .finally(() => finishInteractiveLogin('nav'));
-            } else {
-              // 非登录官方表单页(密码重置/注册/激活): 提交成功,直接结束。
-              settle({ ok: true, navigatedTo: p }, null);
+                .finally(() => finishInteractiveLogin('nav', p));
             }
-            return false; // 阻止导航：已成功，无需再加载页面
+            return false; // 阻止导航：已登录，无需再加载页面
           }
         }
+        // 非登录官方页: 放行, 让用户看到结果页/错误页后手动关闭。
       }
 
       // direct 模式：官方域名直连，所有导航原样放行（不再改写代理）。

@@ -132,15 +132,18 @@ const LoginScreen = ({ route }) => {
     });
   };
 
-  // 打开官方页面（WebView）。登录页提交成功(302 离开 + jar 轮询到
-  // user_credentials)后自动存储 session 并刷新登录态; 其他账号页面
-  // (注册/激活/忘记密码/邀请)由用户在官方页完成, 成功自动关窗。
+  // 打开官方页面（WebView，页面汉化注入）。登录页提交成功(302 离开 +
+  // jar 轮询到 user_credentials)后自动存储 session 并刷新登录态——
+  // **只存 session token 和用户名, 不存密码**；用户名优先从登录后的
+  // 跳转 URL(/users/{username})提取, 主页解析失败也不阻塞登录。
+  // 其他账号页面(注册/激活/忘记密码/邀请)由用户在官方页完成, 手动
+  // 关闭 = 正常完成。
   const openOfficial = async (path, isLogin = false) => {
     setBusy(true);
     try {
       const result = await fetchViaWebView(
         'https://archiveofourown.org' + path,
-        { interactiveLogin: true },
+        { interactiveLogin: true, translate: 'zh-CN' },
       );
       if (isLogin) {
         const session = result?.session;
@@ -149,17 +152,28 @@ const LoginScreen = ({ route }) => {
         }
         await setCredsToken(session);
         await deleteCredsPasswd().catch(() => {});
-        const canonicalUsername = await resolveAuthenticatedUsername(session).catch(() => null);
-        await setUsernameOnly(canonicalUsername || '');
-        await setLastLogin();
+        // 用户名: 登录后跳转 URL 最可靠(日志实证 /users/anglesya),
+        // 其次主页解析; 都失败则不存(书签路由用 getUsername 兜底)。
+        let accountUsername = null;
+        const navMatch = String(result?.navigatedTo || '').match(/\/users\/([^\/?#]+)/);
+        if (navMatch) accountUsername = decodeURIComponent(navMatch[1]);
+        if (!accountUsername) {
+          accountUsername = await resolveAuthenticatedUsername(session).catch(() => null);
+        }
+        if (accountUsername) {
+          await setUsernameOnly(accountUsername).catch(() => {});
+        }
+        await setLastLogin().catch(() => {});
         setIsLoggedIn(true);
         showAlert(t('general_success'), t('screen_account_login_success'));
       }
     } catch (error) {
       console.error('Official account flow error:', error?.message ?? error);
       showAlert(
-        t('screen_account_login_failed'),
-        t('screen_account_login_failed_generic'),
+        t('general_error'),
+        isLogin
+          ? t('screen_account_login_failed_generic')
+          : t('screen_account_official_failed'),
       );
     } finally {
       setBusy(false);

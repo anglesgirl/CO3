@@ -198,6 +198,7 @@
   "screen_account_password": "密码",
   "screen_account_register": "注册账号",
   "screen_account_official_hint": "所有账号操作将在 AO3 官方页面完成（登录、注册、激活、忘记密码、获取邀请）。",
+  "screen_account_official_failed": "官方页面操作未完成，请重试。",
   "screen_account_forgot_password": "忘记密码？",
   "screen_account_get_invited": "获取邀请",
   "screen_account_remember_password": "记住我的密码",
