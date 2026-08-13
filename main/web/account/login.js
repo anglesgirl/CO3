@@ -134,7 +134,7 @@ export default async function login(username, password) {
       response.status === 403 || response.status === 503 ||
       bodyText.includes('_cf_chl_opt') || bodyText.includes('challenge-platform')
     ) {
-      console.log('[LOGIN] CF challenge on POST, rendering challenge page in window');
+      console.log('[LOGIN] CF challenge on POST, opening interactive login window');
       // 只清 AO3 会话 cookie(保留 cf_clearance),否则 AO3 判定已登录会
       // 302 跳到用户主页,验证窗口永不弹出。不能重启代理 —— 重启会把
       // 用户刚完成的 Cloudflare 验证作废,形成无限 challenge 循环。
@@ -143,20 +143,19 @@ export default async function login(username, password) {
         CookieManager.clearAll().catch(() => {}),
         CookieManager.clearAll(true).catch(() => {}),
       ]);
-      // WebView 只做人机验证：直接把 CF challenge 页(本响应体)渲染进
-      // 窗口,用户完成 Turnstile → CF 自动重放登录 POST(带 cf_clearance)
-      // → 成功 → cookie 进 jar → jar 轮询判定完成。不再加载 AO3 登录
-      // 表单(127.0.0.1 域名被服务端拒 auth_error;验证页是 CF 的,无域名检查)。
-      const base = await echUrl('https://archiveofourown.org/users/login');
+      // 交互式登录窗口（代理模式）：窗口里是 AO3 登录表单（127.0.0.1
+      // 加载,proxy_notice=0 已注入无警告）。用户填表提交 → POST 的
+      // Referer/Origin 由代理重写为官方域名(2026-08-13 playwright 实测:
+      // 重写后 302 到用户主页,登录成功) → cookie 经代理进 jar →
+      // jar 轮询(user_credentials)判定完成。ECH 只保护网络层,应用层
+      // 来源必须与直连官方一致——这是 auth_error 的根因修复。
       const result = await fetchViaWebView('https://archiveofourown.org/users/login', {
         interactiveLogin: true,
-        html: bodyText,
-        baseUrl: base,
       });
-      // 验证完成, session 从代理 jar 读取。
+      // 用户在窗口里完成登录，session 从代理 jar 读取。
       const session = result?.session;
       if (session) return session;
-      throw new Error('Login failed: verification completed but no session cookie');
+      throw new Error('Login failed: interactive login did not produce a session cookie');
     }
 
     // Still on the login page (proxied or not) means the credentials failed.

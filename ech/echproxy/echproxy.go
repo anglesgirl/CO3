@@ -509,6 +509,25 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	req.Host = target
+	// 应用层域名改写: WebView/App 的请求 URL 是 127.0.0.1(本地代理地址),
+	// Referer/Origin 头泄漏非官方域名 → AO3 服务端拒绝登录(auth_error,
+	// 2026-08-13 playwright 实测: 表单提交 Referer=http://127.0.0.1:PORT)。
+	// ECH 只保护网络层(TLS 隐藏 SNI),应用层来源必须与真实一致——重写为
+	// 官方域名,服务端看到的来源与直连官方完全相同。
+	if v := req.Header.Get("Referer"); v != "" {
+		if u, err := url.Parse(v); err == nil && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost") {
+			u.Scheme = "https"
+			u.Host = target
+			req.Header.Set("Referer", u.String())
+		}
+	}
+	if v := req.Header.Get("Origin"); v != "" {
+		if u, err := url.Parse(v); err == nil && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost") {
+			u.Scheme = "https"
+			u.Host = target
+			req.Header.Set("Origin", u.String())
+		}
+	}
 	req.Header.Del("Accept-Encoding")
 
 	resp, err := h.client.Do(req)
