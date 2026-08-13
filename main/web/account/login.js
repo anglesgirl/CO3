@@ -10,7 +10,7 @@ import {
 } from '../../storage/Credentials';
 import { navigationRef } from '../../app';
 import i18n from 'i18next';
-import { echUrl, clearAuthCookies } from '../echKy';
+import { echUrl } from '../echKy';
 import { fetchViaWebView } from '../WebviewFetcher';
 
 export const handleLogin = async (username, password) => {
@@ -130,9 +130,11 @@ export default async function login(username, password, retries = 0) {
       bodyText.includes('_cf_chl_opt') || bodyText.includes('challenge-platform')
     ) {
       console.log('[LOGIN] CF challenge on POST, opening verification window');
-      // 与 GET 表单同源：清掉残留 AO3 会话，否则 AO3 判定已登录直接
-      // 跳用户主页，验证窗口不弹出。
-      await clearAuthCookies();
+      // 注意：这里绝不能调用 clearAuthCookies()（= 重启代理）。
+      // 重启会丢弃代理 cookiejar 里刚写入的 cf_clearance —— 用户刚在
+      // WebView 完成的 CF 验证瞬间失效，重试 POST 永远过不了 challenge，
+      // 形成无限循环（日志：attempt 8→9→10→13 递增直到 retries > 2）。
+      // 只需清 RN/WebView 层 cookie store，代理 jar 必须保留。
       await Promise.all([
         CookieManager.clearAll().catch(() => {}),
         CookieManager.clearAll(true).catch(() => {}),
