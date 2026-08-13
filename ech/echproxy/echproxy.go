@@ -77,9 +77,17 @@ var (
 // 以便 ClearSessionCookies 在不重启代理的前提下清掉 AO3 会话 cookie、
 // 保留 cf_clearance —— 重启整个代理会连 cf_clearance 一起丢,导致
 // Cloudflare 验证无限循环。
+//
+// 2026-08-13 实测(JarInfo):AO3 经代理存的 session cookie 形状是
+// host-only + path=""(空路径)。Go cookiejar 的删除标记(SetCookies +
+// MaxAge=-1)会算默认 path="/",与存的 path="" 形成不同 key,永远匹配
+// 不上 → session 删不掉 → AO3 一直 302 到 /users/xxx。修复:不再用
+// 删除标记,直接**整体替换 jar**(newCookieJar)清空一切 cookie,并同步
+// 更新 proxyClient.Jar 的引用。
 var (
 	cookieJarMu sync.Mutex
 	cookieJar   *cookiejar.Jar
+	proxyClient *http.Client
 )
 
 // newCookieJar 新建 jar 并替换包级引用(Start 时调用)。
@@ -113,27 +121,23 @@ func newCookieJar() *cookiejar.Jar {
 // 返回登录表单而非验证界面 → 验证窗口永不弹出,POST 却仍被拦 → 死循环。
 // 删掉 cf_clearance 让 WebView 从零开始,CF 才会真正弹验证;完成后新的
 // cf_clearance 写入 jar 才对后续 POST 有效。
+//
+// 2026-08-13 四次加强(最终形态):不再逐个发删除标记 —— JarInfo 实测
+// 显示 session cookie 是 path=""(空路径)的 host-only cookie,删除标记的
+// 默认 path="/" 匹配不上,删不掉。直接整体替换 jar 清空**一切** cookie
+// (session + cf_clearance + __cf_bm 等),并同步 proxyClient.Jar 引用,
+// 保证后续请求用新 jar。WebView 从零开始加载,CF 才会真正渲染验证界面。
 func ClearSessionCookies() {
 	cookieJarMu.Lock()
 	defer cookieJarMu.Unlock()
 	if cookieJar == nil {
 		return
 	}
-	names := []string{"_otwarchive_session", "user_credentials", "cf_clearance"}
-	hosts := []string{"archiveofourown.org", "www.archiveofourown.org", "127.0.0.1", "localhost"}
-	schemes := []string{"https", "http"}
-	for _, scheme := range schemes {
-		for _, host := range hosts {
-			u := &url.URL{Scheme: scheme, Host: host}
-			// host-only 形式
-			for _, n := range names {
-				cookieJar.SetCookies(u, []*http.Cookie{{Name: n, MaxAge: -1}})
-			}
-			// domain 形式(带前导点,匹配 .xxx 域 cookie)
-			for _, n := range names {
-				cookieJar.SetCookies(u, []*http.Cookie{{Name: n, MaxAge: -1, Domain: "." + host}})
-			}
-		}
+	// 整体替换 jar:清空所有 cookie,不依赖任何删除标记的 key 匹配。
+	newJar, _ := cookiejar.New(nil)
+	cookieJar = newJar
+	if proxyClient != nil {
+		proxyClient.Jar = newJar
 	}
 }
 
@@ -157,8 +161,12 @@ func JarInfo() string {
 			}
 			fmt.Fprintf(&b, "[%s://%s] %d cookie(s)\n", scheme, host, len(cks))
 			for _, c := range cks {
-				fmt.Fprintf(&b, "  %s domain=%q path=%q secure=%v maxAge=%d\n",
-					c.Name, c.Domain, c.Path, c.Secure, c.MaxAge)
+				v := c.Value
+				if len(v) > 24 {
+					v = v[:24] + "..."
+				}
+				fmt.Fprintf(&b, "  %s=%q domain=%q path=%q secure=%v maxAge=%d\n",
+					c.Name, v, c.Domain, c.Path, c.Secure, c.MaxAge)
 			}
 		}
 	}
@@ -417,6 +425,9 @@ func Start(listen, target, echB64, doh, ipList, cpArg string, insecure bool) err
 			return http.ErrUseLastResponse
 		},
 	}
+	cookieJarMu.Lock()
+	proxyClient = client
+	cookieJarMu.Unlock()
 
 	ln, err := net.Listen("tcp", listen)
 	if err != nil {

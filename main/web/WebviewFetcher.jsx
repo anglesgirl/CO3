@@ -185,9 +185,17 @@ export default function WebviewFetcher() {
   const webViewRef = useRef(null);
   const currentRef = useRef(null);
   const httpErrorRef = useRef(null);
+  // 每次 fetchViaWebView 用新的 WebView 实例(key 递增强制重建)。
+  // react-native-webview 的 incognito 在 Android 上只是创建时清一次全局
+  // CookieManager,同一实例内的多次导航/复用会累积 cookie —— 日志实证
+  // 登录时 WebView store 残留 session 导致 AO3 302 到 /users/xxx。
+  // 重建实例 = 每次验证从零 cookie 开始,cf_clearance 由代理 jar 捕获
+  // (请求走代理转发),不依赖 WebView store。
+  const [webViewKey, setWebViewKey] = useState(0);
 
   const loadCurrent = () => {
     setVisible(false);
+    setWebViewKey((k) => k + 1); // 强制重建 WebView 实例,清 cookie 残留
     const wvStart = Date.now();
     // ECH 代理可用时，WebView 也走代理，避免直连被墙重置。
     // 2026-08-06：AO3 域名代理不可用时 rewriteForEch 会抛错（fail-closed），
@@ -401,6 +409,7 @@ export default function WebviewFetcher() {
       {source && (
         <View style={[styles.webviewBase, visible ? styles.visible : styles.hidden]}>
           <WebView
+            key={webViewKey}
             ref={webViewRef}
             source={source}
             onLoadEnd={onLoadEnd}
