@@ -400,6 +400,19 @@ export async function clearManualOverride() {
   await AsyncStorage.removeItem(MANUAL_KEY);
 }
 
+// 读取代理 cookiejar 的完整内容(文本)。交互式登录窗口用它轮询
+// 检测登录是否成功(_otwarchive_session 出现在清空后的 jar 里)。
+export async function getJarInfo() {
+  const mod = NativeModules.EchProxy;
+  if (!mod || typeof mod.jarInfo !== 'function') return null;
+  try {
+    return await mod.jarInfo();
+  } catch (e) {
+    console.warn('[ECH] jarInfo failed:', e?.message ?? e);
+    return null;
+  }
+}
+
 // --- remote configuration (TXT record) ------------------------------------
 
 export async function getConfigDomain() {

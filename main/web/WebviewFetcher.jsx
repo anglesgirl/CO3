@@ -3,7 +3,7 @@ import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import WebView from 'react-native-webview';
 import { useTranslation } from 'react-i18next';
-import { getEchBase } from './echKy';
+import { getEchBase, getJarInfo } from './echKy';
 
 // 需要走本地 ECH 代理的域名：
 // - AO3 主域：被墙，必须走代理（fail-closed）
@@ -65,9 +65,9 @@ function enqueue(item) {
   triggerNext?.();
 }
 
-export function fetchViaWebView(url, { cfWarning = false, requireLoginForm = false, preVerify = false } = {}) {
+export function fetchViaWebView(url, { cfWarning = false, requireLoginForm = false, preVerify = false, interactiveLogin = false } = {}) {
   return new Promise((resolve, reject) =>
-    enqueue({ url, resolve, reject, cfWarning, requireLoginForm, preVerify }),
+    enqueue({ url, resolve, reject, cfWarning, requireLoginForm, preVerify, interactiveLogin }),
   );
 }
 
@@ -191,6 +191,12 @@ export default function WebviewFetcher() {
   const webViewRef = useRef(null);
   const currentRef = useRef(null);
   const httpErrorRef = useRef(null);
+  // 交互式登录：jar 轮询定时器 / 总超时定时器 / 最近一次 jar 快照。
+  // jar 在 interactiveLogin 打开前已被 clearSessionCookies 清空，所以
+  // 轮询到 _otwarchive_session 出现 = 登录成功（可靠，不依赖检测 JS）。
+  const jarPollRef = useRef(null);
+  const loginTimeoutRef = useRef(null);
+  const lastJarInfoRef = useRef('');
   // 每次 fetchViaWebView 用新的 WebView 实例(key 递增强制重建)。
   // react-native-webview 的 incognito 在 Android 上只是创建时清一次全局
   // CookieManager,同一实例内的多次导航/复用会累积 cookie —— 日志实证
@@ -203,6 +209,12 @@ export default function WebviewFetcher() {
     setVisible(false);
     setWebViewKey((k) => k + 1); // 强制重建 WebView 实例,清 cookie 残留
     const wvStart = Date.now();
+    // 交互式登录：用户在 WebView 里填表提交完成登录（CF 验证也在窗口内）。
+    // 打开前 jar 已被调用方清空，登录成功后 AO3 的 Set-Cookie 会经代理
+    // 转发写回 jar → 轮询检测到 _otwarchive_session = 登录成功。
+    if (currentRef.current?.interactiveLogin) {
+      startLoginTimers();
+    }
     // ECH 代理可用时，WebView 也走代理，避免直连被墙重置。
     // 2026-08-06：AO3 域名代理不可用时 rewriteForEch 会抛错（fail-closed），
     // 这里 settle 错误让调用方感知（不再静默直连）。
@@ -249,9 +261,60 @@ export default function WebviewFetcher() {
     // 不能重新 loadCurrent() —— 那会重新进入 challenge 循环。
   };
 
+  // 从 jarInfo 文本里提取 AO3 会话 cookie 值。
+  // jar 已清空时，非空出现即登录成功。形如：
+  //   _otwarchive_session=abc123 domain="" path="" secure=false maxAge=0
+  const parseSessionFromJar = (jarText) => {
+    if (!jarText) return null;
+    const m = String(jarText).match(/_otwarchive_session=([^\s]+)/);
+    return m?.[1] || null;
+  };
+
+  const cleanupLoginTimers = () => {
+    if (jarPollRef.current) {
+      clearInterval(jarPollRef.current);
+      jarPollRef.current = null;
+    }
+    if (loginTimeoutRef.current) {
+      clearTimeout(loginTimeoutRef.current);
+      loginTimeoutRef.current = null;
+    }
+  };
+
+  // 交互式登录成功：用户已在 WebView 里完成登录（导航离开 /users/login
+  // 或 jar 轮询到 session）。读 jar 里的 session 并结束。
+  const finishInteractiveLogin = (reason) => {
+    const session = parseSessionFromJar(lastJarInfoRef.current);
+    console.log(`[WV] interactive login done (${reason}), session=${session ? 'found' : 'MISSING'}`);
+    settle({ session }, null);
+  };
+
+  const startLoginTimers = () => {
+    cleanupLoginTimers();
+    // jar 轮询兜底：导航检测漏了也能靠 cookie 判定登录成功。
+    jarPollRef.current = setInterval(async () => {
+      try {
+        const jarText = await getJarInfo();
+        lastJarInfoRef.current = jarText ?? '';
+        if (currentRef.current?.interactiveLogin && parseSessionFromJar(jarText)) {
+          console.log('[WV] interactive login detected via jar session cookie');
+          finishInteractiveLogin('jar');
+        }
+      } catch (e) {
+        // 轮询失败忽略，下个周期再试
+      }
+    }, 1500);
+    // 总超时：5 分钟后窗口还开着就失败（用户可能已放弃/网络卡死）。
+    loginTimeoutRef.current = setTimeout(() => {
+      console.log('[WV] interactive login timed out after 5min');
+      settle(null, new WebViewFetchError(0, 'Interactive login timed out', currentRef.current?.url));
+    }, 5 * 60 * 1000);
+  };
+
   const settle = (value, error) => {
     const item = currentRef.current;
     currentRef.current = null;
+    cleanupLoginTimers();
     setSource(null);
     setVisible(false);
     error ? item?.reject(error) : item?.resolve(value);
@@ -271,10 +334,17 @@ export default function WebviewFetcher() {
     // (CF 验证界面/登录表单),即使检测 JS 漏判也能人工完成验证;
     // 检测到纯表单会立即 settle 关闭。preVerify 预热模式不抢先显示
     // (无验证时秒过不打扰),检测到 challenge 再由 onMessage 显示。
-    if (currentRef.current?.requireLoginForm) {
+    // 交互式登录(interactiveLogin)始终显示——用户要在窗口里完成
+    // 整个登录,不能依赖任何检测 JS,也绝不自动 settle。
+    if (currentRef.current?.requireLoginForm || currentRef.current?.interactiveLogin) {
       setVisible(true);
     }
-    webViewRef.current?.injectJavaScript(CF_CHALLENGE_DETECTION);
+    // 交互式登录不注入 CF_CHALLENGE_DETECTION：窗口由用户操作驱动
+    // (填表/完成验证),检测 JS 只会造成误判提前 settle(历史 10 次
+    // 失败的根因之一)。成功判定靠导航 + jar 轮询,与页面内容无关。
+    if (!currentRef.current?.interactiveLogin) {
+      webViewRef.current?.injectJavaScript(CF_CHALLENGE_DETECTION);
+    }
   };
 
   const onHttpError = ({ nativeEvent }) => {
@@ -296,6 +366,12 @@ export default function WebviewFetcher() {
   const onMessage = ({ nativeEvent }) => {
     try {
       const data = JSON.parse(nativeEvent.data);
+      // 交互式登录：页面内 JS 的 postMessage 一律忽略——窗口由用户
+      // 操作驱动，成功判定靠导航 + jar 轮询（见 onShouldStartLoadWithRequest
+      // 与 startLoginTimers），不能让任何页面消息提前 settle。
+      if (currentRef.current?.interactiveLogin) {
+        return;
+      }
       if (data.type === 'challenge') {
         // 真 challenge(带 CF 特征)→ 显示窗口让用户完成验证,所有场景
         // (preVerify 预热也要完成,cf_clearance 才能进 jar)。
@@ -373,6 +449,26 @@ export default function WebviewFetcher() {
     if (!url) return true;
     try {
       const u = new URL(url);
+
+      // 交互式登录：AO3 域导航离开 /users/login（且非 CF 验证路径）→
+      // 登录成功。AO3 登录成功必然 302 到 /users/{username} 或首页；
+      // 密码错误则 302 回 /users/login（继续等待用户重试）。此刻
+      // Set-Cookie 已随代理转发写入 jar，读 jar 拿 session 结束窗口。
+      if (
+        currentRef.current?.interactiveLogin &&
+        (u.hostname === 'archiveofourown.org' || u.hostname === 'www.archiveofourown.org') &&
+        u.protocol === 'https:'
+      ) {
+        const p = u.pathname;
+        if (!p.startsWith('/users/login') && !p.startsWith('/users/session') && !p.startsWith('/cdn-cgi/')) {
+          console.log(`[WV] interactive login: navigated to ${p} — success`);
+          getJarInfo()
+            .then((txt) => { lastJarInfoRef.current = txt ?? ''; })
+            .catch(() => {})
+            .finally(() => finishInteractiveLogin('nav'));
+          return false; // 阻止导航：已登录，无需再加载页面
+        }
+      }
 
       // Cloudflare 验证回调。全部走本地 ECH 代理改写：
       // - archiveofourown.org/cdn-cgi/...：AO3 域下路径，直连被墙。

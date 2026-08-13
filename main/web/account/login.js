@@ -87,10 +87,7 @@ export async function resolveAuthenticatedUsername(sessionToken) {
   return parseAuthenticatedUsername(await response.text());
 }
 
-export default async function login(username, password, retries = 0) {
-  if (retries > 2) {
-    throw new Error('Login failed: Cloudflare challenge could not be completed.');
-  }
+export default async function login(username, password) {
   try {
     // Prepare the form data
     const formData = new FormData();
@@ -122,14 +119,22 @@ export default async function login(username, password, retries = 0) {
       //We just need to pray cloudflare will leave me alone
     });
 
-    // Cloudflare 在 POST 上也发起了 challenge：先弹 WebView 验证窗口，
-    // 验证通过后 cf_clearance 已写入代理 cookie jar，重试一次 POST。
+    // Cloudflare 在 POST 上发起 challenge（GFW 内 Go 代理 TLS 指纹被 CF
+    // 识别为自动化工具，GET 放行、登录 POST 必拦）。此前 10+ 次失败都
+    // 在赌"检测 challenge 页→弹窗"，但检测 JS 从未判对过：GET 表单 200
+    // 秒过、窗口一闪即关、用户永远没有机会完成验证。
+    //
+    // 正解（本次）：**交互式登录窗口**。清空 jar 后打开 WebView 显示
+    // /users/login 表单，用户在窗口内完成整个登录——填表、提交、如遇
+    // CF 验证就在窗口内完成（CF 标准流程，浏览器 JS 全量可用）。登录
+    // 成功后 AO3 302 到用户主页，Set-Cookie 经代理转发写回 jar，导航
+    // 检测/jar 轮询判定成功并返回 session。不再递归重试 POST。
     const bodyText = await response.clone().text();
     if (
       response.status === 403 || response.status === 503 ||
       bodyText.includes('_cf_chl_opt') || bodyText.includes('challenge-platform')
     ) {
-      console.log('[LOGIN] CF challenge on POST, opening verification window');
+      console.log('[LOGIN] CF challenge on POST, opening interactive login window');
       // 只清 AO3 会话 cookie(保留 cf_clearance),否则 AO3 判定已登录会
       // 302 跳到用户主页,验证窗口永不弹出。不能重启代理 —— 重启会把
       // 用户刚完成的 Cloudflare 验证作废,形成无限 challenge 循环。
@@ -138,9 +143,13 @@ export default async function login(username, password, retries = 0) {
         CookieManager.clearAll().catch(() => {}),
         CookieManager.clearAll(true).catch(() => {}),
       ]);
-      await fetchViaWebView('https://archiveofourown.org/users/login', { requireLoginForm: true });
-      // 验证完成后重试登录（authenticity_token 会重新获取）。
-      return login(username, password, retries + 1);
+      const result = await fetchViaWebView('https://archiveofourown.org/users/login', {
+        interactiveLogin: true,
+      });
+      // 用户在窗口里完成登录，session 从代理 jar 读取。
+      const session = result?.session;
+      if (session) return session;
+      throw new Error('Login failed: interactive login did not produce a session cookie');
     }
 
     // Still on the login page (proxied or not) means the credentials failed.
