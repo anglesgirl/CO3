@@ -343,12 +343,15 @@ export default function WebviewFetcher() {
   };
 
   // 从 jarInfo 文本里提取 AO3 会话 cookie 值。
-  // jar 已清空时，非空出现即登录成功。形如：
-  //   _otwarchive_session=abc123 domain="" path="" secure=false maxAge=0
+  // jarInfo 用 Go %q 打印,值是带引号的: _otwarchive_session="eyJfcm..."
+  // 必须剥掉引号 —— 否则存进 Credentials 的是带引号的无效值, 服务端不认
+  // → 302 登录页 → "session was rejected" (2026-08-13 用户实测实证)。
+  // 取最后一个匹配: 登录成功的 Set-Cookie 最后进 jar(匿名 session 会被覆盖)。
   const parseSessionFromJar = (jarText) => {
     if (!jarText) return null;
-    const m = String(jarText).match(/_otwarchive_session=([^\s]+)/);
-    return m?.[1] || null;
+    const matches = [...String(jarText).matchAll(/_otwarchive_session="?([^"\s]+)"?/g)];
+    if (!matches.length) return null;
+    return matches[matches.length - 1][1];
   };
 
   // 已登录判定：jar 里必须出现 user_credentials（AO3 登录成功才设置的
