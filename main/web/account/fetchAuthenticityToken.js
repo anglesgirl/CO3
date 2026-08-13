@@ -30,6 +30,13 @@ function extractLoginToken(html) {
 
 export async function fetchLoginAuthenticityToken(retried = false) {
   try {
+    // 预热 CF 验证:先加载一次主页(走代理)。CF 若要验证(challenge)
+    // → 弹窗让用户完成,cf_clearance 写入代理 jar;完成后自动继续。
+    // 已有资格(无 challenge)→ 秒过,用户无感。这样后续 ky.get / POST
+    // 都带有效 cf_clearance,不再无限 challenge。
+    if (!retried) {
+      await fetchViaWebView('https://archiveofourown.org/', { preVerify: true }).catch(() => {});
+    }
     let html = await ky.get('https://archiveofourown.org/users/login').text();
     html = html.replace('<br \\>', ''); // Before you ask, no. I don't know. I don't need them anyway. /shrug
 

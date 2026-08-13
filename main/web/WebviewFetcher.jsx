@@ -65,9 +65,9 @@ function enqueue(item) {
   triggerNext?.();
 }
 
-export function fetchViaWebView(url, { cfWarning = false, requireLoginForm = false } = {}) {
+export function fetchViaWebView(url, { cfWarning = false, requireLoginForm = false, preVerify = false } = {}) {
   return new Promise((resolve, reject) =>
-    enqueue({ url, resolve, reject, cfWarning, requireLoginForm }),
+    enqueue({ url, resolve, reject, cfWarning, requireLoginForm, preVerify }),
   );
 }
 
@@ -99,8 +99,10 @@ const CF_CHALLENGE_DETECTION = `
     // 登录页只会是 CF 验证或登录表单。既无 challenge 特征也无 new_user
     // 表单(如 CF 新版验证页/错误页)→ 按 challenge 处理,保持窗口可见,
     // 让用户完成验证或人工判断。绝不能静默 settle 导致窗口一闪即关。
+    // hasLoginForm 随消息带出,由 RN 侧按调用场景(preVerify/requireLoginForm)
+    // 决定是否保持窗口。
     if (isChallenge || !hasLoginForm) {
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'challenge' }));
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'challenge', hasLoginForm, isChallenge }));
       return;
     }
     window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -267,7 +269,8 @@ export default function WebviewFetcher() {
 
     // 登录流程(requireLoginForm)先让窗口可见——用户必须能看到页面
     // (CF 验证界面/登录表单),即使检测 JS 漏判也能人工完成验证;
-    // 检测到纯表单会立即 settle 关闭。其他场景等 challenge 检测结果。
+    // 检测到纯表单会立即 settle 关闭。preVerify 预热模式不抢先显示
+    // (无验证时秒过不打扰),检测到 challenge 再由 onMessage 显示。
     if (currentRef.current?.requireLoginForm) {
       setVisible(true);
     }
@@ -294,12 +297,21 @@ export default function WebviewFetcher() {
     try {
       const data = JSON.parse(nativeEvent.data);
       if (data.type === 'challenge') {
-        // 核心修复：无论 cfWarning 与否，都必须让 WebView 可见，
-        // 用户需要在这个窗口里完成 Cloudflare 验证（点选/自动通过）。
-        // 之前 cfWarning=true 时只弹警告、WebView 保持隐藏，
-        // 导致用户永远无法完成验证 → 登录无限失败。
-        if (currentRef.current?.cfWarning) {
-          setShowCFWarning(true);
+        // 真 challenge(带 CF 特征)→ 显示窗口让用户完成验证,所有场景
+        // (preVerify 预热也要完成,cf_clearance 才能进 jar)。
+        if (data.isChallenge) {
+          if (currentRef.current?.cfWarning) {
+            setShowCFWarning(true);
+          }
+          setVisible(true);
+          return;
+        }
+        // 仅"无登录表单"的普通页面(如 preVerify 加载的主页)→ 非登录
+        // 流程正常结束;登录流程(requireLoginForm)保持窗口(可能是
+        // CF 新版验证页/错误页,等 CF 重定向到表单)。
+        if (!currentRef.current?.requireLoginForm) {
+          settle(data.body ?? '', null);
+          return;
         }
         setVisible(true);
         return;
@@ -314,6 +326,12 @@ export default function WebviewFetcher() {
         if (/_cf_chl_opt|challenge-platform|challenges\.cloudflare\.com|cf-chl-widget|turnstile/i.test(body)) {
           console.log('[WV] success body still looks like a CF challenge, keeping window open');
           setVisible(true);
+          return;
+        }
+        // 预热验证模式(preVerify)：页面已正常加载且非 challenge →
+        // cf_clearance 已进 jar，直接结束，不需要是登录表单。
+        if (currentRef.current?.preVerify) {
+          settle(data.body, null);
           return;
         }
         // 登录流程要求页面是登录表单(new_user)。无表单(CF 新版验证页/
@@ -333,6 +351,15 @@ export default function WebviewFetcher() {
     } catch (e) {
       settle(null, e);
     }
+  };
+
+  // 用户手动关闭验证窗口(卡住/不想验证时兜底)。
+  const onCloseWindow = () => {
+    console.log('[WV] user closed verification window');
+    settle(
+      null,
+      new WebViewFetchError(0, 'Verification window closed by user', currentRef.current?.url),
+    );
   };
 
   // 禁止系统浏览器弹出：CF 验证窗口内所有导航都留在 WebView 里。
@@ -449,6 +476,11 @@ export default function WebviewFetcher() {
             cacheEnabled={false}
             startInLoadingState={visible}
           />
+          {visible && (
+            <Pressable style={styles.closeBtn} onPress={onCloseWindow} hitSlop={10}>
+              <Text style={styles.closeText}>✕</Text>
+            </Pressable>
+          )}
         </View>
       )}
     </>
@@ -470,6 +502,24 @@ const styles = StyleSheet.create({
   hidden: {
     opacity: 0,
     pointerEvents: 'none',
+  },
+  closeBtn: {
+    position: 'absolute',
+    top: 36,
+    right: 12,
+    zIndex: 10001,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  closeText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
+    lineHeight: 18,
   },
 
   // Modal
