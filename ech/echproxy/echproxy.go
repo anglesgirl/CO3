@@ -73,6 +73,44 @@ var (
 	cachePath   string
 )
 
+// cookieJar 是代理的会话 cookie 容器(每个 Start 重建)。提升为包级变量,
+// 以便 ClearSessionCookies 在不重启代理的前提下清掉 AO3 会话 cookie、
+// 保留 cf_clearance —— 重启整个代理会连 cf_clearance 一起丢,导致
+// Cloudflare 验证无限循环。
+var (
+	cookieJarMu sync.Mutex
+	cookieJar   *cookiejar.Jar
+)
+
+// newCookieJar 新建 jar 并替换包级引用(Start 时调用)。
+func newCookieJar() *cookiejar.Jar {
+	jar, _ := cookiejar.New(nil)
+	cookieJarMu.Lock()
+	cookieJar = jar
+	cookieJarMu.Unlock()
+	return jar
+}
+
+// ClearSessionCookies 只清除 AO3 的会话 cookie(_otwarchive_session /
+// user_credentials),保留 cf_clearance。登录重试时 AO3 不再 302 到
+// 用户主页(否则 WebView 验证窗口永不弹出),且不会把用户刚完成的
+// Cloudflare 验证作废。对每个 AO3 域用 MaxAge=-1 的删除标记覆盖。
+func ClearSessionCookies() {
+	cookieJarMu.Lock()
+	defer cookieJarMu.Unlock()
+	if cookieJar == nil {
+		return
+	}
+	del := []*http.Cookie{
+		{Name: "_otwarchive_session", MaxAge: -1},
+		{Name: "user_credentials", MaxAge: -1},
+	}
+	for _, host := range []string{"archiveofourown.org", "www.archiveofourown.org"} {
+		u := &url.URL{Scheme: "https", Host: host}
+		cookieJar.SetCookies(u, del)
+	}
+}
+
 // hostConf caches what we learned about a secondary upstream: its DoH-resolved
 // addresses and its ECH config (absent for servers that don't offer ECH).
 type hostConf struct {
@@ -313,7 +351,7 @@ func Start(listen, target, echB64, doh, ipList, cpArg string, insecure bool) err
 	hostConfs = map[string]*hostConf{}
 	hostsMu.Unlock()
 
-	jar, _ := cookiejar.New(nil)
+	jar := newCookieJar()
 	client := &http.Client{
 		Transport: &hostRouter{},
 		Jar:       jar,

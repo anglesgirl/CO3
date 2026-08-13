@@ -1,4 +1,4 @@
-import ky, { clearAuthCookies } from '../echKy';
+import ky, { clearSessionCookies } from '../echKy';
 import getUrl from '../requestManager';
 import { fetchViaWebView } from '../WebviewFetcher';
 import CookieManager from '@react-native-cookies/cookies';
@@ -41,7 +41,7 @@ export async function fetchLoginAuthenticityToken(retried = false) {
       // account-switch is impossible ("already logged in." error).
       if (!retried) {
         console.log('[AUTH] proxy jar holds a stale session, clearing cookies and retrying');
-        await clearAuthCookies();
+        await clearSessionCookies();
         return fetchLoginAuthenticityToken(true);
       }
       throw new Error('already logged in.');
@@ -53,15 +53,16 @@ export async function fetchLoginAuthenticityToken(retried = false) {
     if (isCFChallenge(html)) {
       console.log('[AUTH] CF challenge on login form, opening verification window');
       try {
-        // 注意：这里绝不能调用 clearAuthCookies()（= 重启代理）。
-        // 重启会丢弃代理 cookiejar 里已有的 cf_clearance —— 用户刚在
-        // WebView 完成的验证瞬间失效，导致 login 无限 CF challenge 循环。
-        // 只需要清 RN/WebView 层 cookie store（防止 AO3 判定已登录跳主页）。
+        // 只清 AO3 会话 cookie(保留 cf_clearance),并清 RN/WebView 层
+        // cookie store。不能重启代理 —— 重启会丢弃代理 cookiejar 里
+        // 已有的 cf_clearance,用户刚在 WebView 完成的验证瞬间失效,
+        // 导致 login 无限 CF challenge 循环。
         await Promise.all([
+          clearSessionCookies(),
           CookieManager.clearAll().catch(() => {}),
           CookieManager.clearAll(true).catch(() => {}), // iOS WKWebView store
         ]);
-        console.log('[AUTH] cleared RN/WebView cookie store before WebView verification');
+        console.log('[AUTH] cleared AO3 session + RN/WebView cookie store before WebView verification');
         html = await fetchViaWebView('https://archiveofourown.org/users/login');
         if (!isCFChallenge(html)) {
           const token = extractLoginToken(html);

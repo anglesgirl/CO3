@@ -342,6 +342,24 @@ export async function clearAuthCookies() {
   await restartProxy();
 }
 
+// 只清除 AO3 会话 cookie(_otwarchive_session / user_credentials),保留
+// cf_clearance。登录重试时 AO3 不再 302 到用户主页(否则 WebView 验证窗口
+// 永不弹出),且不会作废用户刚完成的 Cloudflare 验证 —— 重启代理会连
+// cf_clearance 一起丢,导致无限 challenge 循环。
+export async function clearSessionCookies() {
+  const mod = NativeModules.EchProxy;
+  if (mod && typeof mod.clearSessionCookies === 'function') {
+    try {
+      await mod.clearSessionCookies();
+      return;
+    } catch (e) {
+      console.warn('[ECH] native clearSessionCookies failed:', e?.message ?? e);
+    }
+  }
+  // 原生不支持时回退:重启代理(会丢 cf_clearance,但至少能清 session)。
+  await restartProxy();
+}
+
 // Change the DoH endpoint and restart the proxy with it. Pass '' to disable DoH.
 // `manual` marks it as a user edit, which stops remote config from overriding it.
 export async function setDoh(doh, manual = true) {

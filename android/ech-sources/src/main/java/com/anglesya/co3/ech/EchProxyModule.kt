@@ -66,6 +66,23 @@ class EchProxyModule(private val reactContext: ReactApplicationContext) :
     }
 
     /**
+     * 只清除 AO3 会话 cookie(_otwarchive_session / user_credentials),
+     * 保留 cf_clearance。登录重试时 AO3 不再 302 到用户主页,且不会
+     * 作废用户刚完成的 Cloudflare 验证(重启代理会连 cf_clearance 一起丢)。
+     */
+    @ReactMethod
+    fun clearSessionCookies(promise: Promise) {
+        io.execute {
+            try {
+                Echproxy.clearSessionCookies()
+                promise.resolve(true)
+            } catch (e: Throwable) {
+                promise.reject("ECH_CLEAR_SESSION_FAILED", e.message, e)
+            }
+        }
+    }
+
+    /**
      * Looks up the TXT records of [name] over [doh] and resolves with their
      * contents (one record per line). Used to pull remote DoH/IP settings.
      */

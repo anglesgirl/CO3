@@ -155,6 +155,18 @@ class EchProxyModule: NSObject, RCTBridgeModule {
     }
   }
 
+  @objc(clearSessionCookiesWithResolver:withRejecter:)
+  func clearSessionCookies(
+    resolve: @escaping RCTPromiseResolveBlock,
+    reject: @escaping RCTPromiseRejectBlock
+  ) {
+    ioQueue.async {
+      // 只清 AO3 会话 cookie，保留 cf_clearance（详见 Go 侧实现）。
+      EchproxyClearSessionCookies()
+      resolve(true)
+    }
+  }
+
   @objc(fetchTxt:withName:withResolver:withRejecter:)
   func fetchTxt(
     doh: String,
