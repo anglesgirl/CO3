@@ -148,10 +148,14 @@ export async function getInvitationQueueInfo(email) {
       })
       .text();
   } catch (error) {
-    if (error?.response?.status === 404) {
-      throw invitationPageError();
-    }
-    throw error;
+    // AO3 已移除 "Look me up" 队列查询表单(2026-08-13 实测 /invite_requests
+    // 页面只有申请表单,无 show 表单)或请求被 CF 拦 —— 队列状态查询失败
+    // 绝不能让已成功的提交显示失败,降级返回公开队列信息。
+    console.warn(
+      '[invite] queue status lookup failed, degrading to public info:',
+      error?.message ?? String(error),
+    );
+    return publicInfo;
   }
   return mergeQueueInfo(publicInfo, parseInvitationQueue(statusHtml));
 }
