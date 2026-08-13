@@ -94,20 +94,31 @@ func newCookieJar() *cookiejar.Jar {
 // ClearSessionCookies 只清除 AO3 的会话 cookie(_otwarchive_session /
 // user_credentials),保留 cf_clearance。登录重试时 AO3 不再 302 到
 // 用户主页(否则 WebView 验证窗口永不弹出),且不会把用户刚完成的
-// Cloudflare 验证作废。对每个 AO3 域用 MaxAge=-1 的删除标记覆盖。
+// Cloudflare 验证作废。
+//
+// 注意(2026-08-13 实测):AO3 的 session cookie 是 Domain=.archiveofourown.org
+// 的 domain cookie。Go cookiejar 删除时 domain 必须精确匹配——只传
+// host-only 删除 cookie(无 Domain 属性)匹配不上,删不掉,导致 AO3 一直
+// 判定"已登录"302 到 /users/xxx。因此对每个域名同时用 host-only 和
+// domain(带前导点)两种形式发删除标记。
 func ClearSessionCookies() {
 	cookieJarMu.Lock()
 	defer cookieJarMu.Unlock()
 	if cookieJar == nil {
 		return
 	}
-	del := []*http.Cookie{
-		{Name: "_otwarchive_session", MaxAge: -1},
-		{Name: "user_credentials", MaxAge: -1},
-	}
-	for _, host := range []string{"archiveofourown.org", "www.archiveofourown.org"} {
+	names := []string{"_otwarchive_session", "user_credentials"}
+	hosts := []string{"archiveofourown.org", "www.archiveofourown.org"}
+	for _, host := range hosts {
 		u := &url.URL{Scheme: "https", Host: host}
-		cookieJar.SetCookies(u, del)
+		// host-only 形式
+		for _, n := range names {
+			cookieJar.SetCookies(u, []*http.Cookie{{Name: n, MaxAge: -1}})
+		}
+		// domain 形式(带前导点,匹配 .archiveofourown.org 域 cookie)
+		for _, n := range names {
+			cookieJar.SetCookies(u, []*http.Cookie{{Name: n, MaxAge: -1, Domain: "." + host}})
+		}
 	}
 }
 
