@@ -196,6 +196,8 @@
   "screen_account_text": "Login with your AO3 account",
   "screen_account_username": "Username",
   "screen_account_password": "Password",
+  "screen_account_register": "Register account",
+  "screen_account_official_hint": "All account actions complete on the official AO3 page (login, register, activate, forgot password, get invited).",
   "screen_account_forgot_password": "Forgot password?",
   "screen_account_get_invited": "Get invited",
   "screen_account_remember_password": "Remember my password",

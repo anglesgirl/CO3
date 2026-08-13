@@ -17,11 +17,10 @@ describe('requested feature boundaries', () => {
     expect(source).toContain("t('translate_button')");
   });
 
-  it('uses AO3 invitation and status endpoints instead of the removed URL', () => {
-    const source = read('main/web/account/accountRequests.js');
-    expect(source).toContain("getForm('/invite_requests')");
-    expect(source).toContain("BASE + '/invite_requests/show'");
-    expect(source).not.toContain('/invite_requests/new');
+  it('keeps the AO3 invitation queue parser module', () => {
+    const source = read('main/web/account/invitationQueue.js');
+    expect(source).toContain('parseInvitationQueue');
+    expect(source).toContain('mergeQueueInfo');
   });
 
   it('builds and uploads split APKs for arm64 + armv7 only', () => {

@@ -183,6 +183,8 @@
   "screen_account_text": "Se connecter avec votre compte AO3",
   "screen_account_username": "Nom d'utilisateur",
   "screen_account_password": "Mot de passe",
+  "screen_account_register": "Créer un compte",
+  "screen_account_official_hint": "Toutes les opérations du compte se déroulent sur la page officielle AO3 (connexion, inscription, activation, mot de passe oublié, invitation).",
   "screen_account_forgot_password": "Mot de passe oublié ?",
   "screen_account_get_invited": "Se faire inviter",
   "screen_account_remember_password": "Se souvenir de mon mot de passe",

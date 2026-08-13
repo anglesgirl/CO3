@@ -5,21 +5,19 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
-import login, { resolveAuthenticatedUsername, validateCookie } from '../../web/account/login';
+import { resolveAuthenticatedUsername, validateCookie } from '../../web/account/login';
 import { clearAuthCookies } from '../../web/echKy';
-import AccountSetupModal from '../../components/Account/AccountSetupModal';
+import { fetchViaWebView } from '../../web/WebviewFetcher';
 import {
   deleteCredsPasswd,
   deleteCredsToken,
   getCredsPasswd,
   getCredsToken,
   getUsername,
-  setCredsPasswd,
   setCredsToken,
   setLastLogin,
   setUsernameOnly,
@@ -30,18 +28,17 @@ import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppContext } from '../../app';
 
+// 账号相关操作（登录/注册/激活/忘记密码/获取邀请）全部在 WebView 打开
+// AO3 官方页面完成 —— 客户端不再提供本地表单(2026-08-13 用户决定: 本地
+// 表单全删, 点击按钮直接打开官方页面)。WebView 是真浏览器, CF 验证与
+// 反钓鱼检查全部按官方流程走。
 const LoginScreen = ({ route }) => {
   const { currentTheme } = useContext(AppContext);
   const navigation = useNavigation();
 
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [rememberPassword, setRememberPassword] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [validating, setValidating] = useState(true);
-  // In-app account flows (password reset / invitation + registration).
-  const [setupModal, setSetupModal] = useState({ visible: false, mode: 'password' });
+  const [busy, setBusy] = useState(false);
 
   const [alert, setAlert] = useState({
     visible: false,
@@ -135,53 +132,37 @@ const LoginScreen = ({ route }) => {
     });
   };
 
-  const handleLogin = async () => {
-    if (!username || !password) {
-      showAlert(t('general_error'), t('screen_account_credentials_required'));
-      return;
-    }
-
-    setIsLoading(true);
+  // 打开官方页面（WebView）。登录页提交成功(302 离开 + jar 轮询到
+  // user_credentials)后自动存储 session 并刷新登录态; 其他账号页面
+  // (注册/激活/忘记密码/邀请)由用户在官方页完成, 成功自动关窗。
+  const openOfficial = async (path, isLogin = false) => {
+    setBusy(true);
     try {
-      const sessionToken = await login(username, password);
-
-      if (sessionToken) {
-        await setCredsToken(sessionToken);
-        // AO3 accepts an email for login, but user/bookmark URLs use the
-        // canonical AO3 username. Keep the login identifier for credentials,
-        // and store the resolved username separately for account routes.
-        if (rememberPassword) {
-          await setCredsPasswd(username, password);
-        } else {
-          // This also clears the legacy username_only key. Re-create the
-          // identity after clearing credentials, otherwise the session modal
-          // and bookmark routes see an empty username.
-          await deleteCredsPasswd();
+      const result = await fetchViaWebView(
+        'https://archiveofourown.org' + path,
+        { interactiveLogin: true },
+      );
+      if (isLogin) {
+        const session = result?.session;
+        if (!session) {
+          throw new Error('Login failed: no session cookie after official login');
         }
-
-        const canonicalUsername = await resolveAuthenticatedUsername(sessionToken);
-        const accountUsername = canonicalUsername || username;
-        // Always persist this separately: remembered credentials retain the
-        // email/login identifier, while bookmarks use this canonical value.
-        await setUsernameOnly(accountUsername);
-
-        setIsLoggedIn(true);
+        await setCredsToken(session);
+        await deleteCredsPasswd().catch(() => {});
+        const canonicalUsername = await resolveAuthenticatedUsername(session).catch(() => null);
+        await setUsernameOnly(canonicalUsername || '');
         await setLastLogin();
+        setIsLoggedIn(true);
         showAlert(t('general_success'), t('screen_account_login_success'));
-      } else {
-        showAlert(
-          t('screen_account_login_failed'),
-          t('screen_account_login_failed_invalid_creds_or_server_error'),
-        );
       }
     } catch (error) {
-      console.error('Login error:', error);
+      console.error('Official account flow error:', error?.message ?? error);
       showAlert(
         t('screen_account_login_failed'),
         t('screen_account_login_failed_generic'),
       );
     } finally {
-      setIsLoading(false);
+      setBusy(false);
     }
   };
 
@@ -200,27 +181,15 @@ const LoginScreen = ({ route }) => {
       );
 
       setIsLoggedIn(false);
-      setUsername('');
-      setPassword('');
-      setRememberPassword(false);
     } catch (error) {
       console.error('Logout error:', error);
       showAlert(t('general_error'), t('screen_account_logout_failed'));
     }
   };
 
-  const showRememberPasswordInfo = () => {
-    showAlert(
-      t('screen_account_remember_password_modal_title'),
-      t('screen_account_remember_password_modal_text'),
-    );
-  };
-
-  // Both flows are handled in-app by AccountSetupModal: it fetches AO3's own
-  // forms and posts them back through the ECH proxy. Opening a browser would
-  // fail entirely on networks where AO3 is blocked.
-  const openForgotPassword = () => setSetupModal({ visible: true, mode: 'password' });
-  const openGetInvited = () => setSetupModal({ visible: true, mode: 'invite' });
+  function onBack() {
+    navigation.goBack();
+  }
 
   if (validating) {
     return (
@@ -395,9 +364,14 @@ const LoginScreen = ({ route }) => {
     );
   }
 
-  function onBack() {
-    navigation.goBack();
-  }
+  // 未登录：只有几个按钮，全部直接打开 AO3 官方页面。
+  const accountActions = [
+    { key: 'screen_account_login', icon: 'login', path: '/users/login', isLogin: true, primary: true },
+    { key: 'screen_account_register', icon: 'person-add', path: '/users/new' },
+    { key: 'account_activate_button', icon: 'verified-user', path: '/users/activate' },
+    { key: 'screen_account_forgot_password', icon: 'lock-reset', path: '/users/password/new' },
+    { key: 'screen_account_get_invited', icon: 'mail', path: '/invite_requests' },
+  ];
 
   return (
     <SafeAreaView
@@ -414,141 +388,55 @@ const LoginScreen = ({ route }) => {
           {t('screen_account_title')}
         </Text>
       </View>
+
       <ScrollView contentContainerStyle={styles.scrollContainer}>
         <View style={styles.content}>
           <Text style={[styles.title, { color: currentTheme.textColor }]}>
             {t('screen_account_text')}
           </Text>
+          <Text style={[styles.officialHint, { color: currentTheme.placeholderColor }]}>
+            {t('screen_account_official_hint')}
+          </Text>
 
-          <View style={styles.formContainer}>
-            <View style={styles.inputGroup}>
-              <Text style={[styles.label, { color: currentTheme.textColor }]}>
-                {t('screen_account_username')}
-              </Text>
-              <TextInput
-                style={[
-                  styles.input,
-                  {
-                    backgroundColor: currentTheme.inputBackground,
-                    borderColor: currentTheme.borderColor,
-                    color: currentTheme.textColor,
-                  },
-                ]}
-                value={username}
-                onChangeText={setUsername}
-                autoCapitalize="none"
-                autoCorrect={false}
-                textContentType="username"
-              />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={[styles.label, { color: currentTheme.textColor }]}>
-                {t('screen_account_password')}
-              </Text>
-              <TextInput
-                style={[
-                  styles.input,
-                  {
-                    backgroundColor: currentTheme.inputBackground,
-                    borderColor: currentTheme.borderColor,
-                    color: currentTheme.textColor,
-                  },
-                ]}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-                textContentType="password"
-              />
-            </View>
-
-            <View style={styles.rememberContainer}>
+          <View style={styles.actionList}>
+            {accountActions.map(action => (
               <TouchableOpacity
-                style={styles.rememberButton}
-                onPress={() => setRememberPassword(!rememberPassword)}
+                key={action.key}
+                style={[
+                  styles.actionButton,
+                  {
+                    backgroundColor: action.primary
+                      ? currentTheme.primaryColor
+                      : currentTheme.cardBackground,
+                  },
+                ]}
+                onPress={() => openOfficial(action.path, !!action.isLogin)}
+                disabled={busy}
               >
                 <Icon
-                  name={
-                    rememberPassword ? 'check-box' : 'check-box-outline-blank'
-                  }
-                  size={24}
-                  color={currentTheme.primaryColor}
+                  name={action.icon}
+                  size={22}
+                  color={action.primary ? '#fff' : currentTheme.textColor}
                 />
                 <Text
                   style={[
-                    styles.rememberText,
-                    { color: currentTheme.textColor },
+                    styles.actionButtonText,
+                    {
+                      color: action.primary
+                        ? '#fff'
+                        : currentTheme.textColor,
+                    },
                   ]}
                 >
-                  {t('screen_account_remember_password')}
+                  {action.primary && busy
+                    ? t('screen_account_login_loading')
+                    : t(action.key)}
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                onPress={showRememberPasswordInfo}
-                style={styles.infoButton}
-              >
-                <Icon
-                  name="info-outline"
-                  size={20}
-                  color={currentTheme.placeholderColor}
-                />
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity
-              style={[
-                styles.loginButton,
-                { backgroundColor: currentTheme.primaryColor },
-              ]}
-              onPress={handleLogin}
-              disabled={isLoading}
-            >
-              <Text style={styles.loginButtonText}>
-                {isLoading
-                  ? t('screen_account_login_loading')
-                  : t('screen_account_login')}
-              </Text>
-            </TouchableOpacity>
-
-            <View style={styles.footerButtons}>
-              <TouchableOpacity
-                onPress={openForgotPassword}
-                style={styles.footerButton}
-              >
-                <Text
-                  style={[
-                    styles.footerButtonText,
-                    { color: currentTheme.primaryColor },
-                  ]}
-                >
-                  {t('screen_account_forgot_password')}
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={openGetInvited}
-                style={styles.footerButton}
-              >
-                <Text
-                  style={[
-                    styles.footerButtonText,
-                    { color: currentTheme.primaryColor },
-                  ]}
-                >
-                  {t('screen_account_get_invited')}
-                </Text>
-              </TouchableOpacity>
-            </View>
+            ))}
           </View>
         </View>
       </ScrollView>
-
-      <AccountSetupModal
-        visible={setupModal.visible}
-        mode={setupModal.mode}
-        theme={currentTheme}
-        onClose={() => setSetupModal(m => ({ ...m, visible: false }))}
-      />
 
       <CustomAlert
         visible={alert.visible}
@@ -581,68 +469,31 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 24,
     fontWeight: "bold",
-    marginBottom: 30,
+    marginBottom: 10,
     textAlign: "center",
   },
-  header_title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginLeft: 16,
+  officialHint: {
+    fontSize: 13,
+    textAlign: "center",
+    marginBottom: 30,
+    lineHeight: 19,
   },
-  formContainer: {
+  actionList: {
     width: "100%",
+    gap: 12,
   },
-  inputGroup: {
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 16,
-    marginBottom: 8,
-    fontWeight: "500",
-  },
-  input: {
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-  },
-  rememberContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 25,
-  },
-  rememberButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    flex: 1,
-  },
-  rememberText: {
-    fontSize: 16,
-    marginLeft: 8,
-  },
-  infoButton: {
-    padding: 5,
-  },
-  loginButton: {
-    borderRadius: 8,
+  actionButton: {
+    borderRadius: 10,
     padding: 15,
-    alignItems: "center",
-    marginBottom: 20,
-  },
-  loginButtonText: {
-    color: "white",
-    fontSize: 18,
-    fontWeight: "bold",
-  },
-  footerButtons: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    minHeight: 54,
   },
-  footerButton: {
-    padding: 10,
-  },
-  footerButtonText: {
-    fontSize: 16,
+  actionButtonText: {
+    fontSize: 17,
+    fontWeight: "600",
   },
   statusContainer: {
     padding: 30,
@@ -736,36 +587,6 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     marginLeft: 16,
   },
-  requestOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  requestBox: {
-    width: '100%',
-    maxWidth: 400,
-    borderRadius: 12,
-    padding: 20,
-  },
-  requestTitle: { fontSize: 17, fontWeight: '600' },
-  requestLabel: { fontSize: 13, marginTop: 8 },
-  requestInput: {
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginTop: 8,
-    fontSize: 15,
-  },
-  requestActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 20,
-    marginTop: 16,
-  },
-  requestAction: { paddingVertical: 8, paddingHorizontal: 8 },
 });
 
 export default LoginScreen;

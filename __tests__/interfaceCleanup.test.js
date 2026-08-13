@@ -27,11 +27,13 @@ describe('Chinese-first interface cleanup', () => {
     expect(sideMenu).not.toContain('ko-fi.com');
   });
 
-  it('provides an invitation email lookup and removes verbose link tips', () => {
-    const modal = read('main/components/Account/AccountSetupModal.jsx');
-    expect(modal).toContain("t('account_queue_lookup')");
-    expect(modal).not.toContain("t('account_paste_invite_hint')");
-    expect(modal).not.toContain("t('account_activate_hint')");
+  it('opens all account flows on the official AO3 pages (no local forms)', () => {
+    const screen = read('main/screens/more/LoginScreen.jsx');
+    expect(screen).toContain("'screen_account_register'");
+    expect(screen).toContain("'account_activate_button'");
+    expect(screen).toContain("'/users/password/new'");
+    expect(screen).toContain("'/invite_requests'");
+    expect(screen).not.toContain('<TextInput'); // 本地表单已全部移除
   });
 
   it('does not retain known hard-coded English operation messages', () => {
