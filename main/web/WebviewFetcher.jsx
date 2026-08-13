@@ -86,6 +86,46 @@ export class WebViewFetchError extends Error {
 
 // --- CF detection ---
 
+// 反钓鱼绕过（interactiveLogin 模式注入）：WebView 页面 URL 是本地代理
+// 地址 http://127.0.0.1:<port>/...，AO3 前端 JS 检测 location.hostname
+// ≠ archiveofourown.org 会禁用登录表单并跳转 /auth_error（日志实证：
+// "[WV] nav: .../auth_error"）。服务端其实不拦（代理转发时 Host 已重写为
+// 官方域，见 echproxy.go req.Host = target）——只要骗过前端检查即可。
+// 效果等同"官方登录页"，验证/登录仍由官方处理，cookie 回写代理 jar。
+function buildAntiPhishingBypass() {
+  return `(function(){
+    if (window.__echAntiPhishing) return;
+    window.__echAntiPhishing = true;
+    // 1) 拦截 location 赋值：AO3 authError 用 location.href='/auth_error'
+    //    跳转，赋值是导航，必须在页面 JS 动手前拦住。
+    try {
+      var _loc = window.location;
+      Object.defineProperty(window, 'location', {
+        get: function() { return _loc; },
+        set: function() { /* swallow navigation attempts (e.g. /auth_error) */ }
+      });
+    } catch(e) {}
+    // 2) 解除登录表单禁用 + 移除反钓鱼警告条（AO3 检测非官方域名后
+    //    会 disabled 提交按钮并插入警告）。
+    function unblock() {
+      var form = document.getElementById('new_user');
+      if (form) {
+        form.querySelectorAll('input, button, select, textarea').forEach(function(el) { el.disabled = false; });
+      }
+      document.querySelectorAll('.error, .warning, .caution, .notice, .flash').forEach(function(el) {
+        if (/host|域名|官方|phish|钓鱼|non-?official/i.test(el.textContent || '')) el.remove();
+      });
+    }
+    if (document.readyState !== 'loading') unblock();
+    document.addEventListener('DOMContentLoaded', unblock);
+    window.addEventListener('load', unblock);
+    // 兜底轮询：AO3 的 JS 可能在事件里延迟插入警告/禁用
+    var t = setInterval(function() { unblock(); }, 400);
+    setTimeout(function() { clearInterval(t); }, 30000);
+  })();
+  true;`;
+}
+
 const CF_CHALLENGE_DETECTION = `
   (function() {
     const html = document.documentElement.outerHTML || '';
@@ -233,6 +273,11 @@ export default function WebviewFetcher() {
         if (proxied && headers?.['X-Ech-Target']) {
           const base = uri.slice(0, uri.indexOf('/', uri.indexOf('://') + 3));
           injected = buildFetchRewriter(base, headers['X-Ech-Target']);
+        }
+        // 交互式登录：叠加反钓鱼绕过（AO3 前端检查 hostname → 禁用表单/跳
+        // auth_error），让登录表单在代理域名下可用。
+        if (currentRef.current?.interactiveLogin) {
+          injected = (injected ? injected + '\n' : '') + buildAntiPhishingBypass();
         }
         setSource({ uri, headers, injectedJavaScriptBeforeContentLoaded: injected || undefined });
       })
@@ -460,6 +505,13 @@ export default function WebviewFetcher() {
     if (!url) return true;
     try {
       const u = new URL(url);
+
+      // 交互式登录：AO3 前端反钓鱼把表单页跳去 /auth_error——绝不是登录
+      // 成功路径，拦住留在登录页（注入 JS 也会拦 location 赋值，双保险）。
+      if (currentRef.current?.interactiveLogin && u.pathname === '/auth_error') {
+        console.log('[WV] blocked anti-phishing redirect to /auth_error');
+        return false;
+      }
 
       // 交互式登录：AO3 域导航离开 /users/login（且非 CF 验证路径）→
       // 登录成功。AO3 登录成功必然 302 到 /users/{username} 或首页；
