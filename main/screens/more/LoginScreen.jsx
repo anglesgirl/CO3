@@ -1,10 +1,12 @@
 import React, { useContext, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Clipboard,
   Modal,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -45,6 +47,10 @@ const LoginScreen = ({ route }) => {
     title: '',
     message: '',
   });
+  // 邀请/激活链接粘贴弹窗: { visible, type: 'signup'|'activate' }
+  const [linkModal, setLinkModal] = useState({ visible: false, type: 'signup' });
+  const [linkInput, setLinkInput] = useState('');
+  const [linkDetected, setLinkDetected] = useState(false);
   const [sessionInfo, setSessionInfo] = useState({
     visible: false,
     username: '',
@@ -137,14 +143,17 @@ const LoginScreen = ({ route }) => {
   // **只存 session token 和用户名, 不存密码**；用户名优先从登录后的
   // 跳转 URL(/users/{username})提取, 主页解析失败也不阻塞登录。
   // 其他账号页面(注册/激活/忘记密码/邀请)由用户在官方页完成, 手动
-  // 关闭 = 正常完成。
-  const openOfficial = async (path, isLogin = false) => {
+  // 关闭 = 正常完成。urlOrPath 可以是完整链接(注册/激活)或路径。
+  const openOfficial = async (urlOrPath, isLogin = false) => {
     setBusy(true);
     try {
-      const result = await fetchViaWebView(
-        'https://archiveofourown.org' + path,
-        { interactiveLogin: true, translate: 'zh-CN' },
-      );
+      const url = urlOrPath.startsWith('http')
+        ? urlOrPath
+        : 'https://archiveofourown.org' + urlOrPath;
+      const result = await fetchViaWebView(url, {
+        interactiveLogin: true,
+        translate: 'zh-CN',
+      });
       if (isLogin) {
         const session = result?.session;
         if (!session) {
@@ -178,6 +187,61 @@ const LoginScreen = ({ route }) => {
     } finally {
       setBusy(false);
     }
+  };
+
+  // --- 邀请/激活链接粘贴弹窗 -------------------------------------------
+  // AO3 官方链接特征: archiveofourown.org 域, 或 /signup /invitations /
+  // /users/activate /users/new 路径, 或裸 token。
+  const isAo3Link = s => {
+    const t = String(s || '').trim();
+    return (
+      /archiveofourown\.org/i.test(t) ||
+      /^\/(signup|invitations|users\/activate|users\/new)/i.test(t) ||
+      /^[A-Za-z0-9_-]{10,}$/.test(t)
+    );
+  };
+
+  // 把用户输入规范成完整 URL: 完整链接/裸域名/路径/裸 token 都支持。
+  const normalizeLink = s => {
+    let url = String(s || '').trim();
+    if (!url) return null;
+    if (/^https?:\/\//i.test(url)) return url;
+    if (/^archiveofourown\.org/i.test(url)) return 'https://' + url;
+    if (url.startsWith('/')) return 'https://archiveofourown.org' + url;
+    if (/^[A-Za-z0-9_-]{10,}$/.test(url)) {
+      return linkModal.type === 'activate'
+        ? 'https://archiveofourown.org/users/activate/' + url
+        : 'https://archiveofourown.org/signup/' + url;
+    }
+    return null;
+  };
+
+  // 打开链接弹窗; 同时读取剪贴板, 符合 AO3 链接特征就自动填入。
+  const openLinkModal = async type => {
+    setLinkModal({ visible: true, type });
+    setLinkInput('');
+    setLinkDetected(false);
+    try {
+      const text = (await Clipboard.getString()) || '';
+      if (isAo3Link(text)) {
+        setLinkInput(text.trim());
+        setLinkDetected(true);
+      }
+    } catch (e) {
+      // 剪贴板读取失败不阻塞, 用户可手动粘贴
+    }
+  };
+
+  const closeLinkModal = () => setLinkModal(m => ({ ...m, visible: false }));
+
+  const openPastedLink = async () => {
+    const url = normalizeLink(linkInput);
+    if (!url) {
+      showAlert(t('general_error'), t('screen_account_link_invalid'));
+      return;
+    }
+    closeLinkModal();
+    await openOfficial(url);
   };
 
   const handleLogout = async () => {
@@ -378,11 +442,12 @@ const LoginScreen = ({ route }) => {
     );
   }
 
-  // 未登录：只有几个按钮，全部直接打开 AO3 官方页面。
+  // 未登录：几个按钮，全部打开 AO3 官方页面。注册/激活需要链接,
+  // 点击后弹输入框粘贴(自动识别剪贴板)。
   const accountActions = [
     { key: 'screen_account_login', icon: 'login', path: '/users/login', isLogin: true, primary: true },
-    { key: 'screen_account_register', icon: 'person-add', path: '/users/new' },
-    { key: 'account_activate_button', icon: 'verified-user', path: '/users/activate' },
+    { key: 'screen_account_have_invite', icon: 'person-add', linkType: 'signup' },
+    { key: 'screen_account_have_activation', icon: 'verified-user', linkType: 'activate' },
     { key: 'screen_account_forgot_password', icon: 'lock-reset', path: '/users/password/new' },
     { key: 'screen_account_get_invited', icon: 'mail', path: '/invite_requests' },
   ];
@@ -424,7 +489,11 @@ const LoginScreen = ({ route }) => {
                       : currentTheme.cardBackground,
                   },
                 ]}
-                onPress={() => openOfficial(action.path, !!action.isLogin)}
+                onPress={() =>
+                  action.linkType
+                    ? openLinkModal(action.linkType)
+                    : openOfficial(action.path, !!action.isLogin)
+                }
                 disabled={busy}
               >
                 <Icon
@@ -451,6 +520,80 @@ const LoginScreen = ({ route }) => {
           </View>
         </View>
       </ScrollView>
+
+      {/* 邀请/激活链接粘贴弹窗 */}
+      <Modal
+        visible={linkModal.visible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeLinkModal}
+      >
+        <View style={styles.linkOverlay}>
+          <View
+            style={[
+              styles.linkBox,
+              { backgroundColor: currentTheme.cardBackground },
+            ]}
+          >
+            <Text style={[styles.linkTitle, { color: currentTheme.textColor }]}>
+              {t(
+                linkModal.type === 'activate'
+                  ? 'screen_account_have_activation'
+                  : 'screen_account_have_invite',
+              )}
+            </Text>
+            <Text
+              style={[
+                styles.linkHint,
+                { color: currentTheme.placeholderColor },
+              ]}
+            >
+              {t('screen_account_link_paste_hint')}
+            </Text>
+            {linkDetected && (
+              <Text style={styles.linkDetected}>
+                {t('screen_account_link_detected')}
+              </Text>
+            )}
+            <TextInput
+              style={[
+                styles.linkInput,
+                {
+                  color: currentTheme.textColor,
+                  borderColor: currentTheme.borderColor,
+                  backgroundColor: currentTheme.inputBackground,
+                },
+              ]}
+              value={linkInput}
+              onChangeText={setLinkInput}
+              placeholder="https://archiveofourown.org/signup/..."
+              placeholderTextColor={currentTheme.placeholderColor}
+              autoCapitalize="none"
+              autoCorrect={false}
+              multiline
+            />
+            <TouchableOpacity
+              style={[
+                styles.linkButton,
+                { backgroundColor: currentTheme.primaryColor },
+              ]}
+              onPress={openPastedLink}
+            >
+              <Text style={styles.linkButtonText}>
+                {t('screen_account_link_open')}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.linkCancel}
+              onPress={closeLinkModal}
+            >
+              <Text style={{ color: currentTheme.placeholderColor }}>
+                {t('general_cancel')}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <CustomAlert
         visible={alert.visible}
@@ -508,6 +651,60 @@ const styles = StyleSheet.create({
   actionButtonText: {
     fontSize: 17,
     fontWeight: "600",
+  },
+  linkOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  linkBox: {
+    width: "100%",
+    maxWidth: 420,
+    borderRadius: 12,
+    padding: 20,
+  },
+  linkTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    marginBottom: 8,
+  },
+  linkHint: {
+    fontSize: 13,
+    lineHeight: 19,
+    marginBottom: 10,
+  },
+  linkDetected: {
+    fontSize: 13,
+    color: "#22c55e",
+    marginBottom: 8,
+    fontWeight: "600",
+  },
+  linkInput: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    minHeight: 70,
+    textAlignVertical: "top",
+  },
+  linkButton: {
+    borderRadius: 8,
+    paddingVertical: 12,
+    alignItems: "center",
+    marginTop: 12,
+  },
+  linkButtonText: {
+    color: "#fff",
+    fontWeight: "600",
+    fontSize: 15,
+  },
+  linkCancel: {
+    marginTop: 12,
+    alignItems: "center",
+    paddingVertical: 8,
   },
   statusContainer: {
     padding: 30,
