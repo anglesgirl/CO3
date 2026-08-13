@@ -162,7 +162,10 @@ func JarInfo() string {
 			fmt.Fprintf(&b, "[%s://%s] %d cookie(s)\n", scheme, host, len(cks))
 			for _, c := range cks {
 				v := c.Value
-				if len(v) > 24 {
+				// session cookie 值必须完整打印：交互式登录从 jarInfo 文本
+				// 提取 _otwarchive_session 作为登录态；截断 24 字符会存进
+				// 无效 session → validateCookie 失败 → 无限重新登录。
+				if len(v) > 24 && c.Name != "_otwarchive_session" {
 					v = v[:24] + "..."
 				}
 				fmt.Fprintf(&b, "  %s=%q domain=%q path=%q secure=%v maxAge=%d\n",

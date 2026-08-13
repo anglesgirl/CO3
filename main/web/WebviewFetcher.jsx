@@ -270,6 +270,15 @@ export default function WebviewFetcher() {
     return m?.[1] || null;
   };
 
+  // 已登录判定：jar 里必须出现 user_credentials（AO3 登录成功才设置的
+  // 标记）。⚠️ 不能只看 _otwarchive_session —— WebView 加载登录表单页时
+  // AO3 对匿名访问也会 Set-Cookie 一个 session（日志实证），见 session 就
+  // 判定成功会让窗口 1.5 秒误关、用户根本没机会填表、存的是匿名 session。
+  const isLoggedInJar = (jarText) => {
+    if (!jarText) return false;
+    return /user_credentials=[^\s]+/.test(String(jarText));
+  };
+
   const cleanupLoginTimers = () => {
     if (jarPollRef.current) {
       clearInterval(jarPollRef.current);
@@ -292,12 +301,14 @@ export default function WebviewFetcher() {
   const startLoginTimers = () => {
     cleanupLoginTimers();
     // jar 轮询兜底：导航检测漏了也能靠 cookie 判定登录成功。
+    // 判定条件 = user_credentials 出现（真正登录成功）；匿名 session
+    // 不算（见 isLoggedInJar 注释）。
     jarPollRef.current = setInterval(async () => {
       try {
         const jarText = await getJarInfo();
         lastJarInfoRef.current = jarText ?? '';
-        if (currentRef.current?.interactiveLogin && parseSessionFromJar(jarText)) {
-          console.log('[WV] interactive login detected via jar session cookie');
+        if (currentRef.current?.interactiveLogin && isLoggedInJar(jarText)) {
+          console.log('[WV] interactive login detected via jar user_credentials');
           finishInteractiveLogin('jar');
         }
       } catch (e) {
