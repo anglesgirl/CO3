@@ -276,17 +276,36 @@ func Start(listen, target, echB64, doh, ipList, cpArg string, insecure bool) err
 	}
 
 	custom := make([]string, 0)
+	seenIP := make(map[string]bool)
 	for _, ip := range parseIPList(ipList) {
 		if isCloudflareAS13335(ip) {
+			seenIP[ip] = true
 			custom = append(custom, ip)
 		}
+	}
+	// 自动把 DoH 端点的 IP 并入 ECH 握手候选(用户显式 IP 之后,不覆盖)。
+	// 关键洞察(2026-08-13 实测):DoH 端点(pieqllv9i7.cloudflare-gateway.com)
+	// 解析到 162.159.36.5/20,属 AS13335。部分区域(福建)封禁目标站点
+	// (archiveofourown.org)解析到的 104.18.x.x 等 CF 边缘 IP,但 DoH 端点 IP
+	// 可达(否则 DoH 连不上,YouTube 也打不开)。ECH 握手连任意可达的
+	// AS13335 边缘即可——DoH 端点 IP 天然满足,直接复用。
+	for _, ip := range resolveDoHHostIPs(doh) {
+		if seenIP[ip] || !isCloudflareAS13335(ip) {
+			continue
+		}
+		seenIP[ip] = true
+		custom = append(custom, ip)
 	}
 	mu.Lock()
 	customIPs = custom
 	fallbackECH = fallback
 	upstreamIPs = nil
 	mu.Unlock()
-	setDNSInfo("per-host DoH; ECH only for AS13335-qualified hosts")
+	if len(custom) > 0 {
+		setDNSInfo("per-host DoH; ECH only for AS13335-qualified hosts; %d preferred edge IP(s) incl. DoH endpoint", len(custom))
+	} else {
+		setDNSInfo("per-host DoH; ECH only for AS13335-qualified hosts")
+	}
 
 	// Remember the settings so every requested host can be resolved the same way.
 	hostsMu.Lock()
@@ -695,7 +714,7 @@ func newECHTransport(sni string, echList []byte, cachePath string, insecure bool
 func parseIPList(s string) []string {
 	var out []string
 	for _, f := range strings.FieldsFunc(s, func(r rune) bool {
-		return r == ',' || r == ' ' || r == '\n' || r == '\t' || r == ';'
+		return r == ',' || r == ' ' || r == '\n' || r == '	' || r == ';'
 	}) {
 		f = strings.TrimSpace(f)
 		if net.ParseIP(f) != nil {
@@ -703,6 +722,45 @@ func parseIPList(s string) []string {
 		}
 	}
 	return out
+}
+
+// resolveDoHHostIPs 解析 DoH 端点域名(如 pieqllv9i7.cloudflare-gateway.com)
+// 的 IP 列表,用于自动并入 ECH 握手候选。系统 DNS 解析失败时回退内置快照。
+// doh 参数可能是逗号分隔的多个端点,取第一个能解析的即可。
+func resolveDoHHostIPs(doh string) []string {
+	for _, part := range strings.Split(doh, ",") {
+		part = strings.TrimSpace(part)
+		u, err := url.Parse(part)
+		if err != nil || u.Hostname() == "" {
+			continue
+		}
+		host := u.Hostname()
+		var ips []string
+		if addrs, err := net.LookupHost(host); err == nil {
+			for _, a := range addrs {
+				if net.ParseIP(a) != nil {
+					ips = append(ips, a)
+				}
+			}
+		}
+		// 内置快照兜底(系统 DNS 被污染时仍能用)。
+		for _, b := range builtinDoHHostIPs {
+			found := false
+			for _, a := range ips {
+				if a == b {
+					found = true
+					break
+				}
+			}
+			if !found {
+				ips = append(ips, b)
+			}
+		}
+		if len(ips) > 0 {
+			return ips
+		}
+	}
+	return nil
 }
 
 // dialCandidates returns the addresses to try, in order:
@@ -1078,6 +1136,19 @@ func storePublicECHCache(path, host string, config []byte) {
 // 托管的 AS13335 目标(archiveofourown.org 即其中之一)。
 const cloudflareECHHost = "cloudflare-ech.com"
 
+// builtinCFECHConfigB64 是 cloudflare-ech.com 当前 HTTPS 记录的 ech= 参数快照,
+// 内置为最后兜底:部分区域(如福建)封禁 cloudflare-ech.com 的 IP 或干扰 DoH,
+// 导致公共 ECH 公钥拉不到、缓存填充不了。内置后即使 DoH 全挂,AS13335 主机
+// 仍能用这份公钥发起 ECH 握手;公钥轮换由服务器 retry_configs 兜底(握手被拒
+// 时自动用新公钥重试),内置值过期无害。2026-08-13 抓取自 cloudflare-ech.com。
+const builtinCFECHConfigB64 = "AEX+DQBBNAAgACCyup0GYiVj1Iph45mjgzNuuKu0qMra6LGPbZVfMTXgJwAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA="
+
+// builtinDoHHostIPs 是 Cloudflare Gateway DoH 端点域名当前解析的 IP 快照
+// (2026-08-13 实测 pieqllv9i7.cloudflare-gateway.com → 162.159.36.5/20)。
+// 属于 AS13335;部分区域(福建)封禁目标站点 CF 边缘 IP 时 DoH 端点 IP 仍可达。
+// 作为 DoH 端点 IP 自动并入 ECH 候选的兜底(系统 DNS 被污染时仍能用)。
+var builtinDoHHostIPs = []string{"162.159.36.5", "162.159.36.20"}
+
 // loadECHConfigWithFallbacks returns the ECHConfigList for an AS13335 host,
 // trying in order:
 //  1. the local 5h disk cache (learned from a previous fetch or retry_configs)
@@ -1122,6 +1193,15 @@ func loadECHConfigWithFallbacks(host, doh string) ([]byte, string) {
 		b := append([]byte(nil), fallbackECH...)
 		storePublicECHCache(cp, host, b)
 		return b, "operator fallback"
+	}
+
+	// 5. 内置 Cloudflare 公共公钥(最后兜底)。
+	// 部分区域封禁 cloudflare-ech.com 的 IP / 干扰 DoH,导致上面 1-4 全失败。
+	// 内置快照保证 AS13335 主机仍能发起 ECH 握手;公钥轮换由服务器
+	// retry_configs 兜底(握手被拒时自动更新),无需网络拉取也能自愈。
+	if b, err := base64.StdEncoding.DecodeString(builtinCFECHConfigB64); err == nil && len(b) > 0 {
+		storePublicECHCache(cp, host, b)
+		return b, "built-in cloudflare public key"
 	}
 	return nil, "no ECHConfigList available"
 }
