@@ -5,11 +5,20 @@ import WebView from 'react-native-webview';
 import { useTranslation } from 'react-i18next';
 import { getEchBase } from './echKy';
 
-const AO3_HOSTS = new Set(['archiveofourown.org', 'www.archiveofourown.org']);
+// 需要走本地 ECH 代理的域名：
+// - AO3 主域：被墙，必须走代理（fail-closed）
+// - challenges.cloudflare.com：未被墙但直连极慢（CF 国际线路绕路），
+//   走代理用 DoH 优选 IP + ECH 直连反而更快；且其验证回调若直连
+//   仍可能受 DNS 污染干扰，统一走代理最稳。
+const PROXIED_HOSTS = new Set([
+  'archiveofourown.org',
+  'www.archiveofourown.org',
+  'challenges.cloudflare.com',
+]);
 
 /**
- * 如果 ECH 代理可用，把 AO3 直链改写为本地代理 URL，
- * 这样 WebView 也不裸连 archiveofourown.org（否则被墙重置 -6）。
+ * 如果 ECH 代理可用，把需要走代理的域名改写为本地代理 URL，
+ * 这样 WebView 也不裸连目标域（AO3 被墙重置 -6，CF 直连极慢）。
  *
  * 2026-08-06 修正：AO3 域名在代理不可用时**直接抛错**（fail-closed），
  * 不再静默直连——国内用户没有系统 DoH 时直连必失败（DNS 污染），
@@ -20,8 +29,14 @@ async function rewriteForEch(url) {
   try {
     const base = await getEchBase();
     const u = new URL(url);
-    if (AO3_HOSTS.has(u.hostname)) {
+    if (PROXIED_HOSTS.has(u.hostname)) {
       if (!base) {
+        if (u.hostname === 'challenges.cloudflare.com') {
+          // CF 验证域直连虽慢但能通（未被墙），代理不可用时降级直连，
+          // 否则 challenge 窗口直接打不开，登录必死。
+          console.log(`[WV] ECH proxy unavailable, direct-loading ${u.hostname} (slow but not blocked)`);
+          return { uri: url, headers: undefined };
+        }
         console.log(`[WV] ECH proxy unavailable, refusing direct WebView load of ${u.hostname}`);
         throw new Error('ECH proxy unavailable; refusing direct WebView request');
       }
@@ -106,6 +121,7 @@ export const ACCEPTED_TOS_KEY = 'accepted_tos';
 function buildFetchRewriter(base, targetHost) {
   const hostA = JSON.stringify('archiveofourown.org');
   const hostW = JSON.stringify('www.archiveofourown.org');
+  const hostC = JSON.stringify('challenges.cloudflare.com');
   const baseJ = JSON.stringify(base);
   const targetJ = JSON.stringify(targetHost);
   return `(function(){
@@ -114,7 +130,7 @@ function buildFetchRewriter(base, targetHost) {
     function rewrite(url){
       try {
         var u = new URL(url);
-        if (u.protocol === 'https:' && (u.hostname === ${hostA} || u.hostname === ${hostW})) {
+        if (u.protocol === 'https:' && (u.hostname === ${hostA} || u.hostname === ${hostW} || u.hostname === ${hostC})) {
           return ${baseJ} + u.pathname + u.search;
         }
       } catch(e) {}
@@ -305,23 +321,23 @@ export default function WebviewFetcher() {
     try {
       const u = new URL(url);
 
-      // Cloudflare 验证回调。分两类处理：
-      // 1) challenges.cloudflare.com —— CF 自己的域（未被墙），必须直连，
-      //    走代理反而会让 CF 验证签名/回调失效。
-      // 2) archiveofourown.org/cdn-cgi/... —— 这仍是 AO3 域下的路径，
-      //    国内直连会被墙重置，必须走本地 ECH 代理改写（和普通 AO3
-      //    导航一样），否则 challenge 验证回调永远发不出去。
-      if (u.hostname === 'challenges.cloudflare.com') {
-        console.log(`[WV] allow CF challenge nav: ${url}`);
-        return true;
-      }
-      if (AO3_HOSTS.has(u.hostname) && u.pathname.startsWith('/cdn-cgi/')) {
-        console.log(`[WV] CF callback on AO3 domain, rewriting via proxy: ${url}`);
+      // Cloudflare 验证回调。全部走本地 ECH 代理改写：
+      // - archiveofourown.org/cdn-cgi/...：AO3 域下路径，直连被墙。
+      // - challenges.cloudflare.com：未被墙但直连极慢（国际线路绕路），
+      //   走代理 + DoH 优选 IP 更快更稳；代理不可用时 rewriteForEch
+      //   会降级直连（CF 域能通，只是慢）。
+      if (PROXIED_HOSTS.has(u.hostname) && (u.hostname === 'challenges.cloudflare.com' || u.pathname.startsWith('/cdn-cgi/'))) {
+        console.log(`[WV] CF callback via proxy: ${url}`);
         rewriteForEch(url)
           .then(({ uri, headers }) => {
             if (headers) {
               console.log(`[WV] reload CF callback via proxy: ${uri}`);
-              setSource({ uri, headers });
+              const base = uri.slice(0, uri.indexOf('/', uri.indexOf('://') + 3));
+              setSource({
+                uri,
+                headers,
+                injectedJavaScriptBeforeContentLoaded: buildFetchRewriter(base, headers['X-Ech-Target']) || undefined,
+              });
             } else {
               console.log(`[WV] CF callback not proxiable, staying: ${url}`);
             }
@@ -333,26 +349,28 @@ export default function WebviewFetcher() {
       // Cloudflare 验证通过后常以绝对地址重定向回 https://archiveofourown.org。
       // 这种导航必须改写为本地 ECH 代理地址，否则直连暴露 SNI 会被墙重置。
       // 代理地址本身（http://127.0.0.1:<port>/...）不在此列，正常放行。
-      if (AO3_HOSTS.has(u.hostname) && u.protocol === 'https:') {
-        console.log(`[WV] intercept AO3 nav → rewrite ${url}`);
-        rewriteForEch(url)
-          .then(({ uri, headers }) => {
-            if (headers) {
-              console.log(`[WV] reload via proxy: ${uri}`);
-              // 同样注入 fetch/XHR 改写（CF 验证通过后重定向回 AO3 页面时，
-              // 页面里后续的子资源/回调仍需要走代理）。
-              const base = uri.slice(0, uri.indexOf('/', uri.indexOf('://') + 3));
-              setSource({
-                uri,
-                headers,
-                injectedJavaScriptBeforeContentLoaded: buildFetchRewriter(base, headers['X-Ech-Target']) || undefined,
-              });
-            } else {
-              console.log(`[WV] target not proxiable, staying: ${url}`);
-            }
-          })
-          .catch((e) => console.log(`[WV] rewrite failed: ${e?.message ?? e}`));
-        return false; // 阻止当前导航，改写后重新加载
+      if (u.hostname === 'archiveofourown.org' || u.hostname === 'www.archiveofourown.org') {
+        if (u.protocol === 'https:') {
+          console.log(`[WV] intercept AO3 nav → rewrite ${url}`);
+          rewriteForEch(url)
+            .then(({ uri, headers }) => {
+              if (headers) {
+                console.log(`[WV] reload via proxy: ${uri}`);
+                // 同样注入 fetch/XHR 改写（CF 验证通过后重定向回 AO3 页面时，
+                // 页面里后续的子资源/回调仍需要走代理）。
+                const base = uri.slice(0, uri.indexOf('/', uri.indexOf('://') + 3));
+                setSource({
+                  uri,
+                  headers,
+                  injectedJavaScriptBeforeContentLoaded: buildFetchRewriter(base, headers['X-Ech-Target']) || undefined,
+                });
+              } else {
+                console.log(`[WV] target not proxiable, staying: ${url}`);
+              }
+            })
+            .catch((e) => console.log(`[WV] rewrite failed: ${e?.message ?? e}`));
+          return false; // 阻止当前导航，改写后重新加载
+        }
       }
     } catch {}
     console.log(`[WV] nav: ${url}`);
