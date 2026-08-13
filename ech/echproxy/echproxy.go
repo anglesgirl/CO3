@@ -797,6 +797,44 @@ type dohResp struct {
 	} `json:"Answer"`
 }
 
+// dohDialContext returns a DialContext that connects to the DoH endpoint via
+// the user-supplied preferred IPs (SNI/domain stays the endpoint's hostname).
+// Rationale: the DoH endpoint domain (e.g. cloudflare-gateway.com) can itself
+// be DNS-poisoned / IP-blocked in some regions. Without this, dohQuery would
+// fail before it ever gets to query cloudflare-ech.com's HTTPS ech= record,
+// so the public ECH config could never be fetched or cached. The DoH endpoint
+// is a Cloudflare domain, so the same preferred CF edge IPs apply.
+// Returns nil when no preferred IPs are configured (use system DNS).
+func dohDialContext() func(ctx context.Context, network, addr string) (net.Conn, error) {
+	mu.Lock()
+	custom := append([]string(nil), customIPs...)
+	mu.Unlock()
+	if len(custom) == 0 {
+		return nil
+	}
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		_, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			port = "443"
+		}
+		d := &net.Dialer{Timeout: dohTimeout}
+		var lastErr error
+		for _, ip := range custom {
+			conn, err := d.DialContext(ctx, network, net.JoinHostPort(ip, port))
+			if err == nil {
+				return conn, nil
+			}
+			lastErr = err
+		}
+		if lastErr != nil {
+			// 优选 IP 全部失败时回退系统解析,避免 DoH 直接断网。
+			setDNSInfo("DoH preferred IPs failed (%v), falling back to system DNS", lastErr)
+			return d.DialContext(ctx, network, addr)
+		}
+		return nil, lastErr
+	}
+}
+
 // dohQuery performs a DoH JSON query and returns the answer records.
 func dohQuery(endpoint, name, qtype string) (*dohResp, error) {
 	var lastErr error
@@ -820,6 +858,11 @@ func dohQuery(endpoint, name, qtype string) (*dohResp, error) {
 		req.Header.Set("accept", "application/dns-json")
 		transport := &http.Transport{}
 		if pool := loadAndroidCertPool(); pool != nil { transport.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12} }
+		// 用优选 IP 直连 DoH 端点(SNI 保持端点域名),绕开 DoH 端点域名被
+		// 污染/封 IP 的问题;未配置优选 IP 时走系统 DNS(原行为)。
+		if dc := dohDialContext(); dc != nil {
+			transport.DialContext = dc
+		}
 		resp, err := (&http.Client{Timeout: dohTimeout, Transport: transport}).Do(req)
 		if err != nil {
 			lastErr = err
