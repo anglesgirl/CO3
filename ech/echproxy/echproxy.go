@@ -105,15 +105,21 @@ func newCookieJar() *cookiejar.Jar {
 // 2026-08-13 二次加强:http.Client 把响应 Set-Cookie 存进 jar 时,host-only
 // cookie 的域 = 请求 URL 的 host。代理转发一律用 archiveofourown.org,
 // 但为绝对稳妥,删除标记覆盖 http/https × 4 个 host(含 127.0.0.1/localhost)
-// × host-only/domain 两种形式,穷尽所有可能存法。cf_clearance 只存在于
-// archiveofourown.org 域,其余域的删除不会误伤它。
+// × host-only/domain 两种形式,穷尽所有可能存法。
+//
+// 2026-08-13 三次加强:cf_clearance 也必须删。实测发现 ky.get 首次命中
+// CF challenge 时,CF 返回 challenge 页会 Set-Cookie 一个**未完成**的
+// cf_clearance;WebView 再加载时带着它 → CF 判定"已给过验证"直接放行 →
+// 返回登录表单而非验证界面 → 验证窗口永不弹出,POST 却仍被拦 → 死循环。
+// 删掉 cf_clearance 让 WebView 从零开始,CF 才会真正弹验证;完成后新的
+// cf_clearance 写入 jar 才对后续 POST 有效。
 func ClearSessionCookies() {
 	cookieJarMu.Lock()
 	defer cookieJarMu.Unlock()
 	if cookieJar == nil {
 		return
 	}
-	names := []string{"_otwarchive_session", "user_credentials"}
+	names := []string{"_otwarchive_session", "user_credentials", "cf_clearance"}
 	hosts := []string{"archiveofourown.org", "www.archiveofourown.org", "127.0.0.1", "localhost"}
 	schemes := []string{"https", "http"}
 	for _, scheme := range schemes {
