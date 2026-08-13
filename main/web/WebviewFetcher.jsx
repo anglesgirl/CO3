@@ -66,9 +66,9 @@ function enqueue(item) {
   triggerNext?.();
 }
 
-export function fetchViaWebView(url, { cfWarning = false, requireLoginForm = false, preVerify = false, interactiveLogin = false, direct = false, html = null, baseUrl = null } = {}) {
+export function fetchViaWebView(url, { cfWarning = false, requireLoginForm = false, preVerify = false, interactiveLogin = false, direct = false, html = null, baseUrl = null, fields = null, autoClose = false } = {}) {
   return new Promise((resolve, reject) =>
-    enqueue({ url, resolve, reject, cfWarning, requireLoginForm, preVerify, interactiveLogin, direct, html, baseUrl }),
+    enqueue({ url, resolve, reject, cfWarning, requireLoginForm, preVerify, interactiveLogin, direct, html, baseUrl, fields, autoClose }),
   );
 }
 
@@ -123,6 +123,49 @@ function buildAntiPhishingBypass() {
     // 兜底轮询：AO3 的 JS 可能在事件里延迟插入警告/禁用
     var t = setInterval(function() { unblock(); }, 400);
     setTimeout(function() { clearInterval(t); }, 30000);
+  })();
+  true;`;
+}
+
+// 通用自动填表+提交（interactiveLogin + fields 时注入）：App 已收集的
+// 表单数据（登录账号密码/重置邮箱/注册信息）自动填进官方表单并提交，
+// 用户无需手动输入，最多完成 CF 验证（如有）。支持 text/checkbox/radio/
+// select/textarea。密码等敏感值只在内存（currentRef）传递，绝不打印。
+function buildFormFiller(fields) {
+  const fieldJson = JSON.stringify(fields || []);
+  return `(function(){
+    if (window.__echFormFilled) return;
+    var fields = ${fieldJson};
+    var any = false;
+    var names = [];
+    fields.forEach(function(f) {
+      names.push(f.name);
+      var el = document.querySelector('input[name="' + f.name + '"], select[name="' + f.name + '"], textarea[name="' + f.name + '"]');
+      if (!el) return;
+      any = true;
+      var type = (el.type || '').toLowerCase();
+      if (type === 'checkbox' || type === 'radio') {
+        el.checked = (f.value === '1' || f.value === true || f.value === 'true');
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      } else {
+        var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+        setter.call(el, String(f.value));
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+    if (!any) return; // 不是目标表单页(如 CF 验证页),等用户手动
+    window.__echFormFilled = true;
+    setTimeout(function() {
+      var form = null;
+      var forms = document.querySelectorAll('form');
+      for (var i = 0; i < forms.length; i++) {
+        var hit = names.some(function(n) { return forms[i].querySelector('[name="' + n + '"]'); });
+        if (hit) { form = forms[i]; break; }
+      }
+      if (form) form.submit();
+    }, 150);
   })();
   true;`;
 }
@@ -250,6 +293,13 @@ export default function WebviewFetcher() {
     setVisible(false);
     setWebViewKey((k) => k + 1); // 强制重建 WebView 实例,清 cookie 残留
     const wvStart = Date.now();
+    // 记录起始路径: 官方表单页(密码重置/注册/激活)提交成功后 Rails 会
+    // 302 离开该路径, 导航判定据此自动关窗。
+    try {
+      currentRef.current.startPath = new URL(currentRef.current.url).pathname;
+    } catch {
+      currentRef.current.startPath = '/users/login';
+    }
     // 交互式登录：用户在 WebView 里填表提交完成登录（CF 验证也在窗口内）。
     // 打开前 jar 已被调用方清空，登录成功后 AO3 的 Set-Cookie 会经代理
     // 转发写回 jar → 轮询检测到 _otwarchive_session = 登录成功。
@@ -400,7 +450,10 @@ export default function WebviewFetcher() {
     cleanupLoginTimers();
     // direct 模式(官方域名直连)不轮询 jar——cookie 在 WebView store 不在
     // 代理 jar，成功由导航检测 + CookieManager 读取。仅代理模式轮询。
-    if (!currentRef.current?.direct) {
+    // jar 轮询只对登录流程有意义(判定 user_credentials 出现)；其他官方
+    // 表单页(密码重置/注册/激活)没有该 cookie,成功判定靠导航离开表单页。
+    const isLoginFlow = (currentRef.current?.url || '').includes('/users/login');
+    if (!currentRef.current?.direct && isLoginFlow) {
       // jar 轮询兜底：导航检测漏了也能靠 cookie 判定登录成功。
       // 判定条件 = user_credentials 出现（真正登录成功）；匿名 session
       // 不算（见 isLoggedInJar 注释）。
@@ -457,6 +510,18 @@ export default function WebviewFetcher() {
     // 失败的根因之一)。成功判定靠导航 + jar 轮询,与页面内容无关。
     if (!currentRef.current?.interactiveLogin) {
       webViewRef.current?.injectJavaScript(CF_CHALLENGE_DETECTION);
+    }
+    // 自动填表：App 已收集的表单数据(登录账号密码/重置邮箱/注册信息)
+    // → 填进官方表单并提交, 用户无需在弹窗里重输(2026-08-13 用户要求)。
+    // load 事件触发时 DOM 已就绪;若页面是 CF 验证页则选择器为空,跳过。
+    const auto = currentRef.current;
+    if (auto?.interactiveLogin && auto?.fields?.length) {
+      setTimeout(() => {
+        // 仅在窗口仍是本次任务时注入(防 settle 后注入到新任务的 WebView)
+        if (currentRef.current === auto && webViewRef.current) {
+          webViewRef.current.injectJavaScript(buildFormFiller(auto.fields));
+        }
+      }, 250);
     }
   };
 
@@ -571,11 +636,13 @@ export default function WebviewFetcher() {
         return false;
       }
 
-      // 交互式登录：AO3 域导航离开 /users/login（且非 CF 验证路径）→
-      // 登录成功。AO3 登录成功必然 302 到 /users/{username} 或首页；
-      // 密码错误则 302 回 /users/login（继续等待用户重试）。此刻
-      // Set-Cookie 已随代理转发写入 jar，读 jar 拿 session 结束窗口。
-      // direct 模式下 cookie 在 WebView store，成功由 CookieManager 读取。
+      // 交互式登录/官方表单页：AO3 域导航离开起始表单路径（且非 CF 验证
+      // 路径）→ 提交成功。登录: AO3 登录成功必然 302 到 /users/{username}
+      // 或首页,密码错误则 302 回 /users/login（继续等待用户重试）。其他
+      // 官方表单(密码重置/注册/激活): 成功 302 离开表单路径,失败(校验
+      // 错误/无效链接)渲染同页不导航。此刻 Set-Cookie 已随代理转发写入
+      // jar(登录),读 jar 拿 session 结束窗口。direct 模式 cookie 在
+      // WebView store,成功由 CookieManager 读取。
       if (
         currentRef.current?.interactiveLogin &&
         (u.hostname === 'archiveofourown.org' || u.hostname === 'www.archiveofourown.org') &&
@@ -583,17 +650,27 @@ export default function WebviewFetcher() {
       ) {
         const p = u.pathname;
         if (!p.startsWith('/users/login') && !p.startsWith('/users/session') && !p.startsWith('/cdn-cgi/')) {
-          console.log(`[WV] interactive login: navigated to ${p} — success`);
-          if (currentRef.current?.direct) {
-            // 官方域名直连：登录 cookie 在 WebView store，读出来返回。
-            finishDirectLogin();
-          } else {
-            getJarInfo()
-              .then((txt) => { lastJarInfoRef.current = txt ?? ''; })
-              .catch(() => {})
-              .finally(() => finishInteractiveLogin('nav'));
+          const item = currentRef.current;
+          const startPath = item?.startPath || '/users/login';
+          const isLoginFlow = startPath === '/users/login';
+          // 登录流程: 离开 /users/login 即成功; 其他表单页: 离开起始路径即成功
+          const leftForm = isLoginFlow || p !== startPath;
+          if (leftForm) {
+            console.log(`[WV] interactive form: navigated to ${p} — success`);
+            if (item?.direct) {
+              // 官方域名直连：登录 cookie 在 WebView store，读出来返回。
+              finishDirectLogin();
+            } else if (isLoginFlow) {
+              getJarInfo()
+                .then((txt) => { lastJarInfoRef.current = txt ?? ''; })
+                .catch(() => {})
+                .finally(() => finishInteractiveLogin('nav'));
+            } else {
+              // 非登录官方表单页(密码重置/注册/激活): 提交成功,直接结束。
+              settle({ ok: true, navigatedTo: p }, null);
+            }
+            return false; // 阻止导航：已成功，无需再加载页面
           }
-          return false; // 阻止导航：已登录，无需再加载页面
         }
       }
 

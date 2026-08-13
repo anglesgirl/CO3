@@ -1,13 +1,14 @@
-// accountRequests.js — native (in-app) versions of the two AO3 account flows
-// that used to bounce the user out to a browser:
+// accountRequests.js — AO3 account flows. 2026-08-13 起, 涉及账号验证的
+// 流程(密码重置/注册/激活)统一改为在 WebView 打开官方页面完成 —— 客户端
+// 不再改写这些表单(原生 fetch POST 在 GFW 内必被 CF challenge, 且官方
+// 服务端做域名检查)。WebView 是真浏览器, CF 验证/表单交互/反钓鱼检查
+// 全部按官方流程走; 提交成功(302 离开表单页)自动关窗。
 //
-//   * password reset   GET /users/password/new  -> POST /users/password
-//   * invitation       GET /invite_requests -> POST /invite_requests
-//
-// Both requests go through the local ECH proxy, so they work on networks where
-// AO3 is blocked (an external browser would simply fail there).
+// 邀请申请(requestInvitation)保留原生实现: 公开表单无需账号验证,
+// 用户实测提交成功(2026-08-13)。
 
 import ky, { echUrl } from '../echKy';
+import { fetchViaWebView } from '../WebviewFetcher';
 import { mergeQueueInfo, parseInvitationQueue } from './invitationQueue';
 
 const BASE = 'https://archiveofourown.org';
@@ -161,45 +162,32 @@ export async function getInvitationQueueInfo(email) {
 }
 
 /**
+ * 通用: 在 WebView 打开官方页面完成账号操作(客户端不再改写这些流程)。
+ * `fields` 存在时自动填入官方表单并提交(如忘记密码的邮箱); 否则直接
+ * 打开页面由用户操作(如激活链接)。提交成功 = 302 离开表单页, 自动关窗。
+ * 失败(校验错误/无效链接)渲染同页不导航, 用户看到错误可重试或关闭。
+ */
+async function completeInOfficialPage(url, fields = null) {
+  const result = await fetchViaWebView(url, {
+    interactiveLogin: true,
+    fields,
+  });
+  if (!result) throw new Error('The official page was not completed.');
+  return result;
+}
+
+/**
  * Requests a password-reset email. `login` may be a username or an email.
- * Resolves with a message to show the user; rejects with AO3's error text.
+ * Opens AO3's official reset page in a WebView and auto-fills the login
+ * field. Resolves with a message to show the user.
  */
 export async function requestPasswordReset(login) {
   if (!login || !login.trim()) throw new Error('Enter your username or email.');
-
-  // Replay AO3's own form (hidden fields included) rather than guessing names.
-  const html0 = await fetchWithWarmup('/users/password/new');
-  const { fields, action } = parseFormFields(html0, 'new_user');
-  if (!fields.authenticity_token) {
-    fields.authenticity_token = extractAuthenticityToken(html0);
-  }
-  const nLogin = findField(fields, 'user[login]', 'user[email]', 'login', 'email');
-  if (!nLogin) {
-    throw new Error('Could not read AO3\'s reset form (the site may have changed).');
-  }
-  const body = { ...fields, [nLogin]: login.trim(), commit: 'Reset Password' };
-
-  const path = action.startsWith('http')
-    ? action.replace(BASE, '')
-    : action || '/users/password';
-  const { res, html } = await postForm(path, body, BASE + '/users/password/new');
-
-  const outcome = readOutcome(html);
-  if (outcome) {
-    if (!outcome.ok) throw new Error(outcome.message);
-    return outcome.message;
-  }
-  // If AO3 handed the form back, the submission did NOT go through — reporting
-  // success here would leave the user waiting for an email that never comes.
-  if (/name="user\[login\]"|id="new_user"/i.test(html)) {
-    throw new Error(
-      'AO3 did not accept the request. Check the username/email and try again.',
-    );
-  }
-  if (res.ok || res.redirected) {
-    return 'If that account exists, a reset email is on its way. Check your spam folder.';
-  }
-  throw new Error(`Request failed (HTTP ${res.status}).`);
+  await completeInOfficialPage(
+    'https://archiveofourown.org/users/password/new',
+    [{ name: 'user[login]', value: login.trim() }],
+  );
+  return 'If that account exists, a reset email is on its way. Check your spam folder.';
 }
 
 // --- registration (invitation -> signup -> activation) --------------------
@@ -315,86 +303,38 @@ export async function getSignupForm(token) {
 }
 
 /**
- * Creates the AO3 account. Returns a message for the user (AO3 then emails an
- * activation link, which activateAccount() can finish).
+ * Opens AO3's official sign-up page in a WebView. Accepts the full
+ * invitation URL from AO3's email (preferred) or a bare token. The user
+ * completes the sign-up form on the official page — age/terms checkboxes
+ * and password rules are validated there, no client-side replay.
  */
-export async function registerAccount({
-  token,
-  username,
-  email,
-  password,
-  passwordConfirm,
-}) {
-  if (!username?.trim()) throw new Error('Choose a username.');
-  if (!email?.trim()) throw new Error('Enter your email address.');
-  if (!password) throw new Error('Choose a password.');
-  if (password !== passwordConfirm) throw new Error('The passwords do not match.');
-
-  const { fields, action, referer } = await getSignupForm(token);
-
-  const nLogin = findField(fields, 'user[login]', 'login');
-  const nEmail = findField(fields, 'user[email]', 'email');
-  const nPass = findField(fields, 'user[password]', 'password');
-  const nConfirm = findField(fields, 'user[password_confirmation]', 'password_confirmation');
-  const nAge = findField(fields, 'user[age_over_13]', 'age_over_13');
-  const nTos = findField(fields, 'user[terms_of_service]', 'terms_of_service');
-
-  const body = { ...fields };
-  if (nLogin) body[nLogin] = username.trim();
-  if (nEmail) body[nEmail] = email.trim();
-  if (nPass) body[nPass] = password;
-  if (nConfirm) body[nConfirm] = passwordConfirm;
-  if (nAge) body[nAge] = '1';
-  if (nTos) body[nTos] = '1';
-  if (!body.invitation_token) body.invitation_token = token;
-  body.commit = 'Create Account';
-
-  const path = action.startsWith('http')
-    ? action.replace(BASE, '')
-    : action || '/users';
-  const { res, html } = await postForm(path, body, referer);
-
-  const outcome = readOutcome(html);
-  if (outcome) {
-    if (!outcome.ok) throw new Error(outcome.message);
-    return outcome.message;
+export async function registerAccount(input) {
+  const s = String(input || '').trim();
+  if (!s) throw new Error('Paste the invitation link from your email.');
+  let url;
+  if (/^[A-Za-z0-9_-]+$/.test(s)) {
+    url = 'https://archiveofourown.org/signup/' + encodeURIComponent(s);
+  } else {
+    url = s.startsWith('http') ? s : 'https://archiveofourown.org' + (s.startsWith('/') ? s : '/' + s);
   }
-  // Rails renders the form again (with an error list) when validation fails.
-  const errList = html.match(
-    /<(?:div|ul)[^>]*(?:id|class)="[^"]*error[^"]*"[^>]*>([\s\S]*?)<\/(?:div|ul)>/i,
-  );
-  if (errList) {
-    const msg = stripTags(errList[1]);
-    if (msg) throw new Error(msg);
-  }
-  if (res.ok || res.redirected) {
-    return 'Account created. Check your email for the activation link.';
-  }
-  throw new Error(`Sign-up failed (HTTP ${res.status}).`);
+  await completeInOfficialPage(url);
+  return 'Account created. Check your email for the activation link.';
 }
 
 /**
- * Finishes registration by following the activation link from AO3's email.
- * Accepts the full URL (or just its path).
+ * Finishes registration by opening the activation link from AO3's email
+ * in a WebView. Accepts the full URL (or just its path).
  */
 export async function activateAccount(input) {
   const s = String(input || '').trim();
   if (!s) throw new Error('Paste the activation link from your email.');
-
-  let path;
-  try {
-    path = s.startsWith('http') ? new URL(s).pathname + new URL(s).search : s;
-  } catch {
-    throw new Error('That does not look like an activation link.');
+  let url;
+  if (s.startsWith('http')) {
+    url = s;
+  } else {
+    url = 'https://archiveofourown.org' + (s.startsWith('/') ? s : '/' + s);
   }
-  if (!path.startsWith('/')) path = '/' + path;
-
-  const html = await ky.get(BASE + path, { headers: BROWSER_HEADERS }).text();
-  const outcome = readOutcome(html);
-  if (outcome) {
-    if (!outcome.ok) throw new Error(outcome.message);
-    return outcome.message;
-  }
+  await completeInOfficialPage(url);
   return 'Activation link opened. Try logging in now.';
 }
 

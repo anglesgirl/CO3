@@ -13,7 +13,6 @@ import { useTranslation } from 'react-i18next';
 import { userErrorMessage } from '../../utils/userError';
 import {
   activateAccount,
-  extractInvitationToken,
   getInvitationQueueInfo,
   registerAccount,
   requestInvitation,
@@ -43,11 +42,6 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
 
   const [email, setEmail] = useState('');
   const [inviteLink, setInviteLink] = useState('');
-  const [token, setToken] = useState('');
-  const [username, setUsername] = useState('');
-  const [regEmail, setRegEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [passwordConfirm, setPasswordConfirm] = useState('');
   const [activationLink, setActivationLink] = useState('');
 
   useEffect(() => {
@@ -255,8 +249,7 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
       <View style={styles.steps}>
         {stepLabel(1, t('account_step_request'), step === 'request')}
         {stepLabel(2, t('account_step_paste'), step === 'paste')}
-        {stepLabel(3, t('account_step_register'), step === 'form')}
-        {stepLabel(4, t('account_step_activate'), step === 'activate')}
+        {stepLabel(3, t('account_step_activate'), step === 'activate')}
       </View>
 
       {renderQueueInfo()}
@@ -294,6 +287,9 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
 
       {step === 'paste' && (
         <>
+          <Text style={[styles.body, { color: theme.secondaryTextColor }]}>
+            {t('account_register_hint')}
+          </Text>
           {input(
             inviteLink,
             setInviteLink,
@@ -301,48 +297,7 @@ export default function AccountSetupModal({ visible, mode, theme, onClose }) {
           )}
           {primary(t('general_ok'), () =>
             run(
-              async () => {
-                const tk = extractInvitationToken(inviteLink);
-                setToken(tk);
-                return t('account_invite_link_ok');
-              },
-              () => setStep('form'),
-            ),
-          )}
-        </>
-      )}
-
-      {step === 'form' && (
-        <>
-          <Text style={[styles.body, { color: theme.secondaryTextColor }]}>
-            {t('account_register_hint')}
-          </Text>
-          {input(username, setUsername, t('screen_account_username'))}
-          {input(regEmail, setRegEmail, 'you@example.com', {
-            keyboardType: 'email-address',
-          })}
-          {input(password, setPassword, t('screen_account_password'), {
-            secureTextEntry: true,
-          })}
-          {input(
-            passwordConfirm,
-            setPasswordConfirm,
-            t('account_password_confirm'),
-            { secureTextEntry: true },
-          )}
-          <Text style={[styles.hint, { color: theme.secondaryTextColor }]}>
-            {t('account_tos_notice')}
-          </Text>
-          {primary(t('account_create_account'), () =>
-            run(
-              () =>
-                registerAccount({
-                  token,
-                  username,
-                  email: regEmail,
-                  password,
-                  passwordConfirm,
-                }),
+              () => registerAccount(inviteLink),
               () => setStep('activate'),
             ),
           )}

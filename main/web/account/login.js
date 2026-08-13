@@ -151,6 +151,12 @@ export default async function login(username, password) {
       // 来源必须与直连官方一致——这是 auth_error 的根因修复。
       const result = await fetchViaWebView('https://archiveofourown.org/users/login', {
         interactiveLogin: true,
+        // 自动填表: App 登录框的账号密码填进官方表单并自动提交,
+        // 用户无需在弹窗里重输, 最多完成 CF 验证(如有)。
+        fields: [
+          { name: 'user[login]', value: username },
+          { name: 'user[password]', value: password },
+        ],
       });
       // 用户在窗口里完成登录，session 从代理 jar 读取。
       const session = result?.session;
