@@ -411,8 +411,15 @@ export default function WebviewFetcher() {
             onShouldStartLoadWithRequest={onShouldStartLoadWithRequest}
             javaScriptEnabled
             domStorageEnabled
-            sharedCookiesEnabled
-            cacheEnabled
+            // 无痕模式：验证窗口必须从零 cookie 开始，否则 WebView 自带的
+            // 残留会话 cookie(按 127.0.0.1 域存储)会让 AO3 判定已登录并
+            // 302 到 /users/xxx，CF 验证窗口永不弹出（日志实证：
+            // "[WV] nav: .../users/anglesya" + "/lost_cookie"）。
+            // 注意：不能开 sharedCookiesEnabled —— 那会把 RN 层 cookie
+            // 带进验证窗口，重新引入同样的问题。cf_clearance 由代理侧
+            // cookiejar 捕获（请求走代理转发），不依赖 WebView cookie。
+            incognito
+            cacheEnabled={false}
             startInLoadingState={visible}
           />
         </View>
