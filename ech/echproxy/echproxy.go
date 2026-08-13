@@ -529,12 +529,57 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if resp.Uncompressed && (k == "Content-Encoding" || k == "Content-Length") {
 			continue
 		}
+		if k == "Set-Cookie" {
+			// WebView 页面 origin 是 http://127.0.0.1:<port>(代理地址),而
+			// AO3/CF 的 Set-Cookie 带 Domain=archiveofourown.org + Secure
+			// (+SameSite=None 必须配 Secure)→ 浏览器按跨域拒收 / Secure
+			// cookie 不在 http 页面发送 → cf_clearance/session 进不了
+			// WebView → 登录 POST 无验证凭据 → AO3 302 auth_error(2026-08-13
+			// playwright 代理实测)。改写: 去掉 Domain(host-only 按 127.0.0.1
+			// 存) + 去掉 Secure + SameSite=None→Lax。Go jar 不受影响: jar 在
+			// client.Do 内部已按原始 Set-Cookie 存好(archiveofourown.org 域)。
+			for _, v := range vv {
+				w.Header().Add(k, rewriteCookieForWebView(v))
+			}
+			continue
+		}
 		for _, v := range vv {
 			w.Header().Add(k, v)
 		}
 	}
+	// AO3 前端反钓鱼 JS 检查 location.hostname(代理下是 127.0.0.1)会插入
+	// proxy-notice 警告横幅。注入官方代理后门 cookie proxy_notice=0:
+	// 前端检测到该 cookie 直接放行(playwright 实测: 有 cookie 无警告、
+	// 表单不禁用)。host-only 无 Domain → 按 127.0.0.1 域存,WebView 可收。
+	// 仅当上游响应没带该 cookie 时注入,避免覆盖用户已有值。
+	if !cookieContains(w.Header().Values("Set-Cookie"), "proxy_notice") {
+		w.Header().Add("Set-Cookie", "proxy_notice=0; Path=/")
+	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+func cookieContains(cookies []string, name string) bool {
+	for _, c := range cookies {
+		if strings.HasPrefix(strings.TrimSpace(c), name+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+// rewriteCookieForWebView 把上游 Set-Cookie 改写成 WebView(127.0.0.1 页面)
+// 能收能发的形式: 去掉 Domain(host-only,按页面域 127.0.0.1 存)、去掉
+// Secure、SameSite=None→Lax(SameSite=None 强制要求 Secure,不改成 http
+// 页面会拒收)。值/Expires/Max-Age/Path/HttpOnly 保留。
+func rewriteCookieForWebView(sc string) string {
+	reDomain := regexp.MustCompile(`(?i);\s*Domain=[^;]*`)
+	reSecure := regexp.MustCompile(`(?i);\s*Secure\b`)
+	reSameSite := regexp.MustCompile(`(?i);\s*SameSite=None`)
+	sc = reDomain.ReplaceAllString(sc, "")
+	sc = reSecure.ReplaceAllString(sc, "")
+	sc = reSameSite.ReplaceAllString(sc, "; SameSite=Lax")
+	return sc
 }
 
 // isTargetHost accepts DNS host names only. The header is intentionally not a
