@@ -350,7 +350,18 @@ export async function clearSessionCookies() {
   const mod = NativeModules.EchProxy;
   if (mod && typeof mod.clearSessionCookies === 'function') {
     try {
+      // 诊断:打印清前 jar 内容,确认 session 是否真的存在/删得掉。
+      if (typeof mod.jarInfo === 'function') {
+        try {
+          console.log(`[ECH] jar BEFORE clearSessionCookies:\n${await mod.jarInfo()}`);
+        } catch (e) {}
+      }
       await mod.clearSessionCookies();
+      if (typeof mod.jarInfo === 'function') {
+        try {
+          console.log(`[ECH] jar AFTER clearSessionCookies:\n${await mod.jarInfo()}`);
+        } catch (e) {}
+      }
       return;
     } catch (e) {
       console.warn('[ECH] native clearSessionCookies failed:', e?.message ?? e);

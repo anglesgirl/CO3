@@ -83,6 +83,20 @@ class EchProxyModule(private val reactContext: ReactApplicationContext) :
     }
 
     /**
+     * 返回代理 cookie jar 的内容摘要(诊断用)。
+     */
+    @ReactMethod
+    fun jarInfo(promise: Promise) {
+        io.execute {
+            try {
+                promise.resolve(Echproxy.jarInfo())
+            } catch (e: Throwable) {
+                promise.reject("ECH_JARINFO_FAILED", e.message, e)
+            }
+        }
+    }
+
+    /**
      * Looks up the TXT records of [name] over [doh] and resolves with their
      * contents (one record per line). Used to pull remote DoH/IP settings.
      */

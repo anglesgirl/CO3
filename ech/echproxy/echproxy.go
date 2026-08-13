@@ -101,6 +101,12 @@ func newCookieJar() *cookiejar.Jar {
 // host-only 删除 cookie(无 Domain 属性)匹配不上,删不掉,导致 AO3 一直
 // 判定"已登录"302 到 /users/xxx。因此对每个域名同时用 host-only 和
 // domain(带前导点)两种形式发删除标记。
+//
+// 2026-08-13 二次加强:http.Client 把响应 Set-Cookie 存进 jar 时,host-only
+// cookie 的域 = 请求 URL 的 host。代理转发一律用 archiveofourown.org,
+// 但为绝对稳妥,删除标记覆盖 http/https × 4 个 host(含 127.0.0.1/localhost)
+// × host-only/domain 两种形式,穷尽所有可能存法。cf_clearance 只存在于
+// archiveofourown.org 域,其余域的删除不会误伤它。
 func ClearSessionCookies() {
 	cookieJarMu.Lock()
 	defer cookieJarMu.Unlock()
@@ -108,18 +114,52 @@ func ClearSessionCookies() {
 		return
 	}
 	names := []string{"_otwarchive_session", "user_credentials"}
-	hosts := []string{"archiveofourown.org", "www.archiveofourown.org"}
-	for _, host := range hosts {
-		u := &url.URL{Scheme: "https", Host: host}
-		// host-only 形式
-		for _, n := range names {
-			cookieJar.SetCookies(u, []*http.Cookie{{Name: n, MaxAge: -1}})
-		}
-		// domain 形式(带前导点,匹配 .archiveofourown.org 域 cookie)
-		for _, n := range names {
-			cookieJar.SetCookies(u, []*http.Cookie{{Name: n, MaxAge: -1, Domain: "." + host}})
+	hosts := []string{"archiveofourown.org", "www.archiveofourown.org", "127.0.0.1", "localhost"}
+	schemes := []string{"https", "http"}
+	for _, scheme := range schemes {
+		for _, host := range hosts {
+			u := &url.URL{Scheme: scheme, Host: host}
+			// host-only 形式
+			for _, n := range names {
+				cookieJar.SetCookies(u, []*http.Cookie{{Name: n, MaxAge: -1}})
+			}
+			// domain 形式(带前导点,匹配 .xxx 域 cookie)
+			for _, n := range names {
+				cookieJar.SetCookies(u, []*http.Cookie{{Name: n, MaxAge: -1, Domain: "." + host}})
+			}
 		}
 	}
+}
+
+// JarInfo 返回代理 cookie jar 当前内容的摘要(诊断用,通过 JS bridge 打到
+// 调试日志,方便定位"jar 里 session 清不掉"这类问题)。
+func JarInfo() string {
+	cookieJarMu.Lock()
+	defer cookieJarMu.Unlock()
+	if cookieJar == nil {
+		return "jar: nil"
+	}
+	var b strings.Builder
+	hosts := []string{"archiveofourown.org", "www.archiveofourown.org", "127.0.0.1", "localhost"}
+	schemes := []string{"https", "http"}
+	for _, scheme := range schemes {
+		for _, host := range hosts {
+			u := &url.URL{Scheme: scheme, Host: host}
+			cks := cookieJar.Cookies(u)
+			if len(cks) == 0 {
+				continue
+			}
+			fmt.Fprintf(&b, "[%s://%s] %d cookie(s)\n", scheme, host, len(cks))
+			for _, c := range cks {
+				fmt.Fprintf(&b, "  %s domain=%q path=%q secure=%v maxAge=%d\n",
+					c.Name, c.Domain, c.Path, c.Secure, c.MaxAge)
+			}
+		}
+	}
+	if b.Len() == 0 {
+		return "jar: empty"
+	}
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 // hostConf caches what we learned about a secondary upstream: its DoH-resolved

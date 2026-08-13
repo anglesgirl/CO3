@@ -167,6 +167,16 @@ class EchProxyModule: NSObject, RCTBridgeModule {
     }
   }
 
+  @objc(jarInfoWithResolver:withRejecter:)
+  func jarInfo(
+    resolve: @escaping RCTPromiseResolveBlock,
+    reject: @escaping RCTPromiseRejectBlock
+  ) {
+    ioQueue.async {
+      resolve(EchproxyJarInfo())
+    }
+  }
+
   @objc(fetchTxt:withName:withResolver:withRejecter:)
   func fetchTxt(
     doh: String,
