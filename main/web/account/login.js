@@ -138,7 +138,7 @@ export default async function login(username, password, retries = 0) {
         CookieManager.clearAll().catch(() => {}),
         CookieManager.clearAll(true).catch(() => {}),
       ]);
-      await fetchViaWebView('https://archiveofourown.org/users/login');
+      await fetchViaWebView('https://archiveofourown.org/users/login', { requireLoginForm: true });
       // 验证完成后重试登录（authenticity_token 会重新获取）。
       return login(username, password, retries + 1);
     }

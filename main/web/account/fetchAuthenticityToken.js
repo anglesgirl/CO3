@@ -63,7 +63,7 @@ export async function fetchLoginAuthenticityToken(retried = false) {
           CookieManager.clearAll(true).catch(() => {}), // iOS WKWebView store
         ]);
         console.log('[AUTH] cleared AO3 session + RN/WebView cookie store before WebView verification');
-        html = await fetchViaWebView('https://archiveofourown.org/users/login');
+        html = await fetchViaWebView('https://archiveofourown.org/users/login', { requireLoginForm: true });
         if (!isCFChallenge(html)) {
           const token = extractLoginToken(html);
           if (token) return token;

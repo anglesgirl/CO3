@@ -65,8 +65,10 @@ function enqueue(item) {
   triggerNext?.();
 }
 
-export function fetchViaWebView(url, { cfWarning = false } = {}) {
-  return new Promise((resolve, reject) => enqueue({ url, resolve, reject, cfWarning }));
+export function fetchViaWebView(url, { cfWarning = false, requireLoginForm = false } = {}) {
+  return new Promise((resolve, reject) =>
+    enqueue({ url, resolve, reject, cfWarning, requireLoginForm }),
+  );
 }
 
 // --- Error ---
@@ -87,18 +89,20 @@ export class WebViewFetchError extends Error {
 const CF_CHALLENGE_DETECTION = `
   (function() {
     const html = document.documentElement.outerHTML || '';
+    const hasLoginForm = !!document.getElementById('new_user');
     const isChallenge =
       typeof window._cf_chl_opt !== 'undefined' ||
       !!document.querySelector('script[src*="cdn-cgi/challenge-platform"]') ||
       !!document.querySelector('script[src*="challenges.cloudflare.com"]') ||
       /_cf_chl_opt|challenge-platform|challenges\.cloudflare\.com|cf-chl-widget|turnstile/i.test(html) ||
       (location.hostname.indexOf('127.0.0.1') === 0 && /cdn-cgi\\/challenges/i.test(location.href));
-
-    if (isChallenge) {
+    // 登录页只会是 CF 验证或登录表单。既无 challenge 特征也无 new_user
+    // 表单(如 CF 新版验证页/错误页)→ 按 challenge 处理,保持窗口可见,
+    // 让用户完成验证或人工判断。绝不能静默 settle 导致窗口一闪即关。
+    if (isChallenge || !hasLoginForm) {
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'challenge' }));
       return;
     }
-
     window.ReactNativeWebView.postMessage(JSON.stringify({
       type: 'success',
       body: html,
@@ -261,6 +265,12 @@ export default function WebviewFetcher() {
       return;
     }
 
+    // 登录流程(requireLoginForm)先让窗口可见——用户必须能看到页面
+    // (CF 验证界面/登录表单),即使检测 JS 漏判也能人工完成验证;
+    // 检测到纯表单会立即 settle 关闭。其他场景等 challenge 检测结果。
+    if (currentRef.current?.requireLoginForm) {
+      setVisible(true);
+    }
     webViewRef.current?.injectJavaScript(CF_CHALLENGE_DETECTION);
   };
 
@@ -300,8 +310,16 @@ export default function WebviewFetcher() {
         // 就绝不能 settle —— 否则调用方拿到 challenge 页去解析表单，
         // 提取不到 token，登录无限重试。保持窗口可见等用户完成验证。
         const body = String(data.body ?? '');
+        console.log(`[WV] success body head: ${body.slice(0, 260).replace(/\s+/g, ' ')}`);
         if (/_cf_chl_opt|challenge-platform|challenges\.cloudflare\.com|cf-chl-widget|turnstile/i.test(body)) {
           console.log('[WV] success body still looks like a CF challenge, keeping window open');
+          setVisible(true);
+          return;
+        }
+        // 登录流程要求页面是登录表单(new_user)。无表单(CF 新版验证页/
+        // 错误页)→ 保持窗口可见,等用户完成验证后 CF 重定向到表单。
+        if (currentRef.current?.requireLoginForm && !body.includes('new_user')) {
+          console.log('[WV] requireLoginForm but no new_user form, keeping window open');
           setVisible(true);
           return;
         }
