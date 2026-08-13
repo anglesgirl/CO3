@@ -15,6 +15,7 @@ jest.mock('../main/web/echKy', () => ({
     })),
   },
   clearAuthCookies: jest.fn(async () => {}),
+  clearSessionCookies: jest.fn(async () => {}),
 }));
 jest.mock('../main/web/requestManager', () => ({ __esModule: true, default: jest.fn() }));
 jest.mock('../main/web/WebviewFetcher', () => ({
@@ -31,7 +32,7 @@ jest.mock('react-native-html-parser', () => ({
   },
 }));
 
-import ky, { clearAuthCookies } from '../main/web/echKy';
+import ky, { clearSessionCookies } from '../main/web/echKy';
 import { fetchLoginAuthenticityToken } from '../main/web/account/fetchAuthenticityToken';
 
 describe('fetchLoginAuthenticityToken', () => {
@@ -49,7 +50,7 @@ describe('fetchLoginAuthenticityToken', () => {
 
     await fetchLoginAuthenticityToken().catch(() => {});
 
-    expect(clearAuthCookies).toHaveBeenCalledTimes(1);
+    expect(clearSessionCookies).toHaveBeenCalledTimes(1);
     // After clearing, it retries the login page fetch.
     expect(ky.get).toHaveBeenCalledTimes(2);
   });
@@ -59,7 +60,7 @@ describe('fetchLoginAuthenticityToken', () => {
 
     await expect(fetchLoginAuthenticityToken()).rejects.toThrow('already logged in.');
 
-    expect(clearAuthCookies).toHaveBeenCalledTimes(1);
+    expect(clearSessionCookies).toHaveBeenCalledTimes(1);
     expect(ky.get).toHaveBeenCalledTimes(2);
   });
 });
