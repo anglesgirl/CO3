@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import WebView from 'react-native-webview';
+import CookieManager from '@react-native-cookies/cookies';
 import { useTranslation } from 'react-i18next';
 import { getEchBase, getJarInfo } from './echKy';
 
@@ -65,9 +66,9 @@ function enqueue(item) {
   triggerNext?.();
 }
 
-export function fetchViaWebView(url, { cfWarning = false, requireLoginForm = false, preVerify = false, interactiveLogin = false } = {}) {
+export function fetchViaWebView(url, { cfWarning = false, requireLoginForm = false, preVerify = false, interactiveLogin = false, direct = false, html = null, baseUrl = null } = {}) {
   return new Promise((resolve, reject) =>
-    enqueue({ url, resolve, reject, cfWarning, requireLoginForm, preVerify, interactiveLogin }),
+    enqueue({ url, resolve, reject, cfWarning, requireLoginForm, preVerify, interactiveLogin, direct, html, baseUrl }),
   );
 }
 
@@ -255,6 +256,41 @@ export default function WebviewFetcher() {
     if (currentRef.current?.interactiveLogin) {
       startLoginTimers();
     }
+    // direct 模式（官方域名直连登录）：不走 ECH 代理——系统 WebView 自带
+    // 真浏览器指纹 + ECH(用户网络实测 Chrome/Firefox+DoH 可直连官方登录,
+    // CF 零验证)。域名官方 → 无反钓鱼检查；cookie 留在 WebView store,
+    // 成功后由 CookieManager 读取。代理那套(127.0.0.1)对服务端域名检查
+    // 无解,弃用。
+    if (currentRef.current?.direct) {
+      const uri = currentRef.current.url;
+      console.log(`[WV] direct load ${uri} (${Date.now() - wvStart}ms)`);
+      setSource({ uri });
+      return;
+    }
+    // html 模式：渲染调用方提供的页面内容(CF challenge 页)。WebView 的
+    // 唯一目的 = 完成 CF 人机验证交互：challenge 页是 CF 生成的(无 AO3
+    // 域名检查),用户完成 Turnstile 后 CF 自动重放原始登录 POST(带
+    // cf_clearance)→ 成功 → cookie 进 jar → jar 轮询判定完成。
+    if (currentRef.current?.html) {
+      const item = currentRef.current;
+      console.log(`[WV] render challenge html (${item.html.length}b) base=${item.baseUrl} (${Date.now() - wvStart}ms)`);
+      let injected = '';
+      if (item.baseUrl) {
+        const base = item.baseUrl.slice(0, item.baseUrl.indexOf('/', item.baseUrl.indexOf('://') + 3));
+        const target = 'archiveofourown.org';
+        injected = buildFetchRewriter(base, target);
+      }
+      if (item.interactiveLogin) {
+        injected = (injected ? injected + '\n' : '') + buildAntiPhishingBypass();
+        startLoginTimers();
+      }
+      setSource({
+        html: item.html,
+        baseUrl: item.baseUrl || 'about:blank',
+        injectedJavaScriptBeforeContentLoaded: injected || undefined,
+      });
+      return;
+    }
     // ECH 代理可用时，WebView 也走代理，避免直连被墙重置。
     // 2026-08-06：AO3 域名代理不可用时 rewriteForEch 会抛错（fail-closed），
     // 这里 settle 错误让调用方感知（不再静默直连）。
@@ -343,23 +379,41 @@ export default function WebviewFetcher() {
     settle({ session }, null);
   };
 
+  // 官方域名直连登录成功：cookie 在 WebView store（不走代理 jar），
+  // 从 CookieManager 读 _otwarchive_session 返回给调用方。
+  const finishDirectLogin = async () => {
+    try {
+      const cookies = await CookieManager.get('https://archiveofourown.org');
+      const session = cookies?._otwarchive_session?.value || null;
+      console.log(`[WV] direct login done, session=${session ? 'found' : 'MISSING'}`);
+      settle({ session }, null);
+    } catch (e) {
+      console.log('[WV] direct login cookie read failed:', e?.message ?? e);
+      settle({ session: null }, null);
+    }
+  };
+
   const startLoginTimers = () => {
     cleanupLoginTimers();
-    // jar 轮询兜底：导航检测漏了也能靠 cookie 判定登录成功。
-    // 判定条件 = user_credentials 出现（真正登录成功）；匿名 session
-    // 不算（见 isLoggedInJar 注释）。
-    jarPollRef.current = setInterval(async () => {
-      try {
-        const jarText = await getJarInfo();
-        lastJarInfoRef.current = jarText ?? '';
-        if (currentRef.current?.interactiveLogin && isLoggedInJar(jarText)) {
-          console.log('[WV] interactive login detected via jar user_credentials');
-          finishInteractiveLogin('jar');
+    // direct 模式(官方域名直连)不轮询 jar——cookie 在 WebView store 不在
+    // 代理 jar，成功由导航检测 + CookieManager 读取。仅代理模式轮询。
+    if (!currentRef.current?.direct) {
+      // jar 轮询兜底：导航检测漏了也能靠 cookie 判定登录成功。
+      // 判定条件 = user_credentials 出现（真正登录成功）；匿名 session
+      // 不算（见 isLoggedInJar 注释）。
+      jarPollRef.current = setInterval(async () => {
+        try {
+          const jarText = await getJarInfo();
+          lastJarInfoRef.current = jarText ?? '';
+          if (currentRef.current?.interactiveLogin && isLoggedInJar(jarText)) {
+            console.log('[WV] interactive login detected via jar user_credentials');
+            finishInteractiveLogin('jar');
+          }
+        } catch (e) {
+          // 轮询失败忽略，下个周期再试
         }
-      } catch (e) {
-        // 轮询失败忽略，下个周期再试
-      }
-    }, 1500);
+      }, 1500);
+    }
     // 总超时：5 分钟后窗口还开着就失败（用户可能已放弃/网络卡死）。
     loginTimeoutRef.current = setTimeout(() => {
       console.log('[WV] interactive login timed out after 5min');
@@ -508,7 +562,8 @@ export default function WebviewFetcher() {
 
       // 交互式登录：AO3 前端反钓鱼把表单页跳去 /auth_error——绝不是登录
       // 成功路径，拦住留在登录页（注入 JS 也会拦 location 赋值，双保险）。
-      if (currentRef.current?.interactiveLogin && u.pathname === '/auth_error') {
+      // direct 模式(官方域名)不会有 auth_error 检查,此拦截仅代理模式需要。
+      if (!currentRef.current?.direct && currentRef.current?.interactiveLogin && u.pathname === '/auth_error') {
         console.log('[WV] blocked anti-phishing redirect to /auth_error');
         return false;
       }
@@ -517,6 +572,7 @@ export default function WebviewFetcher() {
       // 登录成功。AO3 登录成功必然 302 到 /users/{username} 或首页；
       // 密码错误则 302 回 /users/login（继续等待用户重试）。此刻
       // Set-Cookie 已随代理转发写入 jar，读 jar 拿 session 结束窗口。
+      // direct 模式下 cookie 在 WebView store，成功由 CookieManager 读取。
       if (
         currentRef.current?.interactiveLogin &&
         (u.hostname === 'archiveofourown.org' || u.hostname === 'www.archiveofourown.org') &&
@@ -525,12 +581,22 @@ export default function WebviewFetcher() {
         const p = u.pathname;
         if (!p.startsWith('/users/login') && !p.startsWith('/users/session') && !p.startsWith('/cdn-cgi/')) {
           console.log(`[WV] interactive login: navigated to ${p} — success`);
-          getJarInfo()
-            .then((txt) => { lastJarInfoRef.current = txt ?? ''; })
-            .catch(() => {})
-            .finally(() => finishInteractiveLogin('nav'));
+          if (currentRef.current?.direct) {
+            // 官方域名直连：登录 cookie 在 WebView store，读出来返回。
+            finishDirectLogin();
+          } else {
+            getJarInfo()
+              .then((txt) => { lastJarInfoRef.current = txt ?? ''; })
+              .catch(() => {})
+              .finally(() => finishInteractiveLogin('nav'));
+          }
           return false; // 阻止导航：已登录，无需再加载页面
         }
+      }
+
+      // direct 模式：官方域名直连，所有导航原样放行（不再改写代理）。
+      if (currentRef.current?.direct) {
+        return true;
       }
 
       // Cloudflare 验证回调。全部走本地 ECH 代理改写：
@@ -631,7 +697,10 @@ export default function WebviewFetcher() {
             // 注意：不能开 sharedCookiesEnabled —— 那会把 RN 层 cookie
             // 带进验证窗口，重新引入同样的问题。cf_clearance 由代理侧
             // cookiejar 捕获（请求走代理转发），不依赖 WebView cookie。
-            incognito
+            // ⚠️ direct 模式(官方域名直连)不能用 incognito：登录 cookie
+            // 必须写进全局 CookieManager，成功后 finishDirectLogin 才能
+            // 用 CookieManager.get 读回 _otwarchive_session。
+            incognito={!currentRef.current?.direct}
             cacheEnabled={false}
             startInLoadingState={visible}
           />
