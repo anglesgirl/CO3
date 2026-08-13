@@ -28,6 +28,8 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+
+	utls "github.com/refraction-networking/utls"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -689,9 +691,9 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 			return nil, fmt.Errorf("dial %s failed: %w", host, err)
 		}
 
-		cfg := &tls.Config{
+		cfg := &utls.Config{
 			ServerName:         host,
-			MinVersion:         tls.VersionTLS12,
+			MinVersion:         utls.VersionTLS12,
 			NextProtos:         []string{"h2", "http/1.1"},
 			InsecureSkipVerify: insecure,
 		}
@@ -699,15 +701,15 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 		// 再失败降级普通 TLS(保护性降级,至少保证连通性)。
 		if hc.as13335 && len(hc.ech) > 0 {
 			cfg.EncryptedClientHelloConfigList = hc.ech
-			cfg.MinVersion = tls.VersionTLS13
+			cfg.MinVersion = utls.VersionTLS13
 		}
 		hctx, cancel := context.WithTimeout(ctx, dialTimeout)
 		defer cancel()
 
-		tc := tls.Client(raw, cfg)
+		tc := utls.UClient(raw, cfg, utls.HelloChrome_Auto)
 		err = tc.HandshakeContext(hctx)
 		if err != nil {
-			var rej *tls.ECHRejectionError
+			var rej *utls.ECHRejectionError
 			// ECH 被拒且服务器给了 retry_configs:兜底一次,并缓存该配置。
 			if hc.as13335 && errors.As(err, &rej) && len(rej.RetryConfigList) > 0 {
 				raw.Close()
@@ -723,15 +725,15 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 					return nil, fmt.Errorf("%s retry dial failed: %w", host, retryErr)
 				}
 				// 显式构造 retry 配置(不复制含锁的 cfg),仅替换 ECH 配置。
-				retryConfig := &tls.Config{
+				retryConfig := &utls.Config{
 					ServerName:                     host,
-					MinVersion:                     tls.VersionTLS13,
+					MinVersion:                     utls.VersionTLS13,
 					NextProtos:                     []string{"h2", "http/1.1"},
 					InsecureSkipVerify:             insecure,
 					EncryptedClientHelloConfigList: rej.RetryConfigList,
 				}
 				retryCtx, retryCancel := context.WithTimeout(ctx, dialTimeout)
-				retryConn := tls.Client(raw, retryConfig)
+				retryConn := utls.UClient(raw, retryConfig, utls.HelloChrome_Auto)
 				retryErr = retryConn.HandshakeContext(retryCtx)
 				retryCancel()
 				if retryErr == nil && retryConn.ConnectionState().ECHAccepted {
@@ -777,14 +779,14 @@ func plainTLSHandshake(ctx context.Context, host string, d *net.Dialer, cands []
 			lastErr = err
 			continue
 		}
-		cfg := &tls.Config{
+		cfg := &utls.Config{
 			ServerName:         host,
-			MinVersion:         tls.VersionTLS12,
+			MinVersion:         utls.VersionTLS12,
 			NextProtos:         []string{"h2", "http/1.1"},
 			InsecureSkipVerify: insecure,
 		}
 		tctx, cancel := context.WithTimeout(ctx, dialTimeout)
-		tc := tls.Client(raw, cfg)
+		tc := utls.UClient(raw, cfg, utls.HelloChrome_Auto)
 		err = tc.HandshakeContext(tctx)
 		cancel()
 		if err != nil {
@@ -910,22 +912,22 @@ func echDialContext(sni string, echList []byte, cachePath string, insecure bool)
 				continue
 			}
 
-			cfg := &tls.Config{
+			cfg := &utls.Config{
 				ServerName:                     sni,
-				MinVersion:                     tls.VersionTLS13, // ECH requires TLS 1.3
+				MinVersion:                     utls.VersionTLS13, // ECH requires TLS 1.3
 				NextProtos:                     []string{"h2", "http/1.1"},
 				EncryptedClientHelloConfigList: echList,
 				InsecureSkipVerify:             insecure,
 			}
 			hctx, cancel := context.WithTimeout(ctx, dialTimeout)
-			tc := tls.Client(raw, cfg)
+			tc := utls.UClient(raw, cfg, utls.HelloChrome_Auto)
 			err = tc.HandshakeContext(hctx)
 			cancel()
 
 			// Do not use server retry_configs. This proxy validates the ECH
 			// configuration obtained for the target host itself, without silently
 			// switching to a server-provided configuration.
-			var rej *tls.ECHRejectionError
+			var rej *utls.ECHRejectionError
 			if errors.As(err, &rej) && len(rej.RetryConfigList) > 0 {
 				setStatus("ECH rejected via %s; server retry_configs ignored", dialed)
 			}
@@ -1331,9 +1333,9 @@ func loadECHConfig(host, echB64, doh, cachePath string) ([]byte, string, error) 
 
 func tlsVersionName(v uint16) string {
 	switch v {
-	case tls.VersionTLS13:
+	case utls.VersionTLS13:
 		return "1.3"
-	case tls.VersionTLS12:
+	case utls.VersionTLS12:
 		return "1.2"
 	default:
 		return fmt.Sprintf("0x%04x", v)
