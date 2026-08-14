@@ -40,6 +40,9 @@ const MANUAL_KEY = 'ech_manual_override';
 const LAST_REMOTE_KEY = 'ech_last_remote';
 
 let echBasePromise = null; // Promise<string|null> — memoised
+// 代理是否已成功启动（startProxy resolve 后 true）。区别于 echBasePromise
+// 非空（那只是"启动流程进行中"）：syncRemoteConfig 只在真正已就绪时重启。
+let echBaseReady = false;
 
 // Returns the configured DoH endpoint. Unset -> default. Empty string means the
 // user explicitly disabled DoH (proxy will use its baked-in config + retry_configs).
@@ -96,6 +99,29 @@ function shouldRetryStart() {
   return Date.now() - lastStartAttempt >= START_RETRY_COOLDOWN_MS;
 }
 
+// 远程配置就绪 gate（幂等，仅首次冷启动等待）：
+// 2026-08-15 修复二版 —— 上一版只在 initEch 里等配置，但 worksScreen 的
+// 请求 hook（beforeRequest → getEchBase）会绕过 initEch 抢先 startProxy，
+// 日志实证（16:31:38.420 attempt 1 ip=(dns)）仍是空配置启动 → CF 525。
+// 现在 gate 下沉到 startProxy 内部：**任何入口**启动代理前都必须先等
+// 远程配置（限时 6s，失败/超时不影响启动，行为不劣于原来），保证
+// 第一次启动就用上 CF 优选 IP。
+let configGatePromise = null;
+
+function getConfigGate() {
+  if (!configGatePromise) {
+    configGatePromise = (async () => {
+      try {
+        await Promise.race([
+          syncRemoteConfig(),
+          new Promise((resolve) => setTimeout(resolve, 8000)),
+        ]);
+      } catch {}
+    })();
+  }
+  return configGatePromise;
+}
+
 function startProxy() {
   lastStartAttempt = Date.now();
   startAttempts += 1;
@@ -122,6 +148,8 @@ function startProxy() {
     // 一旦 start 抛错就会变成 ReferenceError（把真正的失败原因吃掉）。
     const t0 = Date.now();
     try {
+      // 首次启动前等远程配置 gate（幂等；已 resolve 则立即通过）
+      await getConfigGate();
       const doh = (await getDohCandidates()).join(',');
       const ips = await getCustomIPs();
       console.log(`[ECH] starting proxy (attempt ${startAttempts}, doh=${doh || '(none)'}, ip=${ips || '(dns)'})`);
@@ -130,6 +158,7 @@ function startProxy() {
       const ms = Date.now() - t0;
       console.log(`[ECH] proxy started on ${base} in ${ms}ms`);
       lastStartError = null;
+      echBaseReady = true;
       trackEvent('ech_proxy_start', { ok: true, ms, doh: !!doh, ip: !!ips });
       return base;
     } catch (e) {
@@ -138,6 +167,7 @@ function startProxy() {
       console.warn(`[ECH] proxy failed to start in ${ms}ms:`, e?.message ?? e);
       // 失败不永久 memoise：置空并清掉 promise，让下次请求走 shouldRetryStart 冷却后重试。
       // 否则一次失败(DoH 抖动/被墙)会让整个 App 会话永久断网。
+      echBaseReady = false;
       trackEvent('ech_proxy_start', { ok: false, ms, error: String(e?.message ?? e).slice(0, 120) });
       echBasePromise = null;
       return null;
@@ -166,20 +196,9 @@ export function initEch() {
   // JS 侧则丢掉端口 → 之后 30s 冷却里全部请求 fail-closed。
   // 2026-08-11 iOS 真机日志实测到这个竞态）。
   if (echBasePromise) return;
-  // 2026-08-15 修复冷启动慢（用户实测每次打开等 20s）：
-  // 原来 getEchBase 与 syncRemoteConfig 并行 → 首次启动代理时远程配置
-  // （CF 优选 IP）还没拉到 → ip=(dns) 走被污染 DNS → CF 525 失败 4.5s
-  // → 重启代理重来 → 共 16s+。现在先同步远程配置（限时 4s，失败/超时
-  // 不影响启动，行为不劣于原来），让第一次启动就用上 CF IP。
-  (async () => {
-    try {
-      await Promise.race([
-        syncRemoteConfig(),
-        new Promise((resolve) => setTimeout(resolve, 4000)),
-      ]);
-    } catch {}
-    getEchBase().catch(() => {});
-  })();
+  // 远程配置等待已下沉到 startProxy 内部（getConfigGate），这里直接
+  // 触发即可：首次启动必然先等配置（限时 6s）再用 CF 优选 IP 启动。
+  getEchBase().catch(() => {});
 }
 
 // Validates a remote value before we trust it — a broken TXT record should not
@@ -248,12 +267,12 @@ export async function syncRemoteConfig() {
   });
 
   // Only the proxy settings require a restart.
-  // 2026-08-15: 代理还没启动（首次冷启动，echBasePromise 为 null）时不
-  // 重启 —— 首次 startProxy() 自然用上刚写入的新配置。原来无条件重启会
-  // 造成 stop/start 间隙，WebView 兜底请求撞上 → ERR_CONNECTION_REFUSED
-  // （2026-08-14 日志实证：48.331 [WV] loading → 48.344 restart → 48.618 -6）。
+  // 2026-08-15: 只在代理【已启动完成】时重启（echBaseReady）。冷启动期间
+  // （startProxy 正在等 gate/还没起来）不重启 —— 首次 startProxy() 自然用上
+  // 刚写入的新配置。原来无条件重启会双重启动 + stop/start 间隙撞上
+  // WebView 兜底请求 → ERR_CONNECTION_REFUSED（2026-08-14 日志实证）。
   if (
-    echBasePromise &&
+    echBaseReady &&
     (next.doh !== prev.doh || next.doh2 !== prev.doh2 ||
       next.doh3 !== prev.doh3 || next.ip !== prev.ip)
   ) {
@@ -353,6 +372,7 @@ async function restartProxy() {
     if (mod?.stop) await mod.stop();
   } catch {}
   echBasePromise = null;
+  echBaseReady = false;
   return startProxy();
 }
 
@@ -486,7 +506,14 @@ export async function fetchRemoteConfig(domain) {
   let lastError;
   for (const doh of candidates) {
     try {
-      txt = await mod.fetchTxt(doh, name);
+      // 2026-08-15: 单候选 2.5s 超时 —— 移动宽带上 Cloudflare Gateway
+      // DoH 可能卡 8s+（日志实证），串行无超时会让首次启动干等。
+      // 快失败快切换下一个候选，总耗时 ≈ 候选数 × 2.5s。
+      txt = await Promise.race([
+        mod.fetchTxt(doh, name),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`DoH timeout: ${doh}`)), 2500)),
+      ]);
       break;
     } catch (error) {
       lastError = error;

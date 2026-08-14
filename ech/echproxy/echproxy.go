@@ -39,7 +39,10 @@ var androidCertPool *x509.CertPool
 var androidCertPoolOnce sync.Once
 
 const (
-	dialTimeout = 20 * time.Second
+	// 2026-08-15: 20s→5s。移动宽带下不可达 CF IP 的 TCP connect 内核级
+	// 超时通常 ~10s，20s 是二次重试的累积；串行试多个候选时 40s+ 才轮到
+	// 可用 IP（用户实测每次请求卡 40s+）。5s 足够 TCP 往返判定失败。
+	dialTimeout = 5 * time.Second
 	// DoH 查询超时独立控制：网络差时 20s 太慢，5s 失败后走缓存或种子 IP 兜底。
 	dohTimeout = 5 * time.Second
 	// ECH 公钥配置缓存 5 小时:公钥轮换频率远低于此,期间连接直接用缓存握手,
@@ -746,10 +749,42 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 
 		d := &net.Dialer{Timeout: dialTimeout}
 		var raw net.Conn
-		for _, c := range cands {
-			raw, err = d.DialContext(ctx, "tcp", c)
-			if err == nil {
-				break
+		// 并发尝试所有候选 IP（happy-eyeballs 风格，取第一个成功者）：
+		// 2026-08-15 —— 移动宽带下部分 CF 优选 IP 不可达（connect 超时），
+		// 串行逐个试 = 每个 5s+，最坏全试完才轮到可用 IP。并发让最快可达
+		// 的 IP 直接胜出，失败候选的连接随即关闭，总耗时 ≈ 最优 IP RTT。
+		if len(cands) == 1 {
+			raw, err = d.DialContext(ctx, "tcp", cands[0])
+		} else {
+			type dialRes struct {
+				c net.Conn
+				e error
+			}
+			dctx, cancel := context.WithTimeout(ctx, dialTimeout)
+			defer cancel()
+			ch := make(chan dialRes, len(cands))
+			for _, c := range cands {
+				cc := c
+				go func() {
+					conn, derr := d.DialContext(dctx, "tcp", cc)
+					ch <- dialRes{conn, derr}
+				}()
+			}
+			var firstErr error
+			for range cands {
+				r := <-ch
+				switch {
+				case r.e == nil && raw == nil:
+					raw = r.c // 第一个成功者胜出
+					cancel()
+				case r.c != nil:
+					r.c.Close() // 未选中的成功连接立即关闭
+				case firstErr == nil:
+					firstErr = r.e
+				}
+			}
+			if raw == nil {
+				err = firstErr
 			}
 		}
 		if raw == nil {
