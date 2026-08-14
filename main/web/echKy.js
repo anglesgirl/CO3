@@ -159,15 +159,27 @@ export function getEchBase() {
   return Promise.resolve(null);
 }
 
-// Eagerly warm up the proxy so it's ready before the first AO3 request, then
-// refresh the remote config in the background (never blocking startup).
+// Eagerly warm up the proxy so it's ready before the first AO3 request.
 export function initEch() {
   // 只在没有进行中的启动时才触发，避免 App 启动瞬间多处 import 同时
   // 调用造成并发 start()（原生侧会抛 "echproxy already running"，
   // JS 侧则丢掉端口 → 之后 30s 冷却里全部请求 fail-closed。
   // 2026-08-11 iOS 真机日志实测到这个竞态）。
-  if (!echBasePromise) getEchBase().catch(() => {});
-  syncRemoteConfig().catch(() => {});
+  if (echBasePromise) return;
+  // 2026-08-15 修复冷启动慢（用户实测每次打开等 20s）：
+  // 原来 getEchBase 与 syncRemoteConfig 并行 → 首次启动代理时远程配置
+  // （CF 优选 IP）还没拉到 → ip=(dns) 走被污染 DNS → CF 525 失败 4.5s
+  // → 重启代理重来 → 共 16s+。现在先同步远程配置（限时 4s，失败/超时
+  // 不影响启动，行为不劣于原来），让第一次启动就用上 CF IP。
+  (async () => {
+    try {
+      await Promise.race([
+        syncRemoteConfig(),
+        new Promise((resolve) => setTimeout(resolve, 4000)),
+      ]);
+    } catch {}
+    getEchBase().catch(() => {});
+  })();
 }
 
 // Validates a remote value before we trust it — a broken TXT record should not
@@ -236,7 +248,17 @@ export async function syncRemoteConfig() {
   });
 
   // Only the proxy settings require a restart.
-  if (next.doh !== prev.doh || next.doh2 !== prev.doh2 || next.doh3 !== prev.doh3 || next.ip !== prev.ip) await restartProxy();
+  // 2026-08-15: 代理还没启动（首次冷启动，echBasePromise 为 null）时不
+  // 重启 —— 首次 startProxy() 自然用上刚写入的新配置。原来无条件重启会
+  // 造成 stop/start 间隙，WebView 兜底请求撞上 → ERR_CONNECTION_REFUSED
+  // （2026-08-14 日志实证：48.331 [WV] loading → 48.344 restart → 48.618 -6）。
+  if (
+    echBasePromise &&
+    (next.doh !== prev.doh || next.doh2 !== prev.doh2 ||
+      next.doh3 !== prev.doh3 || next.ip !== prev.ip)
+  ) {
+    await restartProxy();
+  }
 }
 
 // echUrl rewrites an AO3 URL so it goes through the local ECH proxy. Use it for

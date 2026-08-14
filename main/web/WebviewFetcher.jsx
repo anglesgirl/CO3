@@ -339,6 +339,8 @@ export default function WebviewFetcher() {
   const webViewRef = useRef(null);
   const currentRef = useRef(null);
   const httpErrorRef = useRef(null);
+  // WebView 连接被拒(代理重启间隙)时的单次重试标记，processNext 重置。
+  const retriedRef = useRef(false);
   // 交互式登录：jar 轮询定时器 / 总超时定时器 / 最近一次 jar 快照。
   // jar 在 interactiveLogin 打开前已被 clearSessionCookies 清空，所以
   // 轮询到 _otwarchive_session 出现 = 登录成功（可靠，不依赖检测 JS）。
@@ -441,6 +443,7 @@ export default function WebviewFetcher() {
     if (currentRef.current || queue.length === 0) return;
     currentRef.current = queue.shift();
     httpErrorRef.current = null;
+    retriedRef.current = false; // 每个新任务重置重试标记
     loadCurrent();
   };
 
@@ -606,12 +609,22 @@ export default function WebviewFetcher() {
     };
   };
 
+  // WebView 加载失败时：若代理刚重启（stop/start 间隙）导致连接被拒，
+  // 重试一次（新代理已就绪，第二次必成功）。仅重试连接类错误，且只
+  // 重试一次，避免死循环。
   const onError = ({ nativeEvent }) => {
-    settle(null, new WebViewFetchError(
-      nativeEvent.code ?? 0,
-      nativeEvent.description ?? 'Network error',
-      nativeEvent.url,
-    ));
+    const code = nativeEvent.code ?? 0;
+    const desc = nativeEvent.description ?? 'Network error';
+    const isConnRefused = /ERR_CONNECTION_REFUSED|-6/.test(desc) || code === -6;
+    if (isConnRefused && !retriedRef.current && !currentRef.current?.interactiveLogin) {
+      retriedRef.current = true;
+      console.log(`[WV] connection refused (proxy restart gap?), retrying once: ${nativeEvent.url}`);
+      setTimeout(() => {
+        if (currentRef.current) loadCurrent();
+      }, 150);
+      return;
+    }
+    settle(null, new WebViewFetchError(code, desc, nativeEvent.url));
   };
 
   const onMessage = ({ nativeEvent }) => {
