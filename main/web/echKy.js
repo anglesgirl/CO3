@@ -196,9 +196,25 @@ export function initEch() {
   // JS 侧则丢掉端口 → 之后 30s 冷却里全部请求 fail-closed。
   // 2026-08-11 iOS 真机日志实测到这个竞态）。
   if (echBasePromise) return;
-  // 远程配置等待已下沉到 startProxy 内部（getConfigGate），这里直接
-  // 触发即可：首次启动必然先等配置（限时 6s）再用 CF 优选 IP 启动。
-  getEchBase().catch(() => {});
+  // 2026-08-15 App 启动即预热 ECH（用户要求：不等用户操作）：
+  // 代理启动只是监听端口，DoH 解析/ECH 配置获取/TLS 握手是首个真实
+  // 请求时才做（移动宽带上首次可卡 30s+，用户日志实证）。这里启动
+  // 代理后立即后台预请求 AO3 主页，把整条链路（transportFor 的 DoH
+  // 解析 + ECH 配置 + 连接池）全部热起来 —— 用户点浏览时直接秒出。
+  const warm = async () => {
+    try {
+      await getEchBase();
+      const t0 = Date.now();
+      try {
+        await echKy.get('https://archiveofourown.org/', { timeout: 20000 }).text();
+        console.log(`[ECH] warm-up complete in ${Date.now() - t0}ms`);
+      } catch (e) {
+        // 预热失败不阻塞：真实请求仍会正常走（只是慢一次）
+        console.log(`[ECH] warm-up request failed in ${Date.now() - t0}ms: ${e?.message ?? e}`);
+      }
+    } catch {}
+  };
+  warm();
 }
 
 // Validates a remote value before we trust it — a broken TXT record should not
