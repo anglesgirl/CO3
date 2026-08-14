@@ -570,6 +570,13 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	req.Header.Del("Accept-Encoding")
+	// CF 风控（2026-08-15 实测）：ECH 直连 + 无浏览器指纹时，CF Bot Fight
+	// 对非浏览器 UA（Go-http-client/okhttp 默认）直接 403。RN fetch 请求
+	// 不带 UA，WebView 带系统 UA —— 统一强制为 Chrome UA，让服务端看到
+	// 的请求与真浏览器一致。UA 不是安全边界，AO3 只认"像浏览器"。
+	req.Header.Set("User-Agent",
+		"Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 "+
+			"(KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36")
 
 	resp, err := h.client.Do(req)
 	if err != nil {
@@ -578,6 +585,23 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	// 403 诊断：CF challenge / 风控 / 其他？把响应体前 500 字节打进状态，
+	// 下次再 403 直接从日志看出是哪类拦截（challenge-platform=CF 验证页）。
+	if resp.StatusCode == 403 {
+		head := make([]byte, 500)
+		n, _ := io.ReadFull(resp.Body, head)
+		marker := ""
+		body := string(head[:n])
+		switch {
+		case strings.Contains(body, "challenge-platform") || strings.Contains(body, "_cf_chl_opt"):
+			marker = "CF_CHALLENGE"
+		case strings.Contains(body, "cf-error-details") || strings.Contains(body, "cf-ray"):
+			marker = "CF_ERROR_PAGE"
+		default:
+			marker = "PLAIN"
+		}
+		setStatus("403 %s %s (%s): %q", r.Method, r.URL.Path, marker, body)
+	}
 
 	if loc := resp.Header.Get("Location"); loc != "" {
 		resp.Header.Set("Location", rewriteLocation(loc, target))
