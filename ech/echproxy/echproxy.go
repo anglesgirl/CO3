@@ -416,6 +416,44 @@ func Start(listen, target, echB64, doh, ipList, cpArg string, insecure bool) err
 		setDNSInfo("per-host DoH; ECH only for AS13335-qualified hosts")
 	}
 
+	// 2026-08-15 CF IP 优选：启动后后台扫最快边缘 IP（拉白嫖优选列表 +
+	// TLS 握手测速），完成后前置到 customIPs 并重建 transport 缓存。
+	// 不阻塞启动 —— 首个请求用现有候选（远程配置/DoH 端点 IP），
+	// 扫描完成自动切换最快 IP。移动宽带避免串行试不可达 IP 白等。
+	go func() {
+		start := time.Now()
+		ips := scanPreferredCFIPs(5, 8*time.Second)
+		if len(ips) == 0 {
+			log.Printf("echproxy: preferred IP scan: no reachable IP (took %v)", time.Since(start))
+			return
+		}
+		mu.Lock()
+		seen := make(map[string]bool, len(customIPs)+len(ips))
+		fresh := make([]string, 0, len(ips)+len(customIPs))
+		for _, ip := range ips {
+			if !seen[ip] && isCloudflareAS13335(ip) {
+				seen[ip] = true
+				fresh = append(fresh, ip)
+			}
+		}
+		for _, ip := range customIPs {
+			if !seen[ip] {
+				seen[ip] = true
+				fresh = append(fresh, ip)
+			}
+		}
+		customIPs = fresh
+		mu.Unlock()
+		// 重建 transport：hostDialContext 每次调用读 customIPs（cands 构建），
+		// 但候选顺序要生效需重跑 transportFor 的 DialTLSContext 闭包 ——
+		// 闭包引用 hc，而 hostConf 缓存了旧 transport，重置即可。
+		hostsMu.Lock()
+		hostConfs = map[string]*hostConf{}
+		hostsMu.Unlock()
+		setDNSInfo("preferred IP scan: %d fastest edge IPs prepended: %v", len(ips), ips)
+		log.Printf("echproxy: preferred IP scan done in %v: %v", time.Since(start), ips)
+	}()
+
 	// Remember the settings so every requested host can be resolved the same way.
 	hostsMu.Lock()
 	activeDoH, activeInse = doh, insecure
