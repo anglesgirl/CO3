@@ -217,6 +217,21 @@ function buildPageTranslator(targetLang) {
       if (!Array.isArray(data) || !Array.isArray(data[0])) return null;
       return data[0].map(function(x){ return Array.isArray(x) ? x[0] : ''; }).join('');
     }
+    // 批量翻译：一次请求翻译多条（gtx 支持多个 q 参数，响应按 q 顺序
+    // 返回数组）。2026-08-15 优化：原来逐条串行（页面几百个文本节点 =
+    // 几百次往返，用户实测很慢），批量后请求数降 20 倍。
+    async function translateBatch(texts) {
+      var url = '/translate_a/single?client=gtx&sl=auto&tl=' + encodeURIComponent(tl) + '&dt=t' +
+        texts.map(function(t){ return '&q=' + encodeURIComponent(t); }).join('');
+      var res = await fetch(url, { headers: { 'X-Ech-Target': 'translate.googleapis.com' } });
+      if (!res.ok) return null;
+      var data = await res.json();
+      if (!Array.isArray(data)) return null;
+      return data.map(function(seg){
+        if (!Array.isArray(seg) || !Array.isArray(seg[0])) return null;
+        return seg[0].map(function(x){ return Array.isArray(x) ? x[0] : ''; }).join('');
+      });
+    }
     // 超长文本分段翻译（2026-08-15 用户实测：summary 概要长文本被截断，
     // gtx 单次 q 参数有长度上限，超长直接截断/400）。按 ~1800 字符切块，
     // 逐块翻译后拼接；任一块失败则放弃整条（保留原文，不写半截）。
@@ -231,18 +246,44 @@ function buildPageTranslator(targetLang) {
       }
       return out;
     }
-    // 逐条翻译(登录/注册/重置页文本量小,准确性优先; 走本地代理很快)
+    // 写回翻译结果（placeholder / 文本节点）。
+    function applyTr(it, tr) {
+      if (it.ph) {
+        it.el.setAttribute('placeholder', tr);
+      } else if (it.node && it.node.parentElement) {
+        it.node.parentElement.setAttribute('data-ech-tr', '1');
+        it.node.nodeValue = tr;
+      }
+    }
+    // 逐条翻译（超长分段；普通文本批量，q 总量 ≤3500 动态分批）
     async function run() {
-      for (var s = 0; s < items.length; s++) {
-        var it = items[s];
+      var longItems = [];
+      var normalItems = [];
+      items.forEach(function(it){ (it.text.length > 1800 ? longItems : normalItems).push(it); });
+      // 1) 超长文本（summary 概要等）：分段逐条
+      for (var s = 0; s < longItems.length; s++) {
         try {
-          var tr = await translateText(it.text);
-          if (!tr || tr === it.text) continue;
-          if (it.ph) {
-            it.el.setAttribute('placeholder', tr);
-          } else if (it.node && it.node.parentElement) {
-            it.node.parentElement.setAttribute('data-ech-tr', '1');
-            it.node.nodeValue = tr;
+          var tr = await translateText(longItems[s].text);
+          if (tr && tr !== longItems[s].text) applyTr(longItems[s], tr);
+        } catch (e) {}
+      }
+      // 2) 普通文本：批量翻译（一次请求多条）
+      var batches = [];
+      var cur = [], curLen = 0;
+      for (var i = 0; i < normalItems.length; i++) {
+        var bit = normalItems[i];
+        var add = 1 + bit.text.length;
+        if (cur.length > 0 && curLen + add > 3500) { batches.push(cur); cur = []; curLen = 0; }
+        cur.push(bit); curLen += add;
+      }
+      if (cur.length) batches.push(cur);
+      for (var b = 0; b < batches.length; b++) {
+        var itemsInBatch = batches[b];
+        try {
+          var trs = await translateBatch(itemsInBatch.map(function(x){ return x.text; }));
+          if (!trs) continue;
+          for (var j = 0; j < itemsInBatch.length && j < trs.length; j++) {
+            if (trs[j] && trs[j] !== itemsInBatch[j].text) applyTr(itemsInBatch[j], trs[j]);
           }
         } catch (e) {}
       }
