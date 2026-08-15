@@ -171,6 +171,9 @@ func speedTestIP(ip string, timeout time.Duration) (int64, bool) {
 		tc.Close()
 		return 0, false
 	}
+	// ⚠️ 读超时保护：speed.cloudflare.com keep-alive 不主动关连接，
+	// 响应体读完后 br.Read 等 EOF 会永久阻塞（hctx 只管握手不管读）。
+	tc.SetReadDeadline(time.Now().Add(timeout))
 	// HTTP GET 测速文件
 	req, _ := http.NewRequestWithContext(hctx, "GET", speedTestURL, nil)
 	req.Host = "speed.cloudflare.com"
@@ -303,6 +306,7 @@ func writeIPCache(cachePath string, ips []string) {
 	if p == "" || len(ips) == 0 {
 		return
 	}
+	os.MkdirAll(filepath.Dir(p), 0o755)
 	b, _ := json.Marshal(ipCache{IPs: ips, TS: time.Now().Unix()})
 	os.WriteFile(p, b, 0o644)
 }
