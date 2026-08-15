@@ -425,7 +425,10 @@ func Start(listen, target, echB64, doh, ipList, cpArg string, insecure bool) err
 	// 200 —— CF 风控信誉机制盯上大众优选段 IP（自选 IP 被标记的几率
 	// 远高于官方解析 IP）。候选顺序：官方解析 IP 优先，优选 IP 殿后。
 	fastStart := time.Now()
-	fastIPs := optimizeFastIPs(cpArg)
+	mu.Lock()
+	officialIPs := append([]string(nil), customIPs...)
+	mu.Unlock()
+	fastIPs := optimizeFastIPs(cpArg, officialIPs)
 	if len(fastIPs) > 0 {
 		mu.Lock()
 		seen := make(map[string]bool, len(customIPs)+len(fastIPs))
@@ -860,8 +863,11 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 				cachePathMu.RLock()
 				cp := cachePath
 				cachePathMu.RUnlock()
+				mu.Lock()
+				officialIPs := append([]string(nil), customIPs...)
+				mu.Unlock()
 				clearIPCache(cp)
-				ips := optimizeFastIPs(cp)
+				ips := optimizeFastIPs(cp, officialIPs)
 				if len(ips) > 0 {
 					mu.Lock()
 					seen := make(map[string]bool, len(customIPs)+len(ips))

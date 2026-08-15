@@ -322,18 +322,57 @@ func clearIPCache(cachePath string) {
 
 // --- 主流程 ---------------------------------------------------------------
 
-// optimizeFastIPs 三阶段优选入口：
-//   有缓存（12h 内）→ 直接返回，不扫；
-//   无缓存 → 采样 50 网段 → 2s 延迟排序 top10 → 8s 测速 top3 → 写缓存。
-// 总耗时 ≤10s（+缓存读取 <1ms）。
-func optimizeFastIPs(cachePath string) []string {
+// sampleFromOfficialSubnet 从官方解析 IP 的 /24 段内随机采样（用户 2026-08-15
+// 观点：CF 任播下官方 IP 所在 C 段内其他 IP 信誉与官方同级，风控不区分，
+// 允许随便换；全网随机优选的大众段 IP 才容易被信誉机制标记 403）。
+// 返回 n 个不同的 /24 内 IP（排除 .0/.255 与官方 IP 本身）。
+func sampleFromOfficialSubnet(officialIPs []string, n int, rng *rand.Rand) []string {
+	for _, s := range officialIPs {
+		ip := net.ParseIP(strings.TrimSpace(s))
+		if ip == nil || ip.To4() == nil {
+			continue
+		}
+		v4 := ip.To4()
+		// 该 /24 内可用 host（排除 .0/.255 与官方 IP）
+		var candidates []net.IP
+		for i := 1; i < 255; i++ {
+			cand := net.IPv4(v4[0], v4[1], v4[2], byte(i))
+			if cand.Equal(v4) {
+				continue
+			}
+			candidates = append(candidates, cand)
+		}
+		if len(candidates) == 0 {
+			continue
+		}
+		rng.Shuffle(len(candidates), func(i, j int) { candidates[i], candidates[j] = candidates[j], candidates[i] })
+		if len(candidates) > n {
+			candidates = candidates[:n]
+		}
+		out := make([]string, len(candidates))
+		for i, c := range candidates {
+			out[i] = c.String()
+		}
+		return out
+	}
+	return nil
+}
+
+// optimizeFastIPs 三阶段优选入口（同步，≤10s）：
+//   有缓存(12h) → 直接返回；无缓存 → 从官方解析 IP 的 /24 段采样
+//   （无官方 IP 回退全网 50 网段）→ 2s 延迟排序 top10 + 8s 下载测速
+//   top3 → 写缓存。
+func optimizeFastIPs(cachePath string, officialIPs []string) []string {
 	// 0. 缓存优先
 	if cached := readIPCache(cachePath); len(cached) > 0 {
 		return cached
 	}
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	// 1. 50 个不同网段采样
-	cands := sampleAcrossSubnets(50, rng)
+	// 1. 候选采样：官方 IP 的 /24 段优先（信誉同官方），全网 50 网段兜底
+	cands := sampleFromOfficialSubnet(officialIPs, 100, rng)
+	if len(cands) == 0 {
+		cands = sampleAcrossSubnets(50, rng)
+	}
 	if len(cands) == 0 {
 		return nil
 	}
