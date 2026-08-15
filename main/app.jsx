@@ -9,9 +9,11 @@ import React, {
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   AppState,
   BackHandler,
   DeviceEventEmitter,
+  Easing,
   Image,
   Linking,
   PermissionsAndroid,
@@ -43,6 +45,7 @@ import BrowseScreen from './screens/Browse';
 import HistoryScreen from './screens/History';
 import MoreScreen from './screens/More';
 import ChapterInfoScreen, { ReaderWrapper } from './screens/workScreen';
+import { getEchBase } from './web/echKy';
 import { LibraryDAO } from './storage/dao/LibraryDAO';
 import { ProgressDAO } from './storage/dao/ProgressDAO';
 import { KudoHistoryDAO } from './storage/dao/KudosHistoryDAO';
@@ -452,6 +455,65 @@ const App = () => {
   const { t } = useTranslation();
   const hasAddedInitialScreen = useRef(false);
 
+  // 2026-08-15 启动门控（App 级）：ECH 链路（含 CF IP 优选）就绪前
+  // 全局显示"正在优化网络连接..."进度条，完成后才允许操作（用户要求
+  // App 启动就自动优化，不是点浏览才开始）。
+  const [optimizing, setOptimizing] = useState(true);
+  const progressAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    getEchBase()
+      .catch(() => {})
+      .finally(() => setOptimizing(false));
+  }, []);
+  useEffect(() => {
+    if (!optimizing) return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(progressAnim, { toValue: 1, duration: 1400, easing: Easing.out(Easing.quad), useNativeDriver: false }),
+        Animated.timing(progressAnim, { toValue: 0, duration: 1400, easing: Easing.in(Easing.quad), useNativeDriver: false }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [optimizing, progressAnim]);
+
+  const renderOptimizingOverlay = () => {
+    if (!optimizing) return null;
+    const barWidth = progressAnim.interpolate({
+      inputRange: [0, 1],
+      outputRange: ['8%', '96%'],
+    });
+    return (
+      <View
+        style={{
+          position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+          alignItems: 'center', justifyContent: 'center',
+          backgroundColor: currentTheme.backgroundColor,
+          zIndex: 9999,
+        }}
+      >
+        <View
+          style={{
+            width: '80%', height: 6, borderRadius: 3,
+            backgroundColor: currentTheme.cardBackground,
+            overflow: 'hidden', marginBottom: 16,
+          }}
+        >
+          <Animated.View
+            style={{
+              height: '100%', width: barWidth, borderRadius: 3,
+              backgroundColor: currentTheme.primaryColor,
+            }}
+          />
+        </View>
+        <Text style={{ color: currentTheme.textColor, fontSize: 15 }}>正在优化网络连接...</Text>
+        <Text style={{ color: currentTheme.secondaryTextColor, fontSize: 12, marginTop: 6 }}>
+          正在挑选最快的网络线路，请稍候
+        </Text>
+      </View>
+    );
+  };
+
   const navigation = useNavigation();
 
   useEffect(() => {
@@ -860,6 +922,7 @@ const App = () => {
             {screens[screens.length - 1]}
           </View>
         </View>
+        {renderOptimizingOverlay()}
         <CustomToast currentTheme={currentTheme} />
       </>
     )
@@ -907,6 +970,7 @@ const App = () => {
         />
       </SafeAreaView>
 
+      {renderOptimizingOverlay()}
       <CustomToast currentTheme={currentTheme} />
     </View>
   );
