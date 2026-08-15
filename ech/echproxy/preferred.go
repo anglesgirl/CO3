@@ -80,7 +80,7 @@ func scanPreferredCFIPs(n int, budget time.Duration) []string {
 	if remain < timeout {
 		timeout = remain
 	}
-	return speedScanCFIPs(ips, n, 64, timeout)
+	return speedScanCFIPs(ips, n, 16, timeout)
 }
 
 // speedScanCFIPs 并发测速候选 IP，按总耗时升序返回最快的前 n 个。

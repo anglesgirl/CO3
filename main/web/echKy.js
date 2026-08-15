@@ -586,6 +586,27 @@ const echKy = ky.create({
         return response;
       },
     ],
+    beforeError: [
+      // 403 诊断：打印响应体前 500 字符，区分 CF challenge / 错误页 / 其他。
+      // 2026-08-15 UA 修复后仍 403 —— 需要响应体才能定位拦截类型。
+      async (error) => {
+        if (error?.response?.status === 403) {
+          try {
+            const body = await error.response.clone().text();
+            const head = body.slice(0, 500);
+            const marker = /challenge-platform|_cf_chl_opt/i.test(head)
+              ? 'CF_CHALLENGE'
+              : /cf-error-details|cf-ray/i.test(head)
+                ? 'CF_ERROR_PAGE'
+                : 'PLAIN';
+            console.log(`[ECH] 403 body (${body.length}b, ${marker}): ${head}`);
+          } catch (e) {
+            console.log(`[ECH] 403 but body unreadable: ${e?.message ?? e}`);
+          }
+        }
+        return error;
+      },
+    ],
   },
 });
 
