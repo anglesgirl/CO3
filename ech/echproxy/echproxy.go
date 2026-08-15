@@ -444,12 +444,10 @@ func Start(listen, target, echB64, doh, ipList, cpArg string, insecure bool) err
 		}
 		customIPs = fresh
 		mu.Unlock()
-		// 重建 transport：hostDialContext 每次调用读 customIPs（cands 构建），
-		// 但候选顺序要生效需重跑 transportFor 的 DialTLSContext 闭包 ——
-		// 闭包引用 hc，而 hostConf 缓存了旧 transport，重置即可。
-		hostsMu.Lock()
-		hostConfs = map[string]*hostConf{}
-		hostsMu.Unlock()
+		// ⚠️ 不重置 hostConfs！customIPs 是全局变量，hostDialContext 每次
+		// dial 都实时读它（cands 构建时 mu.Lock），新连接自动用新候选。
+		// 重置 hostConfs 会把预热好的 transport/连接池一起杀掉（2026-08-15
+		// 实测：扫描完成重置后 works 请求被迫重建连接，30s+53s 才 200）。
 		setDNSInfo("preferred IP scan: %d fastest edge IPs prepended: %v", len(ips), ips)
 		log.Printf("echproxy: preferred IP scan done in %v: %v", time.Since(start), ips)
 	}()
