@@ -420,27 +420,33 @@ func Start(listen, target, echB64, doh, ipList, cpArg string, insecure bool) err
 	// 有缓存(12h)立即返回；无缓存 → 采样50不同网段 + TCP延迟排序2s
 	// top10 → speed.cloudflare.com 下载测速8s top3 → 写缓存。
 	// 同步执行：启动即绑定最快 IP（"不再乱跳"），总耗时 ≤10s。
+	// ⚠️ 2026-08-15 实测修正：优选 IP 只能作兜底，不能前置！04:06 日志
+	// 优选 IP 前置后 403 复现，而 00:52/01:26 用远程配置官方 IP 一直
+	// 200 —— CF 风控信誉机制盯上大众优选段 IP（自选 IP 被标记的几率
+	// 远高于官方解析 IP）。候选顺序：官方解析 IP 优先，优选 IP 殿后。
 	fastStart := time.Now()
 	fastIPs := optimizeFastIPs(cpArg)
 	if len(fastIPs) > 0 {
 		mu.Lock()
 		seen := make(map[string]bool, len(customIPs)+len(fastIPs))
-		fresh := make([]string, 0, len(fastIPs)+len(customIPs))
-		for _, ip := range fastIPs {
-			if !seen[ip] && isCloudflareAS13335(ip) {
-				seen[ip] = true
-				fresh = append(fresh, ip)
-			}
-		}
+		fresh := make([]string, 0, len(customIPs)+len(fastIPs))
+		// 1) 官方解析 IP（远程配置）优先 —— 信誉高，403 概率低
 		for _, ip := range customIPs {
 			if !seen[ip] {
 				seen[ip] = true
 				fresh = append(fresh, ip)
 			}
 		}
+		// 2) 优选 IP 殿后 —— 官方 IP 失败（被墙/超时）时兜底
+		for _, ip := range fastIPs {
+			if !seen[ip] && isCloudflareAS13335(ip) {
+				seen[ip] = true
+				fresh = append(fresh, ip)
+			}
+		}
 		customIPs = fresh
 		mu.Unlock()
-		setDNSInfo("preferred IP scan: %d fastest edge IPs prepended: %v (took %v)", len(fastIPs), fastIPs, time.Since(fastStart))
+		setDNSInfo("preferred IP scan: %d fallback edge IPs appended: %v (took %v)", len(fastIPs), fastIPs, time.Since(fastStart))
 		log.Printf("echproxy: preferred IP scan done in %v: %v", time.Since(fastStart), fastIPs)
 	} else {
 		log.Printf("echproxy: preferred IP scan: none (took %v)", time.Since(fastStart))
@@ -860,14 +866,15 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 					mu.Lock()
 					seen := make(map[string]bool, len(customIPs)+len(ips))
 					var fresh []string
-					for _, ip := range ips {
-						if !seen[ip] && isCloudflareAS13335(ip) {
+					// 官方解析 IP（远程配置）优先，优选 IP 殿后兜底
+					for _, ip := range customIPs {
+						if !seen[ip] {
 							seen[ip] = true
 							fresh = append(fresh, ip)
 						}
 					}
-					for _, ip := range customIPs {
-						if !seen[ip] {
+					for _, ip := range ips {
+						if !seen[ip] && isCloudflareAS13335(ip) {
 							seen[ip] = true
 							fresh = append(fresh, ip)
 						}
