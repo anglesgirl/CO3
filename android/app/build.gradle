@@ -1,6 +1,12 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
+
+// 只打包实际用到的图标字体（代码仅用 MaterialIcons + MaterialCommunityIcons），
+// 其余 17 套 .ttf 不再进 APK。省 ~2.3MB（3.8M → 1.5M）。2026-08-15
+project.ext.vectoricons = [
+    iconFontNames: ['MaterialIcons.ttf', 'MaterialCommunityIcons.ttf']
+]
 apply from: file("../../node_modules/react-native-vector-icons/fonts.gradle")
 
 react {
@@ -13,7 +19,7 @@ repositories {
     flatDir { dirs "$projectDir/libs" }
 }
 
-def enableProguardInReleaseBuilds = false
+def enableProguardInReleaseBuilds = true
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
 // The gomobile-built ECH proxy is placed here by android-ech.yml (or locally by
@@ -41,8 +47,8 @@ android {
         applicationId "com.anglesya.co3"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 30
-        versionName "1.0.30"
+        versionCode 31
+        versionName "1.0.31"
     }
 
     splits {
@@ -82,6 +88,7 @@ android {
         release {
             signingConfig signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
+            shrinkResources enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
     }

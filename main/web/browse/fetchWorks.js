@@ -251,6 +251,10 @@ export async function fetchFilteredWorks(filters = {}, page = 1) {
         }
 
         const doc = new DomParser().parseFromString(response, "text/html");
+        if (!doc || typeof doc.getElementsByTagName !== 'function') {
+            console.error('[fetchFilteredWorks] HTML 解析失败(空响应/网络错误)');
+            return { works: [], currentPage: page, maxPages: page, hasMore: false };
+        }
 
         const workElements = Array.from(doc.getElementsByTagName("li"))
             .filter(li => li.getAttribute("class")?.includes("work blurb"));

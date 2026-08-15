@@ -1,6 +1,19 @@
 let DomParser = require('react-native-html-parser').DOMParser;
 
+// 安全解析 HTML：网络失败/525/空响应时 html 可能是 undefined/空，
+// parseFromString 会抛或返回 undefined → 上层 getElementsByTagName 崩溃
+// （worksScreen "Cannot read property 'getElementsByTagName' of undefined"）。
+function safeParse(html) {
+  if (!html || typeof html !== 'string') return null;
+  try {
+    return new DomParser().parseFromString(html, 'text/html') || null;
+  } catch {
+    return null;
+  }
+}
+
 function elementsNamed(doc, tagName, fieldName) {
+  if (!doc || typeof doc.getElementsByTagName !== 'function') return [];
   return Array.from(doc.getElementsByTagName(tagName)).filter(
     element => element.getAttribute('name') === fieldName,
   );
@@ -12,7 +25,8 @@ export function parseAuthenticityToken(doc) {
 }
 
 export function parseBookmarkForm(html) {
-  const doc = new DomParser().parseFromString(html, 'text/html');
+  const doc = safeParse(html);
+  if (!doc) return { token: null, pseudId: null };
   const token = parseAuthenticityToken(doc);
   const input = elementsNamed(doc, 'input', 'bookmark[pseud_id]')[0];
   // AO3 renders a select for accounts with multiple pseuds. Its selected
@@ -27,7 +41,8 @@ export function parseBookmarkForm(html) {
 }
 
 export function parseMarkForLaterForm(html) {
-  const doc = new DomParser().parseFromString(html, 'text/html');
+  const doc = safeParse(html);
+  if (!doc) return { action: null, token: null };
   const forms = Array.from(doc.getElementsByTagName('form'));
   const form = forms.find(item => item.getAttribute('action')?.includes('/mark_for_later'));
   return {
