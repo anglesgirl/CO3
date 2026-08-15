@@ -522,6 +522,8 @@ var hopByHop = map[string]bool{
 }
 
 func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// 请求耗时起点（诊断用：区分握手慢 vs 传输慢）
+	reqStart := time.Now()
 	// X-Ech-Target lets the app route other hosts (e.g. a translation API)
 	// through the same DoH + ECH path instead of the poisoned system resolver.
 	target := h.target
@@ -583,6 +585,9 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	// 处理耗时诊断（2026-08-15）：移动宽带吞吐极低(实测 13.8KB/s)，
+	// 大页面下载慢 → 打每请求总耗时到状态栏，日志定位是握手慢还是传输慢。
+	setStatus("req %s %s → %d in %v", r.Method, r.URL.Path, resp.StatusCode, time.Since(reqStart))
 	// 403 诊断：CF challenge / 风控 / 其他？把响应体前 500 字节打进状态，
 	// 下次再 403 直接从日志看出是哪类拦截（challenge-platform=CF 验证页）。
 	if resp.StatusCode == 403 {

@@ -247,19 +247,23 @@ function buildPageTranslator(targetLang) {
       return out;
     }
     // 打字机效果：翻译结果逐字写入（用户要求：字一个个跳动，不干等）。
-    // 33ms/tick × 12 字符 ≈ 每秒 360 字符 —— 短文本瞬间完成，长文本
-    // 有流式翻译感。节点被移除（页面跳转）自动停止。
+    // 速度自适应：动画总时长 ~3-6s。短文本每 tick 2-3 字（跳动清晰），
+    // 长文本自动加快（避免 2000 字等 1 分钟）。40ms/tick：
+    //   ≤300字: ~2字/tick ≈ 4-6s；1000字: ~7字/tick ≈ 6s；2000字: ~14字/tick
+    // 之前 SPEED=12 固定太快（360字/s），短文本瞬间写完看不出跳动。
+    // 节点被移除（页面跳转）自动停止。
     function typewrite(node, text) {
       var parent = node.parentElement;
       if (!parent) { node.nodeValue = text; return; }
-      var SPEED = 12;
+      var INTERVAL = 40;
+      var SPEED = Math.max(2, Math.ceil(text.length / 150));
       var idx = 0;
       var timer = setInterval(function() {
         if (!node.parentElement) { clearInterval(timer); return; }
         idx = Math.min(idx + SPEED, text.length);
         node.nodeValue = text.slice(0, idx);
         if (idx >= text.length) clearInterval(timer);
-      }, 33);
+      }, INTERVAL);
     }
     // 写回翻译结果（placeholder 直接设；文本节点打字机动画）。
     function applyTr(it, tr) {
