@@ -246,13 +246,28 @@ function buildPageTranslator(targetLang) {
       }
       return out;
     }
-    // 写回翻译结果（placeholder / 文本节点）。
+    // 打字机效果：翻译结果逐字写入（用户要求：字一个个跳动，不干等）。
+    // 33ms/tick × 12 字符 ≈ 每秒 360 字符 —— 短文本瞬间完成，长文本
+    // 有流式翻译感。节点被移除（页面跳转）自动停止。
+    function typewrite(node, text) {
+      var parent = node.parentElement;
+      if (!parent) { node.nodeValue = text; return; }
+      var SPEED = 12;
+      var idx = 0;
+      var timer = setInterval(function() {
+        if (!node.parentElement) { clearInterval(timer); return; }
+        idx = Math.min(idx + SPEED, text.length);
+        node.nodeValue = text.slice(0, idx);
+        if (idx >= text.length) clearInterval(timer);
+      }, 33);
+    }
+    // 写回翻译结果（placeholder 直接设；文本节点打字机动画）。
     function applyTr(it, tr) {
       if (it.ph) {
         it.el.setAttribute('placeholder', tr);
       } else if (it.node && it.node.parentElement) {
         it.node.parentElement.setAttribute('data-ech-tr', '1');
-        it.node.nodeValue = tr;
+        typewrite(it.node, tr);
       }
     }
     // 逐条翻译（超长分段；普通文本批量，q 总量 ≤3500 动态分批）
