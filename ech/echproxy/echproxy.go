@@ -1004,12 +1004,29 @@ func resolveDoHHostIPs(doh string) []string {
 		}
 		host := u.Hostname()
 		var ips []string
-		if addrs, err := net.LookupHost(host); err == nil {
-			for _, a := range addrs {
-				if net.ParseIP(a) != nil {
-					ips = append(ips, a)
+		// ⚠️ net.LookupHost 无超时：移动宽带被污染的系统 DNS 能卡 30s+
+		// （2026-08-15 实测：第二次冷启动 Start() 卡 30s，works 请求在
+		// beforeRequest 等 getEchBase 干等）。3s 超时，失败走内置快照。
+		type lookupRes struct {
+			addrs []string
+			err   error
+		}
+		lch := make(chan lookupRes, 1)
+		go func() {
+			addrs, err := net.LookupHost(host)
+			lch <- lookupRes{addrs, err}
+		}()
+		select {
+		case r := <-lch:
+			if r.err == nil {
+				for _, a := range r.addrs {
+					if net.ParseIP(a) != nil {
+						ips = append(ips, a)
+					}
 				}
 			}
+		case <-time.After(3 * time.Second):
+			// 超时：跳过系统 DNS，直接用内置快照
 		}
 		// 内置快照兜底(系统 DNS 被污染时仍能用)。
 		for _, b := range builtinDoHHostIPs {
