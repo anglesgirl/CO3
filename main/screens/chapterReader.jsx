@@ -21,8 +21,7 @@ import { CommentsScreen } from '../components/Reader/commentsScreen';
 import { getJsonSettings } from '../storage/jsonSettings';
 import Toast from 'react-native-toast-message';
 import { useTranslation } from 'react-i18next';
-import { translateHtmlCached, getTargetLang } from '../web/translate';
-import { getEchBase } from '../web/echKy';
+import { translateHtmlCached } from '../web/translate';
 import { userErrorMessage } from '../utils/userError';
 import TranslateMenu from '../components/common/TranslateMenu';
 
@@ -122,6 +121,7 @@ const ChapterReader = ({
   const [translatedHtml, setTranslatedHtml] = useState(null);
   const [transMode, setTransMode] = useState('original'); // 'original' | 'translated' | 'bilingual'
   const [translating, setTranslating] = useState(false);
+  const [trProgress, setTrProgress] = useState(null); // {done, total} 翻译进度
   const [menuVisible, setMenuVisible] = useState(false);
 
   // Reset when the chapter changes.
@@ -137,24 +137,20 @@ const ChapterReader = ({
       return;
     }
     setTranslating(true);
+    setTrProgress(null);
     try {
-      // 2026-08-15 流式翻译（用户要求：不再等全部翻译完成才显示）：
-      // 翻译逻辑从 RN 层移到 WebView 内 —— 注入脚本分批调 gtx（走本地
-      // 代理），每批完成立即替换对应文本节点 → 边翻译边出字。
+      // 2026-08-15 RN 层翻译（用户要求：不用 WebView 内 fetch）：
+      // translateHtmlCached 每批完成回调 onProgress → 显示"翻译中 x/y"
+      // 进度（不干等）；完成后 WebView 显示 + 打字机逐字跳出。
       const bilingual = mode === 'bilingual';
-      const doInject = async () => {
-        const base = await getEchBase();
-        const port = new URL(base).port;
-        const tl = await getTargetLang();
-        webViewRef.current?.injectJavaScript(buildStreamTranslator(port, bilingual, tl));
-      };
-      if (transMode !== 'original' && transMode !== mode) {
-        // 已有翻译在跑/完成：reload 原文重置 DOM + __co3Stream，再流式
-        webViewRef.current?.reload();
-        setTimeout(doInject, 800);
-      } else {
-        doInject();
-      }
+      const out = await translateHtmlCached(
+        `ch_${chapterID || workId}`,
+        htmlContent,
+        undefined,
+        (done, total) => setTrProgress({ done, total }),
+        bilingual,
+      );
+      setTranslatedHtml(out);
       setTransMode(mode);
     } catch (e) {
       Toast.show({
@@ -164,15 +160,9 @@ const ChapterReader = ({
       });
     } finally {
       setTranslating(false);
+      setTrProgress(null);
     }
   };
-
-  // 切回原文：重载 WebView（DOM 已被流式翻译脚本改过，reload 恢复原文）。
-  useEffect(() => {
-    if (transMode === 'original' && !translating) {
-      webViewRef.current?.reload();
-    }
-  }, [transMode, translating]);
 
   const handleTranslate = () => {
     if (translating) return;
@@ -598,83 +588,6 @@ const ChapterReader = ({
     true;
   `;
 
-  // 流式翻译脚本（2026-08-15 用户要求）：WebView 内分批翻译，每批完成
-  // 立即替换对应文本节点 → 边翻译边出字，不干等。走本地代理
-  // (X-Ech-Target 头) 调 gtx。bilingual 模式译文+原文双 span。
-  const buildStreamTranslator = (port, bilingual, targetLang) => `
-    (function(){
-      if (window.__co3Stream) return;
-      window.__co3Stream = true;
-      var tl = '${targetLang || 'zh-CN'}';
-      var BILINGUAL = ${bilingual ? 'true' : 'false'};
-      var PORT = ${port};
-      var nodes = [];
-      var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-        acceptNode: function(n){
-          var p = n.parentElement;
-          if (!p) return NodeFilter.FILTER_REJECT;
-          if (/^(SCRIPT|STYLE|NOSCRIPT|TEXTAREA|CODE|PRE|SUMMARY)$/.test(p.tagName)) return NodeFilter.FILTER_REJECT;
-          if (p.closest && p.closest('.co3-tr, .co3-orig')) return NodeFilter.FILTER_REJECT;
-          return NodeFilter.FILTER_ACCEPT;
-        }
-      });
-      while (walker.nextNode()) {
-        var n = walker.currentNode;
-        if (n.nodeValue && n.nodeValue.trim()) nodes.push(n);
-      }
-      if (!nodes.length) return;
-      // 分批（每批总字符 ~1100，gtx GET URL 长度限制）
-      var BATCH_CHARS = 1100;
-      var batches = [];
-      var cur = [], curLen = 0;
-      for (var i = 0; i < nodes.length; i++) {
-        var len = nodes[i].nodeValue.length;
-        if (cur.length && curLen + len > BATCH_CHARS) { batches.push(cur); cur = []; curLen = 0; }
-        cur.push(nodes[i]); curLen += len;
-      }
-      if (cur.length) batches.push(cur);
-      function trBatch(items) {
-        var qs = items.map(function(n){ return 'q=' + encodeURIComponent(n.nodeValue.trim()); });
-        var url = 'http://127.0.0.1:' + PORT + '/translate_a/single?client=gtx&sl=auto&tl=' + tl + '&dt=t&' + qs.join('&');
-        return fetch(url, { headers: { 'X-Ech-Target': 'translate.googleapis.com' } })
-          .then(function(r){ if (!r.ok) throw 0; return r.json(); })
-          .then(function(data){
-            return data.map(function(seg){
-              if (!Array.isArray(seg) || !Array.isArray(seg[0])) return '';
-              return seg[0].map(function(x){ return Array.isArray(x) ? x[0] : ''; }).join('');
-            });
-          });
-      }
-      var bi = 0;
-      function run() {
-        if (bi >= batches.length) return;
-        var batch = batches[bi++];
-        trBatch(batch).then(function(trs){
-          batch.forEach(function(n, k){
-            var tr = trs[k];
-            if (!tr || !tr.trim()) return;
-            var lead = n.nodeValue.match(/^\\s*/)[0];
-            var trail = n.nodeValue.match(/\\s*$/)[0];
-            var core = n.nodeValue.trim();
-            if (BILINGUAL) {
-              var wrap = document.createElement('span');
-              var t = document.createElement('span');
-              t.className = 'co3-tr'; t.textContent = tr.trim();
-              var o = document.createElement('span');
-              o.className = 'co3-orig'; o.textContent = core;
-              wrap.appendChild(t); wrap.appendChild(o);
-              try { n.parentNode.replaceChild(wrap, n); } catch(e) {}
-            } else {
-              n.nodeValue = lead + tr.trim() + trail;
-            }
-          });
-          setTimeout(run, 60); // 批次间小间隔，流式节奏
-        }).catch(function(){ setTimeout(run, 60); });
-      }
-      run();
-    })();
-    true;
-  `;
 
   const renderTopBar = () => (
     <Animated.View
@@ -889,6 +802,26 @@ const ChapterReader = ({
           }}
         />
         {renderPullIndicator()}
+        {translating && trProgress && (
+          <View
+            pointerEvents="none"
+            style={{
+              position: 'absolute', top: Math.max(insets.top, 20) + 40, left: 0, right: 0,
+              alignItems: 'center',
+            }}
+          >
+            <Text
+              style={{
+                color: currentTheme.primaryColor, fontSize: 12,
+                backgroundColor: currentTheme.cardBackground,
+                paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12,
+                overflow: 'hidden',
+              }}
+            >
+              {`翻译中 ${trProgress.done}/${trProgress.total}`}
+            </Text>
+          </View>
+        )}
         {renderTopBar()}
         {renderBottomBar()}
         {renderCommentsButton()}
