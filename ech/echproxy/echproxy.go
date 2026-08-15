@@ -817,16 +817,19 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 
 		d := &net.Dialer{Timeout: dialTimeout}
 		var raw net.Conn
+		dialedIP := ""
 		// 并发尝试所有候选 IP（happy-eyeballs 风格，取第一个成功者）：
 		// 2026-08-15 —— 移动宽带下部分 CF 优选 IP 不可达（connect 超时），
 		// 串行逐个试 = 每个 5s+，最坏全试完才轮到可用 IP。并发让最快可达
 		// 的 IP 直接胜出，失败候选的连接随即关闭，总耗时 ≈ 最优 IP RTT。
 		if len(cands) == 1 {
 			raw, err = d.DialContext(ctx, "tcp", cands[0])
+			dialedIP = cands[0]
 		} else {
 			type dialRes struct {
-				c net.Conn
-				e error
+				c  net.Conn
+				e  error
+				ip string
 			}
 			dctx, cancel := context.WithTimeout(ctx, dialTimeout)
 			defer cancel()
@@ -835,7 +838,7 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 				cc := c
 				go func() {
 					conn, derr := d.DialContext(dctx, "tcp", cc)
-					ch <- dialRes{conn, derr}
+					ch <- dialRes{conn, derr, cc}
 				}()
 			}
 			var firstErr error
@@ -844,6 +847,7 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 				switch {
 				case r.e == nil && raw == nil:
 					raw = r.c // 第一个成功者胜出
+					dialedIP = r.ip
 					cancel()
 				case r.c != nil:
 					r.c.Close() // 未选中的成功连接立即关闭
@@ -965,7 +969,9 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 			return plainTLSHandshake(ctx, host, d, cands, insecure, true)
 		}
 		if hc.as13335 {
-			setShakeInfo("ok via DoH ECHAccepted=true source=%s", orNone(configInfo))
+			// 2026-08-15: 记录实际连接的边缘 IP —— 1034(Edge IP Restricted)
+			// 排查需要知道连了哪个候选(官方解析 vs DoH端点 162.159.36.x)。
+			setShakeInfo("ok via DoH ECHAccepted=true source=%s dial=%s", orNone(configInfo), dialedIP)
 		}
 		return tc, nil
 	}
