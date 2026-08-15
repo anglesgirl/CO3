@@ -631,24 +631,38 @@ const ChapterReader = ({
         )}
       </View>
 
-      <TouchableOpacity
-        style={[
-          styles.translateButton,
-          { backgroundColor: currentTheme.cardBackground },
-        ]}
-        onPress={handleTranslate}
-        disabled={translating}
-      >
-        <Icon
-          name={translating ? 'hourglass-empty' : 'translate'}
-          size={22}
-          color={
-            transMode !== 'original'
-              ? currentTheme.primaryColor
-              : currentTheme.iconColor
-          }
-        />
-      </TouchableOpacity>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        {translating && trProgress && (
+          <Text
+            style={{
+              color: currentTheme.primaryColor,
+              fontSize: 12,
+              fontWeight: '600',
+              marginRight: 6,
+            }}
+          >
+            {`${trProgress.done}/${trProgress.total}`}
+          </Text>
+        )}
+        <TouchableOpacity
+          style={[
+            styles.translateButton,
+            { backgroundColor: currentTheme.cardBackground },
+          ]}
+          onPress={handleTranslate}
+          disabled={translating}
+        >
+          <Icon
+            name={translating ? 'hourglass-empty' : 'translate'}
+            size={22}
+            color={
+              transMode !== 'original'
+                ? currentTheme.primaryColor
+                : currentTheme.iconColor
+            }
+          />
+        </TouchableOpacity>
+      </View>
     </Animated.View>
   );
 
@@ -804,27 +818,6 @@ const ChapterReader = ({
           }}
         />
         {renderPullIndicator()}
-        {translating && trProgress && (
-          <View
-            pointerEvents="none"
-            style={{
-              position: 'absolute', left: 16, right: 16,
-              bottom: insets.bottom + 64,
-              alignItems: 'center',
-            }}
-          >
-            <Text
-              style={{
-                color: '#fff', fontSize: 14, fontWeight: '600',
-                backgroundColor: 'rgba(0,0,0,0.75)',
-                paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20,
-                overflow: 'hidden',
-              }}
-            >
-              {`翻译中 ${trProgress.done}/${trProgress.total}`}
-            </Text>
-          </View>
-        )}
         {renderTopBar()}
         {renderBottomBar()}
         {renderCommentsButton()}
