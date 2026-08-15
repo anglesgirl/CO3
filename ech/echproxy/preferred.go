@@ -1,22 +1,26 @@
 package echproxy
 
-// CF IP 优选扫描（2026-08-15 参考白嫖 cfip 工具实现，与 ech-proxy-go
-// internal/cloudflare/preferred.go 同源）：
-//   1. 拉取白嫖优选 IP 列表（www.baipiao.eu.org/cloudflare/ips-v4），
-//      社区维护的活跃 CF 边缘，命中率远高于全段随机采样；失败回退内置
-//      AS13335 CIDR 随机采样。
-//   2. 并发测速：TCP connect + TLS 握手（SNI=cloudflare.com 证书验证），
-//      握手成功 = 边缘可达且能服务 CF 内容；按总耗时排序。
-//   3. 返回最快的前 n 个 —— 代理启动后前置到 customIPs，移动宽带下避免
-//      串行试不可达 IP 白等（2026-08-14 CO3 实测每次请求卡 40s+）。
+// CF IP 三阶段优选（2026-08-15 用户方案，10s 内完成）：
+//   1. 采样 50 个不同 /16 网段的 CF IP → 并发 TCP connect 延迟排序
+//      （2s 预算）→ 取延迟最低 10 个
+//   2. 绑定 speed.cloudflare.com 下载测速（8s 预算）→ 取吞吐最高 3 个
+//      （首选稳定连接基础，备用防单点）
+//   3. 结果缓存到 cachePath/ipscan.json（12h TTL）：下次启动直接复用，
+//      不再重扫；连接全失败时清缓存重扫（dial 层触发）。
+//
+// 替代原 baipiao 列表方案：列表拉取依赖外部服务且移动宽带上可能失败；
+// 本地采样 + 实测延迟/吞吐更稳，且结果可缓存。
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
-	"io"
+	"encoding/json"
 	"math/rand"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -24,170 +28,58 @@ import (
 )
 
 const (
-	baipiaoIPv4URL = "https://www.baipiao.eu.org/cloudflare/ips-v4"
-	baipiaoIPv6URL = "https://www.baipiao.eu.org/cloudflare/ips-v6"
-	probeHost      = "cloudflare.com" // 测速探活目标（CF 自有域名，任意边缘都服务）
+	// speed.cloudflare.com 下载测速端点（CF 官方，国内可达）
+	speedTestURL = "https://speed.cloudflare.com/__down?bytes=200000"
+	// 延迟筛选用 TCP 端口（移动端无 root 不能 ICMP ping，TCP connect 耗时 ≈ RTT）
+	probePort = "443"
+	// IP 缓存有效期
+	ipCacheTTL = 12 * time.Hour
 )
 
-// fetchPreferredList 拉取白嫖优选 IP 列表，过滤 AS13335。失败返回 nil。
-func fetchPreferredList(timeout time.Duration) []string {
-	client := &http.Client{Timeout: timeout}
+// --- 1. 采样 50 个不同网段 ------------------------------------------------
+
+// sampleAcrossSubnets 从 AS13335 IPv4 段展开 /16 子网列表，随机取 n 个
+// 不同子网，每个子网随机生成 1 个 IP —— 保证候选分散在不同网段。
+func sampleAcrossSubnets(n int, rng *rand.Rand) []string {
+	var subnets []*net.IPNet
+	for _, cidr := range cloudflareAS13335CIDRs {
+		ip, network, err := net.ParseCIDR(cidr)
+		if err != nil || ip.To4() == nil {
+			continue // 只取 IPv4
+		}
+		ones, _ := network.Mask.Size()
+		if ones > 16 {
+			// 比 /16 更小的段（如 /18 /20）：本身就算一个子网
+			subnets = append(subnets, network)
+			continue
+		}
+		// 展开到 /16：枚举所有 /16 前缀
+		base := network.IP.To4()
+		num := 1 << (16 - ones)
+		for i := 0; i < num; i++ {
+			s := make(net.IP, 4)
+			copy(s, base)
+			// 第 16 位之后的部分在第三字节低位：offset = 16 - ones 位
+			s[2] |= byte(i)          // 第三字节低位（/16 的 host 起始）
+			subnets = append(subnets, &net.IPNet{IP: s, Mask: net.CIDRMask(16, 32)})
+		}
+	}
+	// 洗牌取 n 个不同子网
+	rng.Shuffle(len(subnets), func(i, j int) { subnets[i], subnets[j] = subnets[j], subnets[i] })
+	if len(subnets) > n {
+		subnets = subnets[:n]
+	}
 	var out []string
-	for _, u := range []string{baipiaoIPv4URL, baipiaoIPv6URL} {
-		resp, err := client.Get(u)
-		if err != nil {
-			continue
-		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-		resp.Body.Close()
-		for _, line := range strings.Split(string(body), "\n") {
-			ip := strings.TrimSpace(line)
-			if ip == "" || !isCloudflareAS13335(ip) {
-				continue
-			}
-			out = append(out, ip)
-		}
-		if len(out) > 0 {
-			break
-		}
-	}
-	return out
-}
-
-// scanPreferredCFIPs 一键优选：拉列表 → 测速 → 最快 n 个。
-// 列表拉取失败用内置 CIDR 随机采样兜底；budget 为总时间预算。
-func scanPreferredCFIPs(n int, budget time.Duration) []string {
-	if n <= 0 {
-		n = 5
-	}
-	deadline := time.Now().Add(budget)
-	var ips []string
-	if dl := deadline.Sub(time.Now()); dl > time.Second {
-		ips = fetchPreferredList(dl)
-	}
-	if len(ips) == 0 {
-		rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-		ips = randomSampleCFIPs(256, rng)
-	}
-	if len(ips) == 0 {
-		return nil
-	}
-	// 候选数限制：预算 8s / 单 IP 最多 3s / 16 并发 ≈ 最多 ~40 个能测完。
-	// baipiao 列表可能几百个，全测会远超预算（2026-08-15 实测 256 个
-	// 随机采样跑满 48s，后台卡死还撞掉连接池）。取前 40 个足够挑出快的。
-	if len(ips) > 40 {
-		ips = ips[:40]
-	}
-	remain := deadline.Sub(time.Now())
-	if remain <= 0 {
-		return nil
-	}
-	timeout := 3 * time.Second
-	if remain < timeout {
-		timeout = remain
-	}
-	return speedScanCFIPs(ips, n, 16, timeout)
-}
-
-// speedScanCFIPs 并发测速候选 IP，按总耗时升序返回最快的前 n 个。
-func speedScanCFIPs(ips []string, n, concurrency int, timeout time.Duration) []string {
-	if len(ips) == 0 {
-		return nil
-	}
-	if concurrency <= 0 {
-		concurrency = 64
-	}
-	if timeout <= 0 {
-		timeout = 3 * time.Second
-	}
-	type result struct {
-		ip string
-		ms int64
-	}
-	results := make(chan result, len(ips))
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, concurrency)
-	for _, ip := range ips {
-		ip = strings.TrimSpace(ip)
-		if ip == "" {
-			continue
-		}
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(ip string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			if ms, ok := probeLatency(ip, timeout); ok {
-				results <- result{ip, ms}
-			}
-		}(ip)
-	}
-	wg.Wait()
-	close(results)
-
-	list := make([]result, 0, len(ips))
-	for r := range results {
-		list = append(list, r)
-	}
-	sort.Slice(list, func(i, j int) bool { return list[i].ms < list[j].ms })
-	if len(list) > n {
-		list = list[:n]
-	}
-	out := make([]string, len(list))
-	for i, r := range list {
-		out[i] = r.ip
-	}
-	return out
-}
-
-// probeLatency 单 IP 测速：TCP connect + TLS 握手（SNI=cloudflare.com）。
-func probeLatency(ip string, timeout time.Duration) (int64, bool) {
-	start := time.Now()
-	d := &net.Dialer{Timeout: timeout}
-	conn, err := d.Dial("tcp", net.JoinHostPort(ip, "443"))
-	if err != nil {
-		return 0, false
-	}
-	defer conn.Close()
-	remain := timeout - time.Since(start)
-	if remain <= 0 {
-		return 0, false
-	}
-	hctx, cancel := context.WithTimeout(context.Background(), remain)
-	defer cancel()
-	tc := tls.Client(conn, &tls.Config{
-		ServerName: probeHost,
-		MinVersion: tls.VersionTLS12,
-	})
-	if err := tc.HandshakeContext(hctx); err != nil {
-		return 0, false
-	}
-	tc.Close()
-	return time.Since(start).Milliseconds(), true
-}
-
-// randomSampleCFIPs 从内置 AS13335 CIDR 随机采样 n 个候选（列表拉取失败兜底）。
-func randomSampleCFIPs(n int, rng *rand.Rand) []string {
-	var out []string
-	seen := map[string]bool{}
-	for len(out) < n {
-		if len(cloudflareAS13335CIDRs) == 0 {
-			break
-		}
-		_, network, err := net.ParseCIDR(cloudflareAS13335CIDRs[rng.Intn(len(cloudflareAS13335CIDRs))])
-		if err != nil || network == nil {
-			continue
-		}
-		ip := randomIPInNet(network, rng)
-		if ip != nil && !seen[ip.String()] {
-			seen[ip.String()] = true
+	for _, sn := range subnets {
+		ip := randomIPInNet(sn, rng)
+		if ip != nil {
 			out = append(out, ip.String())
 		}
 	}
 	return out
 }
 
-// randomIPInNet 在网段内随机生成一个 IP（只随机低 16 位 host 位）。
+// randomIPInNet 在网段内随机生成一个 IP（host 位随机，避开 .0/.255）。
 func randomIPInNet(network *net.IPNet, rng *rand.Rand) net.IP {
 	ip := network.IP.To4()
 	bits := 32
@@ -213,4 +105,244 @@ func randomIPInNet(network *net.IPNet, rng *rand.Rand) net.IP {
 		}
 	}
 	return out
+}
+
+// --- 2. TCP connect 延迟排序（2s 预算） -----------------------------------
+
+// latencySort 并发测 TCP connect 延迟，按 RTT 升序返回前 n 个。
+// 单 IP connect 超时 1s，50 个并发 → 2s 内完成。
+func latencySort(ips []string, n int) []string {
+	type res struct {
+		ip string
+		ms int64
+	}
+	ch := make(chan res, len(ips))
+	var wg sync.WaitGroup
+	for _, ip := range ips {
+		ip = strings.TrimSpace(ip)
+		if ip == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(ip string) {
+			defer wg.Done()
+			start := time.Now()
+			d := &net.Dialer{Timeout: 1 * time.Second}
+			conn, err := d.Dial("tcp", net.JoinHostPort(ip, probePort))
+			if err != nil {
+				return
+			}
+			conn.Close()
+			ch <- res{ip, time.Since(start).Milliseconds()}
+		}(ip)
+	}
+	wg.Wait()
+	close(ch)
+	var list []res
+	for r := range ch {
+		list = append(list, r)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].ms < list[j].ms })
+	if len(list) > n {
+		list = list[:n]
+	}
+	out := make([]string, len(list))
+	for i, r := range list {
+		out[i] = r.ip
+	}
+	return out
+}
+
+// --- 3. speed.cloudflare.com 下载测速（8s 预算） ---------------------------
+
+// speedTestIP 直连候选 IP 下载 speed.cloudflare.com 测速文件，返回吞吐 B/s。
+// TLS SNI=speed.cloudflare.com（普通 TLS 即可，该域未被墙）。
+func speedTestIP(ip string, timeout time.Duration) (int64, bool) {
+	start := time.Now()
+	d := &net.Dialer{Timeout: timeout}
+	conn, err := d.Dial("tcp", net.JoinHostPort(ip, probePort))
+	if err != nil {
+		return 0, false
+	}
+	tc := tls.Client(conn, &tls.Config{ServerName: "speed.cloudflare.com", MinVersion: tls.VersionTLS12})
+	hctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := tc.HandshakeContext(hctx); err != nil {
+		tc.Close()
+		return 0, false
+	}
+	// HTTP GET 测速文件
+	req, _ := http.NewRequestWithContext(hctx, "GET", speedTestURL, nil)
+	req.Host = "speed.cloudflare.com"
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/125.0.0.0 Mobile Safari/537.36")
+	if err := req.Write(tc); err != nil {
+		tc.Close()
+		return 0, false
+	}
+	// 解析响应头 + 读 body（最多 timeout 内读多少算多少）
+	br := bufio.NewReader(tc)
+	statusLine, err := br.ReadString('\n')
+	if err != nil || !strings.HasPrefix(statusLine, "HTTP/1.1 200") && !strings.HasPrefix(statusLine, "HTTP/2 200") {
+		tc.Close()
+		return 0, false
+	}
+	// 跳过响应头到空行
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			tc.Close()
+			return 0, false
+		}
+		if strings.TrimSpace(line) == "" {
+			break
+		}
+	}
+	// 读 body（预算内尽量多读）
+	readBytes := int64(0)
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := br.Read(buf)
+		readBytes += int64(n)
+		if err != nil {
+			break
+		}
+		if time.Since(start) >= timeout {
+			break
+		}
+	}
+	tc.Close()
+	elapsed := time.Since(start).Seconds()
+	if elapsed <= 0 || readBytes <= 0 {
+		return 0, false
+	}
+	return int64(float64(readBytes) / elapsed), true
+}
+
+// speedSort 并发测速 top 候选（8s 预算内），按吞吐降序取前 n 个。
+func speedSort(ips []string, n int, budget time.Duration) []string {
+	if len(ips) == 0 {
+		return nil
+	}
+	type res struct {
+		ip  string
+		bps int64
+	}
+	perTimeout := budget / time.Duration(len(ips))
+	if perTimeout < time.Second {
+		perTimeout = time.Second
+	}
+	if perTimeout > 4*time.Second {
+		perTimeout = 4 * time.Second
+	}
+	ch := make(chan res, len(ips))
+	var wg sync.WaitGroup
+	for _, ip := range ips {
+		wg.Add(1)
+		go func(ip string) {
+			defer wg.Done()
+			bps, ok := speedTestIP(ip, perTimeout)
+			if ok {
+				ch <- res{ip, bps}
+			}
+		}(ip)
+	}
+	wg.Wait()
+	close(ch)
+	var list []res
+	for r := range ch {
+		list = append(list, r)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].bps > list[j].bps })
+	if len(list) > n {
+		list = list[:n]
+	}
+	out := make([]string, len(list))
+	for i, r := range list {
+		out[i] = r.ip
+	}
+	return out
+}
+
+// --- 缓存（12h TTL，下次启动复用） ----------------------------------------
+
+type ipCache struct {
+	IPs []string `json:"ips"`
+	TS  int64    `json:"ts"`
+}
+
+func ipCachePath(cachePath string) string {
+	if cachePath == "" {
+		return ""
+	}
+	return filepath.Join(cachePath, "ipscan.json")
+}
+
+// readIPCache 读缓存（TTL 内返回 IP，过期/损坏返回 nil）。
+func readIPCache(cachePath string) []string {
+	p := ipCachePath(cachePath)
+	if p == "" {
+		return nil
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return nil
+	}
+	var c ipCache
+	if json.Unmarshal(b, &c) != nil || len(c.IPs) == 0 {
+		return nil
+	}
+	if time.Since(time.Unix(c.TS, 0)) > ipCacheTTL {
+		return nil
+	}
+	return c.IPs
+}
+
+// writeIPCache 写缓存。
+func writeIPCache(cachePath string, ips []string) {
+	p := ipCachePath(cachePath)
+	if p == "" || len(ips) == 0 {
+		return
+	}
+	b, _ := json.Marshal(ipCache{IPs: ips, TS: time.Now().Unix()})
+	os.WriteFile(p, b, 0o644)
+}
+
+// clearIPCache 清缓存（连接失败重扫时调用）。
+func clearIPCache(cachePath string) {
+	p := ipCachePath(cachePath)
+	if p == "" {
+		return
+	}
+	os.Remove(p)
+}
+
+// --- 主流程 ---------------------------------------------------------------
+
+// optimizeFastIPs 三阶段优选入口：
+//   有缓存（12h 内）→ 直接返回，不扫；
+//   无缓存 → 采样 50 网段 → 2s 延迟排序 top10 → 8s 测速 top3 → 写缓存。
+// 总耗时 ≤10s（+缓存读取 <1ms）。
+func optimizeFastIPs(cachePath string) []string {
+	// 0. 缓存优先
+	if cached := readIPCache(cachePath); len(cached) > 0 {
+		return cached
+	}
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	// 1. 50 个不同网段采样
+	cands := sampleAcrossSubnets(50, rng)
+	if len(cands) == 0 {
+		return nil
+	}
+	// 2. 延迟排序（2s 预算）取 top10
+	top := latencySort(cands, 10)
+	if len(top) == 0 {
+		return nil
+	}
+	// 3. 下载测速（8s 预算）取 top3
+	fast := speedSort(top, 3, 8*time.Second)
+	if len(fast) == 0 {
+		return nil
+	}
+	writeIPCache(cachePath, fast)
+	return fast
 }
