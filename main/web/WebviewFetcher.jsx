@@ -208,17 +208,35 @@ function buildPageTranslator(targetLang) {
       if (ph) add(null, inputs[j], true, ph);
     }
     if (!items.length) return;
+    // 单条文本翻译（gtx 端点，走本地代理）。
+    async function translateOne(text) {
+      var url = '/translate_a/single?client=gtx&sl=auto&tl=' + encodeURIComponent(tl) + '&dt=t&q=' + encodeURIComponent(text);
+      var res = await fetch(url, { headers: { 'X-Ech-Target': 'translate.googleapis.com' } });
+      if (!res.ok) return null;
+      var data = await res.json();
+      if (!Array.isArray(data) || !Array.isArray(data[0])) return null;
+      return data[0].map(function(x){ return Array.isArray(x) ? x[0] : ''; }).join('');
+    }
+    // 超长文本分段翻译（2026-08-15 用户实测：summary 概要长文本被截断，
+    // gtx 单次 q 参数有长度上限，超长直接截断/400）。按 ~1800 字符切块，
+    // 逐块翻译后拼接；任一块失败则放弃整条（保留原文，不写半截）。
+    async function translateText(text) {
+      var CHUNK = 1800;
+      if (text.length <= CHUNK) return await translateOne(text);
+      var out = '';
+      for (var i = 0; i < text.length; i += CHUNK) {
+        var part = await translateOne(text.slice(i, i + CHUNK));
+        if (part == null) return null;
+        out += part;
+      }
+      return out;
+    }
     // 逐条翻译(登录/注册/重置页文本量小,准确性优先; 走本地代理很快)
     async function run() {
       for (var s = 0; s < items.length; s++) {
         var it = items[s];
         try {
-          var url = '/translate_a/single?client=gtx&sl=auto&tl=' + encodeURIComponent(tl) + '&dt=t&q=' + encodeURIComponent(it.text);
-          var res = await fetch(url, { headers: { 'X-Ech-Target': 'translate.googleapis.com' } });
-          if (!res.ok) continue;
-          var data = await res.json();
-          if (!Array.isArray(data) || !Array.isArray(data[0])) continue;
-          var tr = data[0].map(function(x){ return Array.isArray(x) ? x[0] : ''; }).join('');
+          var tr = await translateText(it.text);
           if (!tr || tr === it.text) continue;
           if (it.ph) {
             it.el.setAttribute('placeholder', tr);
