@@ -177,7 +177,7 @@ export async function translateHtml(html, target, endpoint, onProgress, bilingua
  * 双语 = 译文 + 原文（原文本来就直接显示），译文部分与单中完全相同。
  * 两个版本都缓存 → 单中/双语切换零重复翻译（2026-08-15 用户要求）。
  */
-export async function translateHtmlBoth(html, target, endpoint, onProgress) {
+export async function translateHtmlBoth(html, target, endpoint, onProgress, onBatch) {
   if (!html) return { single: html, bilingual: html };
   const tl = target || (await getTargetLang());
   const ep = endpoint || (await getEndpoint());
@@ -260,6 +260,14 @@ export async function translateHtmlBoth(html, target, endpoint, onProgress) {
     });
     done += 1;
     onProgress?.(done, batches.length);
+    // 2026-08-15 增量显示（用户要求：翻译一半就显示一半）：
+    // 每批完成回调部分翻译的完整 HTML（已翻批次用译文，未翻保持原文）。
+    onBatch?.({
+      done,
+      total: batches.length,
+      single: singleTokens.map(tk => tk.v).join(''),
+      bilingual: biTokens.map(tk => tk.v).join(''),
+    });
   });
 
   return {
@@ -292,7 +300,7 @@ export async function setCached(key, source, value) {
 }
 
 /** Translates HTML with a cache keyed on the source text. */
-export async function translateHtmlCached(cacheKey, html, target, onProgress, bilingual = false) {
+export async function translateHtmlCached(cacheKey, html, target, onProgress, bilingual = false, onBatch) {
   const tl = target || (await getTargetLang());
   // 单中/双语各一个 key；一次翻译同时写两个 → 切换模式零重复翻译
   // （2026-08-15 用户要求：双语和单中文应该复用效果）。
@@ -301,7 +309,7 @@ export async function translateHtmlCached(cacheKey, html, target, onProgress, bi
   const want = bilingual ? biK : singleK;
   const hit = await getCached(want, html);
   if (hit) return hit;
-  const both = await translateHtmlBoth(html, tl, undefined, onProgress);
+  const both = await translateHtmlBoth(html, tl, undefined, onProgress, onBatch);
   await Promise.all([
     setCached(singleK, html, both.single),
     setCached(biK, html, both.bilingual),

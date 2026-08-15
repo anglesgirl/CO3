@@ -149,6 +149,8 @@ const ChapterReader = ({
         undefined,
         (done, total) => setTrProgress({ done, total }),
         bilingual,
+        // 2026-08-15 增量显示：每批完成把部分翻译的 HTML 更新进 WebView
+        (partial) => setTranslatedHtml(bilingual ? partial.bilingual : partial.single),
       );
       setTranslatedHtml(out);
       setTransMode(mode);
@@ -806,15 +808,16 @@ const ChapterReader = ({
           <View
             pointerEvents="none"
             style={{
-              position: 'absolute', top: Math.max(insets.top, 20) + 40, left: 0, right: 0,
+              position: 'absolute', left: 16, right: 16,
+              bottom: insets.bottom + 64,
               alignItems: 'center',
             }}
           >
             <Text
               style={{
-                color: currentTheme.primaryColor, fontSize: 12,
-                backgroundColor: currentTheme.cardBackground,
-                paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12,
+                color: '#fff', fontSize: 14, fontWeight: '600',
+                backgroundColor: 'rgba(0,0,0,0.75)',
+                paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20,
                 overflow: 'hidden',
               }}
             >
