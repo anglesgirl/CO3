@@ -392,26 +392,18 @@ func Start(listen, target, echB64, doh, ipList, cpArg string, insecure bool) err
 			custom = append(custom, ip)
 		}
 	}
-	// 自动把 DoH 端点的 IP 并入 ECH 握手候选(用户显式 IP 之后,不覆盖)。
-	// 关键洞察(2026-08-13 实测):DoH 端点(pieqllv9i7.cloudflare-gateway.com)
-	// 解析到 162.159.36.5/20,属 AS13335。部分区域(福建)封禁目标站点
-	// (archiveofourown.org)解析到的 104.18.x.x 等 CF 边缘 IP,但 DoH 端点 IP
-	// 可达(否则 DoH 连不上,YouTube 也打不开)。ECH 握手连任意可达的
-	// AS13335 边缘即可——DoH 端点 IP 天然满足,直接复用。
-	for _, ip := range resolveDoHHostIPs(doh) {
-		if seenIP[ip] || !isCloudflareAS13335(ip) {
-			continue
-		}
-		seenIP[ip] = true
-		custom = append(custom, ip)
-	}
+	// ⚠️ 2026-08-15 移除 DoH 端点 IP 并入：162.159.36.x(Gateway 段)不是
+	// 目标域官方段。实测(05:24 日志): CO3 并发 dial 时 Gateway 段延迟低
+	// 胜出 → AO3 返回 CF 1034(Edge IP Restricted)——同一天 Han1meViewer
+	// 用同一官方 IP 104.17.48.226 稳定 200。结论：只连目标域官方段
+	// (远程配置 IP + 优选同段), 不连 Gateway 段。
 	mu.Lock()
 	customIPs = custom
 	fallbackECH = fallback
 	upstreamIPs = nil
 	mu.Unlock()
 	if len(custom) > 0 {
-		setDNSInfo("per-host DoH; ECH only for AS13335-qualified hosts; %d preferred edge IP(s) incl. DoH endpoint", len(custom))
+		setDNSInfo("per-host DoH; ECH only for AS13335-qualified hosts; %d official-segment edge IP(s)", len(custom))
 	} else {
 		setDNSInfo("per-host DoH; ECH only for AS13335-qualified hosts")
 	}
