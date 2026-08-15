@@ -4,6 +4,7 @@ import {
   Alert,
   Animated,
   BackHandler,
+  Easing,
   DeviceEventEmitter,
   Dimensions,
   FlatList,
@@ -16,6 +17,7 @@ import {
 import { fetchFilteredWorks } from '../web/browse/fetchWorks';
 import { fetchTagWorks } from '../web/browse/fetchTagsWorks';
 import { checkTagCanonical } from '../web/other/tagUtils';
+import { getEchBase } from '../web/echKy';
 import BookCard from '../components/Library/BookCard';
 import AdvancedSearchScreen from './advancedSearch';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -41,8 +43,32 @@ const BrowseScreen = ({ currentTheme, viewMode = 'med', setScreens, screens, lib
   const [works, setWorks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  // 2026-08-15 启动门控：ECH 链路（含 CF IP 优选）就绪前显示
+  // "正在优化网络..." 进度条，后续操作都等它完成（用户要求）。
+  const [optimizing, setOptimizing] = useState(true);
+  const progressAnim = useRef(new Animated.Value(0)).current;
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+
+  // ECH 就绪门控：getEchBase 完成（含优选 IP）前保持遮罩。
+  useEffect(() => {
+    getEchBase()
+      .catch(() => {})
+      .finally(() => setOptimizing(false));
+  }, []);
+
+  // 进度条循环动画（不确定进度，模拟"正在优化"）
+  useEffect(() => {
+    if (!optimizing) return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(progressAnim, { toValue: 1, duration: 1400, easing: Easing.out(Easing.quad), useNativeDriver: false }),
+        Animated.timing(progressAnim, { toValue: 0, duration: 1400, easing: Easing.in(Easing.quad), useNativeDriver: false }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [optimizing, progressAnim]);
 
   const [searchMounted, setSearchMounted] = useState(false); // mount once, never unmount
   const slideAnim = useRef(new Animated.Value(Dimensions.get('window').height)).current;
@@ -469,6 +495,44 @@ const BrowseScreen = ({ currentTheme, viewMode = 'med', setScreens, screens, lib
             " <Text style={styles.retryButtonText}>{t('general_retry')}</Text>"{' '}
           </TouchableOpacity>
         </View>
+      </View>
+    );
+  }
+
+  // 启动门控遮罩：ECH 优选完成前，整个页面只显示"正在优化网络"
+  // 进度条，后续操作全部等待（用户要求 2026-08-15）。
+  if (optimizing) {
+    const barWidth = progressAnim.interpolate({
+      inputRange: [0, 1],
+      outputRange: ['8%', '96%'],
+    });
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: currentTheme.backgroundColor }}>
+        <Animated.View
+          style={{
+            width: '80%',
+            height: 6,
+            borderRadius: 3,
+            backgroundColor: currentTheme.cardBackground,
+            overflow: 'hidden',
+            marginBottom: 16,
+          }}
+        >
+          <Animated.View
+            style={{
+              height: '100%',
+              width: barWidth,
+              borderRadius: 3,
+              backgroundColor: currentTheme.primaryColor,
+            }}
+          />
+        </Animated.View>
+        <Text style={{ color: currentTheme.textColor, fontSize: 15 }}>
+          {t('screen_browse_optimizing_network') || '正在优化网络连接...'}
+        </Text>
+        <Text style={{ color: currentTheme.secondaryTextColor, fontSize: 12, marginTop: 6 }}>
+          {t('screen_browse_optimizing_hint') || '正在挑选最快的网络线路，请稍候'}
+        </Text>
       </View>
     );
   }

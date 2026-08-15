@@ -168,7 +168,17 @@ function isTranslatable(s) {
  * so a stylesheet can render the original as muted text under the translation.
  */
 export async function translateHtml(html, target, endpoint, onProgress, bilingual = false) {
-  if (!html) return html;
+  const both = await translateHtmlBoth(html, target, endpoint, onProgress);
+  return bilingual ? both.bilingual : both.single;
+}
+
+/**
+ * translateHtmlBoth 一次翻译同时产出单中 + 双语两个版本：
+ * 双语 = 译文 + 原文（原文本来就直接显示），译文部分与单中完全相同。
+ * 两个版本都缓存 → 单中/双语切换零重复翻译（2026-08-15 用户要求）。
+ */
+export async function translateHtmlBoth(html, target, endpoint, onProgress) {
+  if (!html) return { single: html, bilingual: html };
   const tl = target || (await getTargetLang());
   const ep = endpoint || (await getEndpoint());
 
@@ -177,7 +187,11 @@ export async function translateHtml(html, target, endpoint, onProgress, bilingua
   tokens.forEach((tk, i) => {
     if (!tk.tag && isTranslatable(tk.v)) idxs.push(i);
   });
-  if (idxs.length === 0) return html;
+  if (idxs.length === 0) return { single: html, bilingual: html };
+
+  // 单中 / 双语两个版本的 token 副本
+  const singleTokens = tokens.map(tk => ({ ...tk }));
+  const biTokens = tokens.map(tk => ({ ...tk }));
 
   // Group text nodes into batches under BATCH_CHARS.
   const batches = [];
@@ -216,9 +230,6 @@ export async function translateHtml(html, target, endpoint, onProgress, bilingua
       const pairs = await mapLimit(cores, 1, async c => {
         try {
           const p = await translateChunkPairs(c, tl, ep);
-          // Google 可能对短文本返回空串译文（''）。'??' 只对 null/undefined
-          // 回退原文，空串会被原样写入 → 该文本节点消失（摘要有片段被跳过）。
-          // 必须把 '' 也一并回退为原文。
           const t = p[0]?.translated;
           const o = p[0]?.original;
           return {
@@ -237,22 +248,24 @@ export async function translateHtml(html, target, endpoint, onProgress, bilingua
       const lead = original.match(/^\s*/)[0];
       const trail = original.match(/\s*$/)[0];
       const translated = results[k] ?? original.trim();
-      if (bilingual) {
-        const origText = originals?.[k] ?? original.trim();
-        tokens[tokenIdx].v =
-          lead +
-          `<span class="co3-tr">${translated}</span>` +
-          `<span class="co3-orig">${origText}</span>` +
-          trail;
-      } else {
-        tokens[tokenIdx].v = lead + translated + trail;
-      }
+      // 单中版本
+      singleTokens[tokenIdx].v = lead + translated + trail;
+      // 双语版本：译文 + 原文
+      const origText = originals?.[k] ?? original.trim();
+      biTokens[tokenIdx].v =
+        lead +
+        `<span class="co3-tr">${translated}</span>` +
+        `<span class="co3-orig">${origText}</span>` +
+        trail;
     });
     done += 1;
     onProgress?.(done, batches.length);
   });
 
-  return tokens.map(tk => tk.v).join('');
+  return {
+    single: singleTokens.map(tk => tk.v).join(''),
+    bilingual: biTokens.map(tk => tk.v).join(''),
+  };
 }
 
 // --- cache ----------------------------------------------------------------
@@ -281,10 +294,17 @@ export async function setCached(key, source, value) {
 /** Translates HTML with a cache keyed on the source text. */
 export async function translateHtmlCached(cacheKey, html, target, onProgress, bilingual = false) {
   const tl = target || (await getTargetLang());
-  const k = `${cacheKey}_${tl}${bilingual ? '_bi' : ''}`;
-  const hit = await getCached(k, html);
+  // 单中/双语各一个 key；一次翻译同时写两个 → 切换模式零重复翻译
+  // （2026-08-15 用户要求：双语和单中文应该复用效果）。
+  const singleK = `${cacheKey}_${tl}`;
+  const biK = `${cacheKey}_${tl}_bi`;
+  const want = bilingual ? biK : singleK;
+  const hit = await getCached(want, html);
   if (hit) return hit;
-  const out = await translateHtml(html, tl, undefined, onProgress, bilingual);
-  await setCached(k, html, out);
-  return out;
+  const both = await translateHtmlBoth(html, tl, undefined, onProgress);
+  await Promise.all([
+    setCached(singleK, html, both.single),
+    setCached(biK, html, both.bilingual),
+  ]);
+  return bilingual ? both.bilingual : both.single;
 }

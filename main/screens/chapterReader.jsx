@@ -543,6 +543,39 @@ const ChapterReader = ({
       currentPullDistance = 0;
     });
 
+    // 打字机效果（2026-08-15 用户要求）：翻译模式（含 .co3-tr）时
+    // 逐字跳出现译文，不干等。速度按总字数自适应，总时长 ~8s。
+    (function(){
+      if (window.__co3Typewriter) return;
+      window.__co3Typewriter = true;
+      if (!document.querySelector('.co3-tr')) return; // 非翻译模式跳过
+      var nodes = [];
+      var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+        acceptNode: function(n){
+          var p = n.parentElement;
+          if (!p) return NodeFilter.FILTER_REJECT;
+          if (/^(SCRIPT|STYLE|NOSCRIPT|TEXTAREA|CODE|PRE)$/.test(p.tagName)) return NodeFilter.FILTER_REJECT;
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      });
+      while (walker.nextNode()) {
+        var n = walker.currentNode;
+        if (n.nodeValue && n.nodeValue.trim()) { n.__full = n.nodeValue; n.nodeValue = ''; nodes.push(n); }
+      }
+      if (!nodes.length) return;
+      var total = 0;
+      nodes.forEach(function(n){ total += n.__full.length; });
+      var SPEED = Math.max(2, Math.ceil(total / 250)); // 总时长 ~7-8s
+      var nodeIdx = 0, charIdx = 0;
+      var timer = setInterval(function(){
+        if (nodeIdx >= nodes.length) { clearInterval(timer); return; }
+        var n = nodes[nodeIdx];
+        charIdx = Math.min(charIdx + SPEED, n.__full.length);
+        n.nodeValue = n.__full.slice(0, charIdx);
+        if (charIdx >= n.__full.length) { nodeIdx++; charIdx = 0; }
+      }, 30);
+    })();
+
     // Indicate that initial JavaScript has been injected and WebView is ready for commands
     webViewLog('WebView: Injected JavaScript loaded and ready.');
     setTimeout(() => webViewLog('WebView: document images=' + document.images.length), 0);

@@ -39,6 +39,8 @@ export const WorkDescription = React.memo(({ work, currentTheme, jsonSettings })
 
   const [isExpanded, setIsExpanded] = useState(false);
   const [fullHeight, setFullHeight] = useState(0);
+  // 打字机：翻译结果逐字跳出（2026-08-15 用户要求）
+  const [typedLen, setTypedLen] = useState(0);
 
   // Translation of the summary (on demand, cached per work).
   // mode: 'original' | 'translated' | 'bilingual'
@@ -79,6 +81,26 @@ export const WorkDescription = React.memo(({ work, currentTheme, jsonSettings })
     if (translating) return;
     setMenuVisible(true);
   }, [translating]);
+
+  // 打字机动画：非 preferHtml（纯文本显示）且已翻译时逐字跳出。
+  const isTranslatedMode = transMode !== 'original' && translated;
+  const isTextMode = !jsonSettings?.preferHtml;
+  useEffect(() => {
+    if (!isTranslatedMode || !isTextMode) {
+      setTypedLen(0);
+      return;
+    }
+    const total = (translated?.text || '').length;
+    if (total === 0) return;
+    setTypedLen(0);
+    const timer = setInterval(() => {
+      setTypedLen(n => {
+        if (n >= total) { clearInterval(timer); return n; }
+        return n + 4; // 每 30ms 4 字 ≈ 130 字/s
+      });
+    }, 30);
+    return () => clearInterval(timer);
+  }, [isTranslatedMode, isTextMode, translated, transMode]);
 
   const animatedHeight = useSharedValue(COLLAPSED_HEIGHT);
 
@@ -130,7 +152,10 @@ export const WorkDescription = React.memo(({ work, currentTheme, jsonSettings })
       />
     ) : (
       <Text style={[styles.description, { color: currentTheme.textColor }]}>
-        {shownText}
+        {/* 翻译模式打字机：逐字显示译文；原文模式全量显示 */}
+        {isTranslatedMode && typedLen > 0 && typedLen < (shownText || '').length
+          ? shownText.slice(0, typedLen)
+          : shownText}
       </Text>
     );
 
@@ -164,7 +189,7 @@ export const WorkDescription = React.memo(({ work, currentTheme, jsonSettings })
         {originalBlock}
       </View>
     );
-  }, [shownHtml, shownText, isBilingual, work, currentTheme, jsonSettings?.preferHtml]);
+  }, [shownHtml, shownText, isBilingual, isTranslatedMode, typedLen, work, currentTheme, jsonSettings?.preferHtml]);
 
   const isActuallyTall = fullHeight > COLLAPSED_HEIGHT;
 
