@@ -48,7 +48,7 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 31
-        versionName "1.0.31"
+        versionName "B1.0.31"
     }
 
     splits {
