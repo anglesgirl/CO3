@@ -28,6 +28,7 @@ let distinctId = null;
 let appState = null;
 
 const DISTINCT_ID_KEY = 'analytics_distinct_id';
+const NEW_USER_KEY = 'analytics_new_user_tagged';
 const MAX_PROP_LENGTH = 200;
 
 // 动态加载 SDK
@@ -114,8 +115,18 @@ export async function initAnalytics(enabled) {
 
     initialized = true;
 
+    // 首次启动标记新用户（仅第一次上报带 is_new_user，之后不再标）
+    let props = {};
+    try {
+      const tagged = await AsyncStorage.getItem(NEW_USER_KEY);
+      if (!tagged) {
+        props.is_new_user = true;
+        await AsyncStorage.setItem(NEW_USER_KEY, '1');
+      }
+    } catch (_) { /* 忽略，不影响启动上报 */ }
+
     // 上报应用启动事件
-    track('app_launch', {});
+    track('app_launch', props);
 
     // 监听应用前后台切换
     const subscription = AppState.addEventListener('change', handleAppStateChange);
