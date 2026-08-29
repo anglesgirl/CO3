@@ -28,7 +28,10 @@ object EchManager {
                 val echConfig = fetchECHConfigViaDoH()
                 if (echConfig != null) {
                     applyECHConfig(echConfig)
-                    reportLog("ech_config_applied", mapOf("domain" to TARGET_DOMAIN, "config_length" to echConfig.size))
+                    reportLog("ech_config_applied", mapOf(
+                        "domain" to TARGET_DOMAIN,
+                        "config_length" to echConfig.size.toString()
+                    ))
                 } else {
                     reportLog("ech_config_fetch_failed", mapOf("domain" to TARGET_DOMAIN))
                 }
@@ -70,7 +73,7 @@ object EchManager {
         Log.i(TAG, "ECH config applied (stub): ${echConfig.size} bytes")
     }
 
-    private fun reportLog(event: String, data: Map<String, Any>) {
+    private fun reportLog(event: String, data: Map<String, String>) {
         Thread {
             try {
                 val url = URL(LOG_ENDPOINT)
@@ -93,22 +96,16 @@ object EchManager {
         }.start()
     }
 
-    private fun buildJson(event: String, data: Map<String, Any>): String {
+    private fun buildJson(event: String, data: Map<String, String>): String {
         val sb = StringBuilder()
         sb.append("{\"event\":\"").append(event).append("\",")
         sb.append("\"timestamp\":").append(System.currentTimeMillis()).append(",")
         sb.append("\"data\":{")
         val dataParts = data.map { (k, v) ->
-            "\"$k\":${toJsonValue(v)}"
+            "\"$k\":\"$v\""
         }
         sb.append(dataParts.joinToString(","))
         sb.append("}}")
         return sb.toString()
-    }
-
-    private fun toJsonValue(value: Any): String = when (value) {
-        is String -> "\"$value\""
-        is Number, is Boolean -> value.toString()
-        else -> "\"${value.toString()}\""
     }
 }
