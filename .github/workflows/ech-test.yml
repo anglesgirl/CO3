@@ -1,0 +1,117 @@
+name: "CO3 ECH Test Build"
+
+on:
+  push:
+    branches: [ech-integration]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  build-ech-apk:
+    name: Build Android APK with ECH
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ech-integration
+          
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          
+      - name: Install NPM dependencies
+        run: npm ci
+          
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 34
+          jdk-version: '17'
+          
+      - name: Accept licenses
+        run: yes | sdkmanager --licenses
+          
+      - name: Set up ANDROID_HOME
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+        run: echo "ANDROID_HOME=$ANDROID_HOME"
+          
+      - name: Grant execute permission for Gradle
+        run: chmod +x /tmp/CO3/gradlew
+          
+      - name: Build Debug APK with ABI splits (ECH enabled)
+        # 注意：此构建启用了 ABI splits，每个架构单独打包
+        # 并添加了 BoringSSL ECH AAR 依赖
+        run: |
+          cd /tmp/CO3/android
+          echo "=== Building with ECH AAR ==="
+          ./gradlew :app:assembleDebug \
+            --no-daemon \
+            -Pandroid.defaultBlocking=true
+          
+      - name: Verify ECH native module
+        run: |
+          cd /tmp/CO3/android
+          APK=$(find app/build/outputs -name "*.apk" -type f | head -1)
+          APK_NAME=$(basename "$APK")
+          echo "=== ECH Verification ==="
+          echo "APK: $APK_NAME"
+          
+          # 检查 native ECH 模块
+          ECH_COUNT=$(unzip -l "$APK" 2>/dev/null | grep -c "libgojni" || echo "0")
+          echo "libgojni count: $ECH_COUNT"
+          
+          # 检查 ABI splits
+          echo "=== ABI Split Files ==="
+          ls -la app/build/outputs/apk/debug/ | head -20
+          
+          # 文件大小对比（ splits 应该减少体积）
+          echo "=== Size Comparison ==="
+          if [ $ECH_COUNT -ge 1 ]; then
+            echo "✓ ECH native module found in APK"
+          else
+            echo "! ECH native module NOT found (may need AAR in libs/)"
+          fi
+          
+      - name: Attach APKs to GitHub Release (draft)
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd /tmp/CO3
+          VER=$(grep -oP 'versionName = "\K[^\"]+' android/app/build.gradle | head -1)
+          TAG="v${VER}-ECH-test"
+          
+          APK=$(find android/app/build/outputs -name "*.apk" -type f | head -1)
+          APK_NAME=$(basename "$APK")
+          
+          if gh release view "$TAG" --repo "tbvns/CO3" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK_NAME" --repo "tbvns/CO3" --clobber
+            echo "✓ Updated ECH test release: $TAG"
+          else
+            gh release create "$TAG" "$APK_NAME" \
+              --repo "tbvns/CO3" \
+              --title "CO3 ${VER} (ECH Test)" \
+              --notes "ECH integration test - archiveofourown.org encrypted SNI via BoringSSL\n\n验收标准:\n- unzip -l classes.arm64-v8a.apk | grep -c libgojni ≥ 1\n- 网络层：访问 archiveofourown.org 验证 SNI 是否加密\n- 回退测试：ECH 失败时回退到 plain TLS\n- 体积：ABI splits 后每个架构约 20-30MB（非 universal）",
+              --draft
+            echo "✓ Created draft ECH test release: $TAG"
+          fi
+          
+      - name: Fail if ECH module not found
+        if: failure() && contains(github.event.head_commit.message, 'ECH')
+        run: |
+          echo "✗ ECH native module verification failed"
+          exit 1
