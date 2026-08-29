@@ -19,6 +19,7 @@ class MainApplication : Application(), ReactApplication {
         override fun getPackages(): List<ReactPackage> =
             PackageList(this).packages.apply {
                 add(LibrarySchedulerPackage())
+                add(com.co3.ech.EchNativePackage())
             }
 
         override fun getJSMainModuleName(): String = "index"
