@@ -12,10 +12,10 @@ def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 def requestedAbi  = (project.findProperty("BUILD_ABI") ?: System.getenv("BUILD_ABI"))?.trim()
 def allAbis       = ["armeabi-v7a", "arm64-v8a", "x86", "x86_64"]
 def universalOnly = requestedAbi == "universal"
-def enableSplits  = !universalOnly
-def abisToBuild   = (!universalOnly && requestedAbi)
-    ? requestedAbi.split(",").collect { it.trim() }
-    : allAbis
+
+// 移除 enableSplits 的自动计算，始终启用 splits
+def enableSplits  = true
+def abisToBuild   = allAbis  // 始终 build 所有 abi
 
 android {
     ndkVersion rootProject.ext.ndkVersion
@@ -33,12 +33,10 @@ android {
 
     // ========== ECH 集成配置开始 ==========
     
-    // AAR 依赖目录 - 相对于 module 根目录
+    // AAR 依赖 - 标准 Gradle notation
     repositories {
         mavenCentral()
         google()
-        // 使用 fileTree 从项目根目录的libs子目录加载 AAR
-        // 注意：这在 module-level build.gradle 中，所以要用相对路径
     }
     
     dependencies {
@@ -49,24 +47,26 @@ android {
     
     // ========== ECH 集成配置结束 ==========
     
-    // 强制 ABI splits - 避免 186MB universal APK
+    // 始终强制 ABI splits，避免产生 186MB universal APK
+    // 显式 include 所有架构
     splits {
         abi {
-            enable enableSplits
+            // 始终 enable，不再动态计算
+            enable true
             reset()
+            // 显式 include 所有主流架构
             include "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
-            isUniversalApk = false
+            // 不再使用 isUniversalApk，改用显式控制
+            // 是否生成 universal APK (包含所有 abi)
+            // 这里不设置，默认不生成 universal
         }
-    }
-    
-    // debug build：移除 debug 标识，避免 applicationId 改变
-    defaultConfig {
-        applicationIdSuffix = null
     }
     
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
+            // 关键：使用与 release 相同的 applicationId 和图标
+            // 防止在 Android 设备上出现 "图标变了/全新安装" 问题
             resValue "string", "app_icon", "@mipmap/ic_launcher"
             applicationId = "com.co3"
         }
