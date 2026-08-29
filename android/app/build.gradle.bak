@@ -1,6 +1,7 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
+apply from: file("../../node_modules/react-native-vector-icons/fonts.gradle")
 
 react {
     autolinkLibrariesWithApp()
@@ -31,48 +32,39 @@ android {
         versionName "B0.0.20"
     }
 
-    // ========== ECH 集成配置开始 ==========
-    
-    // 本地 AAR 依赖（BoringSSL ECH Provider）
-    repositories {
-        mavenCentral()
-        google()
-        flatDir {
-            dirs = file('libs').absolutePath
-        }
-    }
-    
-    dependencies {
-        implementation fileTree(dir: 'libs', include: ['*.aar'])
-        implementation "org.conscrypt:conscrypt-android:2.7-alpha"
-        // 如有需要可添加其他依赖
-    }
-    
-    // 强制 ABI splits - 避免 186MB universal APK
-    // debug 构建也强制分割，CI 中 assembleDebug 将产生 arm64-only APK
     splits {
         abi {
             enable enableSplits
             reset()
-            include "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
-            isUniversalApk = false
+            include(*abisToBuild)
+            universalApk universalOnly
         }
     }
-    
-    // debug build：移除 debug 标识，避免 applicationId 改变
-    // 与 release 版本保持相同的应用身份
-    defaultConfig {
-        // 确保 debug 版不添加 applicationIdSuffix
-        applicationIdSuffix = null
+
+    applicationVariants.all { variant ->
+        variant.outputs.each { output ->
+            def abiCodes = ["armeabi-v7a": 1, "arm64-v8a": 2, "x86": 3, "x86_64": 4]
+            def abi = output.getFilter(com.android.build.OutputFile.ABI)
+            if (abi != null) {
+                output.versionCodeOverride = variant.versionCode * 10 + abiCodes.get(abi, 0)
+            } else {
+                // universal: 10 * %c + 0
+                output.versionCodeOverride = variant.versionCode * 10
+            }
+        }
     }
-    
+
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
-            // 关键：debug 版使用相同图标和应用ID，避免覆盖安装问题
-            resValue "string", "app_icon", "@mipmap/ic_launcher"
-            // 防止在 Android 设备上出现 "图标变了/全新安装" 问题
-            applicationId = "com.co3"  // 显式指定 applicationId
         }
         release {
             signingConfig signingConfigs.debug
@@ -80,14 +72,25 @@ android {
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
     }
-    
-    // ========== ECH 集成配置结束 ==========
+}
+
+dependencies {
+    implementation "com.facebook.react:react-android"
+    implementation "androidx.work:work-runtime:2.11.2"
+    implementation "androidx.lifecycle:lifecycle-process:2.11.0"
+
+    if (hermesEnabled.toBoolean()) {
+        implementation("com.facebook.react:hermes-android")
+    } else {
+        implementation jscFlavor
+    }
 }
 
 gradle.projectsEvaluated {
     def codegenTaskPaths = rootProject.subprojects
         .findAll { it.tasks.findByName("generateCodegenArtifactsFromSchema") != null }
         .collect { "${it.path}:generateCodegenArtifactsFromSchema" }
+
     tasks.matching { it.name.startsWith("configureCMake") || it.name.startsWith("externalNativeBuildClean") }.all { t ->
         t.dependsOn(codegenTaskPaths)
     }

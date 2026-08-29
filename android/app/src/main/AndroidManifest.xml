@@ -13,6 +13,17 @@
       android:allowBackup="false"
       android:theme="@style/AppTheme"
       android:supportsRtl="true">
+      
+      <!-- ECH 初始化服务 - 在 Application.onCreate 期间自动注入 BoringSSL Provider -->
+      <service
+          android:name="com.co3.ech.EchInitializerService"
+          android:exported="false"
+          android:process=":ech">
+          <intent-filter>
+              <action android:name="com.co3.ech.INIT" />
+          </intent-filter>
+      </service>
+      
       <activity
         android:name=".MainActivity"
         android:label="@string/app_name"
@@ -33,11 +44,11 @@
       </activity>
 
       <service
-              android:name=".LibraryHeadlessService"
-              android:exported="false" />
+          android:name=".LibraryHeadlessService"
+          android:exported="false" />
       <service
-              android:name="app.notifee.core.ForegroundService"
-              android:foregroundServiceType="dataSync"
-              tools:node="merge" />
+          android:name="app.notifee.core.ForegroundService"
+          android:foregroundServiceType="dataSync"
+          tools:node="merge" />
     </application>
 </manifest>
