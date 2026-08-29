@@ -11,11 +11,6 @@ def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
 def requestedAbi  = (project.findProperty("BUILD_ABI") ?: System.getenv("BUILD_ABI"))?.trim()
 def allAbis       = ["armeabi-v7a", "arm64-v8a", "x86", "x86_64"]
-def universalOnly = requestedAbi == "universal"
-
-// 移除 enableSplits 的自动计算，始终启用 splits
-def enableSplits  = true
-def abisToBuild   = allAbis  // 始终 build 所有 abi
 
 android {
     ndkVersion rootProject.ext.ndkVersion
@@ -31,45 +26,22 @@ android {
         versionName "B0.0.20"
     }
 
-    // ========== ECH 集成配置开始 ==========
+    // 关键：debug buildType 中不再单独设置 applicationId
+    // 只在 defaultConfig 中统一声明，避免 AgpDecorated 冲突
     
     // AAR 依赖 - 标准 Gradle notation
-    repositories {
-        mavenCentral()
-        google()
-    }
-    
     dependencies {
-        // 标准方式：从 module 的 libs/ 目录加载所有 .aar
         implementation fileTree(dir: 'libs', include: ['*.aar'])
         implementation "org.conscrypt:conscrypt-android:2.7-alpha"
     }
-    
-    // ========== ECH 集成配置结束 ==========
-    
-    // 始终强制 ABI splits，避免产生 186MB universal APK
-    // 显式 include 所有架构
+
+    // 始终强制 ABI splits
     splits {
-        abi {
-            // 始终 enable，不再动态计算
-            enable true
-            reset()
-            // 显式 include 所有主流架构
-            include "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
-            // 不再使用 isUniversalApk，改用显式控制
-            // 是否生成 universal APK (包含所有 abi)
-            // 这里不设置，默认不生成 universal
-        }
+        include "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
     }
-    
+
     buildTypes {
-        debug {
-            signingConfig signingConfigs.debug
-            // 关键：使用与 release 相同的 applicationId 和图标
-            // 防止在 Android 设备上出现 "图标变了/全新安装" 问题
-            resValue "string", "app_icon", "@mipmap/ic_launcher"
-            applicationId = "com.co3"
-        }
+        debug { signingConfig signingConfigs.debug }
         release {
             signingConfig signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
@@ -79,10 +51,8 @@ android {
 }
 
 gradle.projectsEvaluated {
-    def codegenTaskPaths = rootProject.subprojects
-        .findAll { it.tasks.findByName("generateCodegenArtifactsFromSchema") != null }
-        .collect { "${it.path}:generateCodegenArtifactsFromSchema" }
-    tasks.matching { it.name.startsWith("configureCMake") || it.name.startsWith("externalNativeBuildClean") }.all { t ->
-        t.dependsOn(codegenTaskPaths)
-    }
+    tasks.matching { 
+        it.name.startsWith("generateCodegenFromSchema") || 
+        it.name.startsWith("externalNativeBuildClean") 
+    }.all { t -> t.dependsOn(rootProject.subprojects.find { it.tasks.findByName("generateCodegenArtifactsFromSchema") != null ) }
 }
