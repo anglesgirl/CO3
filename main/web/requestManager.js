@@ -1,4 +1,5 @@
 import ky, { TimeoutError } from 'ky';
+import { echFetch } from './echNativeKy';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fetchViaWebView } from './WebviewFetcher';
 import { Platform } from 'react-native';
@@ -112,7 +113,7 @@ export default async function getUrl(url, noWebview = false) {
   }
 
   try {
-    const html = await ky.get(url).text();
+    const html = await echFetch(url).then(r=>r.text()); // native ECH
 
     if (isCFChallenge(html)) {
       console.log(`isCfChalenged fiered with ${html}`);
