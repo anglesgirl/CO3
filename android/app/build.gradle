@@ -33,27 +33,17 @@ android {
 
     // ========== ECH 集成配置开始 ==========
     
-    // 本地 AAR 依赖（BoringSSL ECH Provider）
-    // AAR 文件位于 project_root/android/app/libs/echproxy.aar
-    // 在 settings.gradle 中包含 app 模块后，可直接写:
-    // implementation fileTree(dir: 'libs', include: ['*.aar'])
-    // 但由于 Android Gradle Plugin 的路径限制，改用 explicit path
-    
-    // 在 buildTypes 中配置 flatDir repositories，使其在 allprojects 范围内可用
-    allprojects {
-        repositories {
-            flatDir(
-                dirs: new File(
-                    new File(project.rootProject.projectDir, 'android').absolutePath,
-                    'libs'
-                ).absolutePath
-            )
-        }
+    // AAR 依赖目录 - 相对于 module 根目录
+    repositories {
+        mavenCentral()
+        google()
+        // 使用 fileTree 从项目根目录的libs子目录加载 AAR
+        // 注意：这在 module-level build.gradle 中，所以要用相对路径
     }
     
     dependencies {
-        // 直接引用 AAR 文件
-        implementation file("libs/echproxy.aar")
+        // 标准方式：从 module 的 libs/ 目录加载所有 .aar
+        implementation fileTree(dir: 'libs', include: ['*.aar'])
         implementation "org.conscrypt:conscrypt-android:2.7-alpha"
     }
     
