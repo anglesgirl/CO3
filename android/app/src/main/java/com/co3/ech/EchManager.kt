@@ -28,7 +28,7 @@ object EchManager {
                 val echConfig = fetchECHConfigViaDoH()
                 if (echConfig != null) {
                     applyECHConfig(echConfig)
-                    reportLog("ech_config_applied", mapOf("domain" to TARGET_DOMAIN, "config_length" to echConfig.length))
+                    reportLog("ech_config_applied", mapOf("domain" to TARGET_DOMAIN, "config_length" to echConfig.size))
                 } else {
                     reportLog("ech_config_fetch_failed", mapOf("domain" to TARGET_DOMAIN))
                 }
@@ -63,14 +63,12 @@ object EchManager {
     }
 
     private fun parseECHConfigFromDNS(dnsResponse: ByteArray): ByteArray? {
-        // TODO: 解析 DNS 响应中的 ECHConfigList (type 65)
-        // 暂时返回 null，后续完善
+        // TODO: parse ECHConfigList from DNS response (type 65)
         return null
     }
 
     private fun applyECHConfig(echConfig: ByteArray) {
-        // TODO: 通过 BoringSSL API 注入 ECHConfigList 到 SSL_CTX
-        // SSL_CTX_set1_ech_config_list(ctx, echConfig, echConfig.size)
+        // TODO: inject via BoringSSL SSL_CTX_set1_ech_config_list
         Log.i(TAG, "ECH config applied (stub): ${echConfig.size} bytes")
     }
 
@@ -86,12 +84,8 @@ object EchManager {
                 conn.addRequestProperty("Content-Type", "application/json")
                 conn.addRequestProperty("User-Agent", "CO3-ECH/1.0")
 
-                val payload = mapOf(
-                    "event" to event,
-                    "timestamp" to System.currentTimeMillis(),
-                    "data" to data
-                )
-                val json = payload.toString() // 简化，实际用 Gson
+                // Simple JSON serialization
+                val json = "{\"event\":\"$event\",\"timestamp\":${System.currentTimeMillis()},\"data\":${data.toJson()}}"
                 conn.outputStream.write(json.toByteArray())
                 conn.outputStream.close()
                 val respCode = conn.responseCode
@@ -100,5 +94,15 @@ object EchManager {
                 Log.w(TAG, "Log report failed: ${e.message}")
             }
         }.start()
+    }
+
+    private fun Map<String, Any>.toJson(): String {
+        return "{" + this.map { "\"${it.key}\":${toJsonValue(it.value)}" }.joinToString(",") + "}"
+    }
+
+    private fun toJsonValue(value: Any): String = when (value) {
+        is String -> "\"$value\""
+        is Number, is Boolean -> value.toString()
+        else -> "\"${value.toString()}\""
     }
 }
