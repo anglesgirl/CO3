@@ -63,12 +63,10 @@ object EchManager {
     }
 
     private fun parseECHConfigFromDNS(dnsResponse: ByteArray): ByteArray? {
-        // TODO: parse ECHConfigList from DNS response (type 65)
         return null
     }
 
     private fun applyECHConfig(echConfig: ByteArray) {
-        // TODO: inject via BoringSSL SSL_CTX_set1_ech_config_list
         Log.i(TAG, "ECH config applied (stub): ${echConfig.size} bytes")
     }
 
@@ -84,8 +82,7 @@ object EchManager {
                 conn.addRequestProperty("Content-Type", "application/json")
                 conn.addRequestProperty("User-Agent", "CO3-ECH/1.0")
 
-                // Simple JSON serialization
-                val json = "{\"event\":\"$event\",\"timestamp\":${System.currentTimeMillis()},\"data\":${data.toJson()}}"
+                val json = buildJson(event, data)
                 conn.outputStream.write(json.toByteArray())
                 conn.outputStream.close()
                 val respCode = conn.responseCode
@@ -96,8 +93,17 @@ object EchManager {
         }.start()
     }
 
-    private fun Map<String, Any>.toJson(): String {
-        return "{" + this.map { "\"${it.key}\":${toJsonValue(it.value)}" }.joinToString(",") + "}"
+    private fun buildJson(event: String, data: Map<String, Any>): String {
+        val sb = StringBuilder()
+        sb.append("{\"event\":\"").append(event).append("\",")
+        sb.append("\"timestamp\":").append(System.currentTimeMillis()).append(",")
+        sb.append("\"data\":{")
+        val dataParts = data.map { (k, v) ->
+            "\"$k\":${toJsonValue(v)}"
+        }
+        sb.append(dataParts.joinToString(","))
+        sb.append("}}")
+        return sb.toString()
     }
 
     private fun toJsonValue(value: Any): String = when (value) {
