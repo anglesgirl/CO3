@@ -41,3 +41,5 @@
               tools:node="merge" />
     </application>
 </manifest>
+<!-- ECH native module -->
+<service android:name="com.co3.ech.EchInitializerService" android:exported="false" />
