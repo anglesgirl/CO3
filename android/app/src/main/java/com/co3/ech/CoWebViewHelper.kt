@@ -1,6 +1,7 @@
 package com.co3.ech
 
 import android.util.Base64
+import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import com.liar.han1meplus.EchHttpClient
