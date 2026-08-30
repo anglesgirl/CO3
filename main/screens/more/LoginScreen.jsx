@@ -1,12 +1,11 @@
 import React, { useContext, useEffect, useState, useCallback } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View, NativeModules } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppContext } from '../../app';
-import { getUsername, getCredsToken } from '../../storage/Credentials';
+import { getUsername, getCredsToken, setCredsToken } from '../../storage/Credentials';
 import { validateCookie } from '../../web/account/login';
-import CookieManager from '@react-native-cookies/cookies';
 
 const LoginScreen = () => {
   const { currentTheme } = useContext(AppContext);
@@ -14,20 +13,33 @@ const LoginScreen = () => {
   const [user, setUser] = useState('');
   const [logged, setLogged] = useState(false);
   const [validating, setValidating] = useState(true);
+  const [debug, setDebug] = useState('');
 
   const check = useCallback(async () => {
     setValidating(true);
     try {
       const u = await getUsername();
       setUser(u || '');
-      // 优先检查 WebView Cookie（官方登录后的真实状态）
-      const cookies = await CookieManager.get('https://archiveofourown.org').catch(() => ({}));
-      const hasSession = !!(cookies && cookies['_otwarchive_session']);
-      if (hasSession) {
-        setLogged(true);
-        setValidating(false);
-        return;
-      }
+      // 1) 优先用原生 webkit CookieManager 直读（能读到 HttpOnly）
+      try {
+        const mod = NativeModules.CoCookieModule;
+        if (mod && mod.hasSession) {
+          const has = await mod.hasSession('https://archiveofourown.org/');
+          const cookie = await mod.getCookie('https://archiveofourown.org/').catch(()=> '');
+          setDebug(cookie ? cookie.slice(0,120) : 'empty');
+          if (has) {
+            setLogged(true);
+            // 同步到 Keychain，保证其他页面 validateCookie 也能过
+            try {
+              const m = cookie.match(/_otwarchive_session=([^;]+)/);
+              if (m && m[1]) await setCredsToken(decodeURIComponent(m[1]));
+            } catch {}
+            setValidating(false);
+            return;
+          }
+        }
+      } catch (e) { setDebug('native err:'+String(e).slice(0,60)); }
+      // 2) 回落旧逻辑
       const token = await getCredsToken();
       if (token) {
         const ok = await validateCookie(token).catch(() => false);
@@ -60,19 +72,19 @@ const LoginScreen = () => {
         <View style={[styles.status, { backgroundColor: currentTheme.cardBackground, borderColor: currentTheme.borderColor }]}>
           <Icon name={logged ? 'check-circle' : 'account-circle'} size={48} color={logged ? 'green' : currentTheme.placeholderColor} />
           <Text style={[styles.statusText, { color: currentTheme.textColor }]}>{logged ? `已登录：${user || 'AO3用户'}` : '未登录'}</Text>
-          <Text style={[styles.statusSub, { color: currentTheme.placeholderColor }]}>{logged ? '登录状态已通过官方页面同步，收藏/历史/下载可用' : '请通过官方页面登录，可过人机验证'}</Text>
-          {logged && <Text style={[styles.statusSub, { color: currentTheme.placeholderColor, marginTop: 6 }]}>若显示过期请点下方“官方登录”重新登录</Text>}
+          <Text style={[styles.statusSub, { color: currentTheme.placeholderColor }]}>{logged ? '官方页面登录已同步，章节/下载可用' : '请通过官方页面登录，可过人机验证'}</Text>
+          {!!debug && <Text style={[styles.statusSub, { color: currentTheme.placeholderColor, fontSize:10, marginTop:6 }]} numberOfLines={2}>cookie: {debug}</Text>}
         </View>
 
-        <Text style={[styles.section, { color: currentTheme.textColor }]}>官方操作（走 ECH 内部浏览器）</Text>
-        <Card theme={currentTheme} title="官方登录 / 切换账号" desc="打开 archiveofourown.org/users/login，可过 Cloudflare 验证" onPress={() => open('https://archiveofourown.org/users/login', '官方登录')} primary />
+        <Text style={[styles.section, { color: currentTheme.textColor }]}>官方操作（ECH 内部浏览器）</Text>
+        <Card theme={currentTheme} title="官方登录 / 切换账号" desc="archiveofourown.org/users/login" onPress={() => open('https://archiveofourown.org/users/login', '官方登录')} primary />
         <Card theme={currentTheme} title="找回密码" desc="重置密码" onPress={() => open('https://archiveofourown.org/users/password/new', '找回密码')} />
-        <Card theme={currentTheme} title="获取邀请" desc="申请新账号邀请码，查看排队人数" onPress={() => open('https://archiveofourown.org/invite_requests', '获取邀请')} />
-        <Card theme={currentTheme} title="注册新号" desc="已有邀请码在此注册" onPress={() => open('https://archiveofourown.org/users/new', '注册')} />
-        <Card theme={currentTheme} title="邀请排队查询" desc="输入邮箱查询当前位置" onPress={() => navigation.navigate('AccountCenter')} />
+        <Card theme={currentTheme} title="获取邀请" desc="申请邀请码/查看排队" onPress={() => open('https://archiveofourown.org/invite_requests', '获取邀请')} />
+        <Card theme={currentTheme} title="注册新号" desc="已有邀请码注册" onPress={() => open('https://archiveofourown.org/users/new', '注册')} />
+        <Card theme={currentTheme} title="邀请排队查询" desc="邮箱查位置" onPress={() => navigation.navigate('AccountCenter')} />
 
         <TouchableOpacity onPress={check} style={styles.refreshBtn}><Text style={{ color: currentTheme.primaryColor }}>刷新登录状态</Text></TouchableOpacity>
-        <Text style={[styles.hint, { color: currentTheme.placeholderColor }]}>提示：原生登录框已移除，全部走官方页面，避免密码明文提交被拦截。登录后章节与下载会自动携带 Cookie。</Text>
+        <Text style={[styles.hint, { color: currentTheme.placeholderColor }]}>原生登录框已移除，全部走官方页面。登录后若仍显示未登录，点“刷新”或重新进官方登录页。</Text>
       </ScrollView>
     </SafeAreaView>
   );
