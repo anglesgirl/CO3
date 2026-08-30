@@ -41,53 +41,69 @@ class CoEchInterceptor : Interceptor {
             buffer.readByteArray()
         }
 
-        return try {
-            val jsonStr = EchHttpClient.request(
-                request.method, request.url.toString(),
-                headers.toTypedArray(), bodyBytes,
-                DOH_URL, DOH_RESOLVE
-            )
-            val json = JSONObject(jsonStr)
-            val statusCode = json.optInt("statusCode", 200)
-            val bodyBase64 = json.optString("body", "")
-            val echStatus = json.optString("echStatus", "")
-            val headersJson = json.optJSONArray("headers")
+        var lastError: Exception? = null
+        repeat(2) { attempt ->
+            try {
+                val jsonStr = EchHttpClient.request(
+                    request.method, request.url.toString(),
+                    headers.toTypedArray(), bodyBytes,
+                    DOH_URL, DOH_RESOLVE
+                )
+                val json = JSONObject(jsonStr)
+                val statusCode = json.optInt("statusCode", 200)
+                val bodyBase64 = json.optString("body", "")
+                val echStatus = json.optString("echStatus", "")
+                val headersJson = json.optJSONArray("headers")
 
-            val bodyBytesDecoded = if (bodyBase64.isNotEmpty()) Base64.decode(bodyBase64, Base64.DEFAULT) else ByteArray(0)
-            var contentType: MediaType? = null
-            if (headersJson != null) {
-                for (i in 0 until headersJson.length()) {
-                    val h = headersJson.optString(i) ?: continue
-                    val idx = h.indexOf('\t')
-                    if (idx > 0 && h.substring(0, idx).equals("content-type", true)) {
-                        contentType = h.substring(idx + 1).toMediaTypeOrNull()
-                        break
+                // ECH 被拒绝时 echStatus 会含 REJECTED，视为可重试
+                if (echStatus.contains("REJECTED", true) || echStatus.contains("ECH", true) && statusCode >= 400) {
+                    throw java.io.IOException("ECH_REJECTED: $echStatus")
+                }
+
+                val bodyBytesDecoded = if (bodyBase64.isNotEmpty()) Base64.decode(bodyBase64, Base64.DEFAULT) else ByteArray(0)
+                var contentType: MediaType? = null
+                if (headersJson != null) {
+                    for (i in 0 until headersJson.length()) {
+                        val h = headersJson.optString(i) ?: continue
+                        val idx = h.indexOf('\t')
+                        if (idx > 0 && h.substring(0, idx).equals("content-type", true)) {
+                            contentType = h.substring(idx + 1).toMediaTypeOrNull()
+                            break
+                        }
                     }
                 }
-            }
-            val responseBody = bodyBytesDecoded.toResponseBody(contentType)
-            val builder = Response.Builder()
-                .request(request)
-                .protocol(Protocol.HTTP_1_1)
-                .code(statusCode)
-                .message(echStatus.ifEmpty { "OK" })
-                .body(responseBody)
+                val responseBody = bodyBytesDecoded.toResponseBody(contentType)
+                val builder = Response.Builder()
+                    .request(request)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(statusCode)
+                    .message(echStatus.ifEmpty { "OK" })
+                    .body(responseBody)
 
-            val responseHeaders = Headers.Builder()
-            if (headersJson != null) {
-                for (i in 0 until headersJson.length()) {
-                    val h = headersJson.optString(i) ?: continue
-                    val idx = h.indexOf('\t')
-                    if (idx <= 0) continue
-                    responseHeaders.add(h.substring(0, idx), h.substring(idx + 1))
+                val responseHeaders = Headers.Builder()
+                if (headersJson != null) {
+                    for (i in 0 until headersJson.length()) {
+                        val h = headersJson.optString(i) ?: continue
+                        val idx = h.indexOf('\t')
+                        if (idx <= 0) continue
+                        responseHeaders.add(h.substring(0, idx), h.substring(idx + 1))
+                    }
                 }
+                builder.headers(responseHeaders.build())
+                Log.i(TAG, "ECH OK $host -> $statusCode $echStatus attempt=${attempt+1}")
+                return builder.build()
+            } catch (e: Exception) {
+                lastError = e
+                val isEch = e.message?.contains("ECH", true) == true || e.message?.contains("REJECTED", true) == true
+                Log.w(TAG, "ECH fail $host attempt ${attempt+1}: ${e.message} isEch=$isEch")
+                if (!isEch || attempt == 1) {
+                    // 非 ECH 错误或已重试，直接回落明文（过期期间保可用）
+                    return chain.proceed(request)
+                }
+                try { Thread.sleep(300) } catch (_: Exception) {}
             }
-            builder.headers(responseHeaders.build())
-            Log.i(TAG, "ECH OK $host -> $statusCode $echStatus")
-            builder.build()
-        } catch (e: Exception) {
-            Log.e(TAG, "ECH fail $host: ${e.message}, fallback")
-            chain.proceed(request)
         }
+        Log.e(TAG, "ECH retry exhausted $host: ${lastError?.message}")
+        return chain.proceed(request)
     }
 }
