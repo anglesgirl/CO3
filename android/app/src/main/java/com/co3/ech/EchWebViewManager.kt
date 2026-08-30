@@ -103,6 +103,9 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                     val headersJson = json.optJSONArray("headers")
                     var location: String? = null
                     var isSession = false
+                    // 真正的登录成功标志：user_credentials cookie（匿名会话也有 _otwarchive_session，不能用作登录判定）
+                    var hasUserCredentials = false
+                    val htmlText = if (bodyBase64.isNotEmpty()) String(Base64.decode(bodyBase64, Base64.DEFAULT), Charsets.UTF_8) else ""
                     if (headersJson != null) {
                         for (i in 0 until headersJson.length()) {
                             val h = headersJson.optString(i) ?: continue
@@ -112,19 +115,29 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                             val value = h.substring(idx+1)
                             if (name.equals("set-cookie", true)) {
                                 try { cm.setCookie(url, value) } catch(_:Exception){}
+                                if (value.contains("user_credentials")) hasUserCredentials = true
                                 if (value.contains("_otwarchive_session")) isSession = true
                             }
                             if (name.equals("location", true) || name.equals("Location", true)) location = value
                         }
                         cm.flush()
                     }
-                    try { com.co3.Diagnostics.event("webview_postLogin_result", mapOf("status" to statusCode.toString(), "hasSession" to isSession.toString(), "location" to (location?: "").take(80))) } catch(_:Exception){}
-                    android.util.Log.i("CO-ECH", "postLogin result status="+statusCode+" location="+location+" hasSession="+isSession)
+                    // 登录成功判定：有 user_credentials（真登录）或 302 跳转
+                    val loginSuccess = hasUserCredentials || (statusCode in 300..399 && location != null)
+                    // 密码错误判定：200 且页面含错误提示
+                    val isWrongPassword = !loginSuccess && statusCode == 200 &&
+                        (htmlText.contains("Wrong username or password", true) || htmlText.contains("Invalid", true))
+                    try { com.co3.Diagnostics.event("webview_postLogin_result", mapOf("status" to statusCode.toString(), "hasSession" to isSession.toString(), "loginSuccess" to loginSuccess.toString(), "wrongPwd" to isWrongPassword.toString(), "location" to (location?: "").take(80))) } catch(_:Exception){}
+                    android.util.Log.i("CO-ECH", "postLogin result status="+statusCode+" loginSuccess="+loginSuccess+" wrongPwd="+isWrongPassword+" location="+location)
                     val bodyBytesDecoded = if (bodyBase64.isNotEmpty()) Base64.decode(bodyBase64, Base64.DEFAULT) else ByteArray(0)
                     val html = String(bodyBytesDecoded, Charsets.UTF_8)
                     webView.post {
                         try {
-                            if (statusCode in 300..399 && location != null) {
+                            if (isWrongPassword) {
+                                // 密码错误：明确提示，不要渲染成"看起来成功"
+                                evaluateJavascript("alert('用户名或密码错误，请重试');", null)
+                                webView.loadUrl("https://archiveofourown.org/users/login")
+                            } else if (statusCode in 300..399 && location != null) {
                                 val target = if (location!!.startsWith("http")) location!! else "https://archiveofourown.org" + location!!
                                 webView.loadUrl(target)
                             } else if (html.isNotEmpty()) {
