@@ -2,6 +2,8 @@ package com.co3.ech
 
 import android.content.Context
 import android.util.Log
+import org.anglesgirl.echtls.EchNative
+import org.anglesgirl.echtls.EchProbeResult
 import java.net.HttpURLConnection
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
@@ -14,10 +16,12 @@ object EchManager {
 
     init {
         try {
-            System.loadLibrary("echtls")
-            Log.i(TAG, "ECH native lib loaded")
-        } catch (e: UnsatisfiedLinkError) {
-            Log.e(TAG, "ECH native lib not loaded: ${e.message}")
+            val available = EchNative.INSTANCE.isAvailable()
+            val ver = EchNative.INSTANCE.version()
+            val err = EchNative.INSTANCE.loadFailure()
+            Log.i(TAG, "ECH native: available=$available, version=$ver, error=$err")
+        } catch (e: Exception) {
+            Log.e(TAG, "ECH native init error: ${e.message}")
         }
     }
 
@@ -27,11 +31,7 @@ object EchManager {
             try {
                 val echConfig = fetchECHConfigViaDoH()
                 if (echConfig != null) {
-                    applyECHConfig(echConfig)
-                    reportLog("ech_config_applied", mapOf(
-                        "domain" to TARGET_DOMAIN,
-                        "config_length" to echConfig.size.toString()
-                    ))
+                    probeECH(echConfig)
                 } else {
                     reportLog("ech_config_fetch_failed", mapOf("domain" to TARGET_DOMAIN))
                 }
@@ -69,8 +69,42 @@ object EchManager {
         return null
     }
 
-    private fun applyECHConfig(echConfig: ByteArray) {
-        Log.i(TAG, "ECH config applied (stub): ${echConfig.size} bytes")
+    private fun probeECH(echConfig: ByteArray) {
+        if (!EchNative.INSTANCE.isAvailable()) {
+            Log.e(TAG, "ECH native not available, skipping probe")
+            return
+        }
+        try {
+            val ips = listOf("104.18.0.1", "104.18.1.1", "172.64.146.66")
+            for (ip in ips) {
+                val result: EchProbeResult = EchNative.INSTANCE.probe(
+                    host = TARGET_DOMAIN,
+                    ip = ip,
+                    port = 443,
+                    echConfigList = echConfig,
+                    requireEch = true,
+                    timeoutMs = 10000
+                )
+                Log.i(TAG, "ECH probe $ip: $result")
+                reportLog("ech_probe_result", mapOf(
+                    "domain" to TARGET_DOMAIN,
+                    "ip" to ip,
+                    "connected" to result.connected.toString(),
+                    "handshake_ok" to result.handshakeOk.toString(),
+                    "ech_accepted" to result.echAccepted.toString(),
+                    "tls_version" to result.tlsVersion,
+                    "cipher" to result.cipher,
+                    "error" to result.error
+                ))
+                if (result.echAccepted) {
+                    Log.i(TAG, "ECH ACCEPTED on $ip!")
+                    break
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "ECH probe error: ${e.message}")
+            reportLog("ech_probe_error", mapOf("error" to e.message ?: "unknown"))
+        }
     }
 
     private fun reportLog(event: String, data: Map<String, String>) {
@@ -101,9 +135,7 @@ object EchManager {
         sb.append("{\"event\":\"").append(event).append("\",")
         sb.append("\"timestamp\":").append(System.currentTimeMillis()).append(",")
         sb.append("\"data\":{")
-        val dataParts = data.map { (k, v) ->
-            "\"$k\":\"$v\""
-        }
+        val dataParts = data.map { (k, v) -> "\"$k\":\"$v\"" }
         sb.append(dataParts.joinToString(","))
         sb.append("}}")
         return sb.toString()
