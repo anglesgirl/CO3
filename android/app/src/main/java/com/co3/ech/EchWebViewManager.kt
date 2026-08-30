@@ -26,7 +26,7 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
         wv.settings.allowFileAccess = false
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
-        wv.addJavascriptInterface(Bridge(wv), "CoBridge")
+        wv.addJavascriptInterface(Bridge(wv, reactContext), "CoBridge")
         wv.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
                 val ech = CoWebViewHelper.intercept(request)
@@ -74,7 +74,7 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
         } catch(_:Exception){}
     }
 
-    class Bridge(private val webView: WebView) {
+    class Bridge(private val webView: WebView, private val reactContext: ThemedReactContext?) {
         @JavascriptInterface fun onLoginHijacked(msg: String) {
             android.util.Log.i("CO-ECH", "login hijack: "+msg.take(120))
             try { com.co3.Diagnostics.event("webview_login_hijack", mapOf("msg" to msg.take(120))) } catch(_:Exception){}
