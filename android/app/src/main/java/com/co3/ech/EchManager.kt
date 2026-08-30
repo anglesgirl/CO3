@@ -33,11 +33,11 @@ object EchManager {
                 if (echConfig != null) {
                     probeECH(echConfig)
                 } else {
-                    reportLog("ech_config_fetch_failed", mapOf("domain" to TARGET_DOMAIN))
+                    reportLog("ech_config_fetch_failed", mapOf<String, String>("domain" to TARGET_DOMAIN))
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "ECH init error: ${e.message}")
-                reportLog("ech_init_error", mapOf("error" to e.message ?: "unknown"))
+                reportLog("ech_init_error", mapOf<String, String>("error" to (e.message ?: "unknown")))
             }
         }.start()
     }
@@ -86,7 +86,7 @@ object EchManager {
                     timeoutMs = 10000
                 )
                 Log.i(TAG, "ECH probe $ip: $result")
-                reportLog("ech_probe_result", mapOf(
+                reportLog("ech_probe_result", mapOf<String, String>(
                     "domain" to TARGET_DOMAIN,
                     "ip" to ip,
                     "connected" to result.connected.toString(),
@@ -103,7 +103,7 @@ object EchManager {
             }
         } catch (e: Exception) {
             Log.e(TAG, "ECH probe error: ${e.message}")
-            reportLog("ech_probe_error", mapOf("error" to e.message ?: "unknown"))
+            reportLog("ech_probe_error", mapOf<String, String>("error" to (e.message ?: "unknown")))
         }
     }
 
