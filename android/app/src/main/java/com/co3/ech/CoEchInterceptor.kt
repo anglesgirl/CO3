@@ -3,6 +3,7 @@ package com.co3.ech
 import android.util.Base64
 import android.util.Log
 import com.liar.han1meplus.EchHttpClient
+import android.webkit.CookieManager
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.ResponseBody.Companion.toResponseBody
@@ -28,6 +29,13 @@ class CoEchInterceptor : Interceptor {
         if (!shouldIntercept(host)) return chain.proceed(request)
 
         val headers = mutableListOf<String>()
+        // 注入 WebView 的 Cookie 到 OkHttp
+        try {
+            val cookie = CookieManager.getInstance().getCookie(request.url.toString())
+            if (!cookie.isNullOrEmpty() && request.header("Cookie") == null) {
+                headers.add("Cookie: $cookie")
+            }
+        } catch (_: Exception) {}
         for (i in 0 until request.headers.size) {
             val name = request.headers.name(i)
             val value = request.headers.value(i)

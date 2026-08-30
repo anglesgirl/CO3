@@ -53,6 +53,14 @@ object CoWebViewHelper {
                     }
                 }
                 val stream = ByteArrayInputStream(bodyBytes)
+                // 同步到 CookieManager 供 OkHttp 共享
+                try {
+                    val cm = CookieManager.getInstance()
+                    for ((k, v) in responseHeaders) {
+                        if (k.equals("set-cookie", true)) cm.setCookie(url, v)
+                    }
+                    cm.flush()
+                } catch (_: Exception) {}
                 return WebResourceResponse(mimeType, encoding, statusCode, "OK", responseHeaders, stream)
             } catch (e: Exception) {
                 val isEch = e.message?.contains("ECH", true) == true || e.message?.contains("REJECTED", true) == true

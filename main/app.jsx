@@ -85,6 +85,7 @@ import CategoryScreen from './screens/more/CategoryScreen';
 import BookmarksScreen from './screens/more/BookmarksScreen';
 import AboutScreen from './screens/more/AboutScreen';
 import WordReplacer from './screens/more/WordReplacer';
+import AccountCenter from './screens/more/AccountCenter';
 import InternalBrowser from './components/InternalBrowser';
 
 export const AppContext = createContext();
@@ -298,6 +299,7 @@ const AppWrapper = () => {
                     component={PreferencesScreen}
                   />
                   <Stack.Screen name={'Account'} component={LoginScreen} />
+                  <Stack.Screen name={'AccountCenter'} component={AccountCenter} />
                   <Stack.Screen
                     name={'KudosHistory'}
                     component={KudoHistoryScreen}
