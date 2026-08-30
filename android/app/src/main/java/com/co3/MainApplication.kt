@@ -34,6 +34,22 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    try {
+        com.liar.han1meplus.EchHttpClient.init(this)
+        android.util.Log.i("CO-ECH", "EchHttpClient init ok, isLoaded=" + com.liar.han1meplus.EchHttpClient.isLoaded)
+        // Hook React Native OkHttp
+        try {
+            val provider = Class.forName("com.facebook.react.modules.network.OkHttpClientProvider")
+            val method = provider.getMethod("setOkHttpClientFactory", Class.forName("com.facebook.react.modules.network.OkHttpClientFactory"))
+            val factory = com.co3.ech.ReactNativeEchFactory()
+            method.invoke(null, factory)
+            android.util.Log.i("CO-ECH", "OkHttpClientProvider patched")
+        } catch (e: Exception) {
+            android.util.Log.w("CO-ECH", "OkHttp hook failed (will use NativeModule only): " + e.message)
+        }
+    } catch (e: Exception) {
+        android.util.Log.e("CO-ECH", "ECH init failed: " + e.message)
+    }
     ProcessLifecycleOwner.get().lifecycle.addObserver(AppForegroundTracker)
     loadReactNative(this)
   }
