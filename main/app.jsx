@@ -539,7 +539,7 @@ const App = () => {
 
   const navigation = useNavigation();
 
-  useEffect(() => {
+  useEffect(() => { syncSessionFromNative().catch(()=>{});
     if (
       loading ||
       !libraryDAO ||

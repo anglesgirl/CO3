@@ -30,12 +30,18 @@ class CoEchInterceptor : Interceptor {
 
         val headers = mutableListOf<String>()
         // 注入 WebView 的 Cookie 到 OkHttp（双向同步核心）
+        var cookieHasSession = false
+        var cookieLen = 0
         try {
             val cookie = CookieManager.getInstance().getCookie(request.url.toString())
+            cookieLen = cookie?.length ?: 0
+            cookieHasSession = cookie?.contains("_otwarchive_session") == true
             if (!cookie.isNullOrEmpty() && request.header("Cookie") == null) {
                 headers.add("Cookie: $cookie")
             }
-        } catch (_: Exception) {}
+            Diagnostics.event("cookie_send", mapOf("host" to host, "hasSession" to cookieHasSession.toString(), "len" to cookieLen.toString(), "url" to request.url.toString().take(80)))
+            android.util.Log.i("CO-COOKIE", "OkHttp send $host hasSession=$cookieHasSession len=$cookieLen")
+        } catch (e: Exception) { Diagnostics.event("cookie_send_err", mapOf("host" to host, "err" to (e.message?:""))) }
         for (i in 0 until request.headers.size) {
             val name = request.headers.name(i)
             val value = request.headers.value(i)
@@ -108,9 +114,14 @@ class CoEchInterceptor : Interceptor {
                     val urlStr = request.url.toString()
                     for (sc in setCookies) {
                         cm.setCookie(urlStr, sc)
+                        val isSession = sc.contains("_otwarchive_session")
+                        if (isSession) {
+                            Diagnostics.event("cookie_recv_session", mapOf("host" to host, "url" to urlStr.take(80), "cookie" to sc.take(140)))
+                            android.util.Log.i("CO-COOKIE", "recv session cookie $sc")
+                        }
                     }
-                    if (setCookies.isNotEmpty()) cm.flush()
-                } catch (_: Exception) {}
+                    if (setCookies.isNotEmpty()) { cm.flush(); Diagnostics.event("cookie_recv", mapOf("host" to host, "count" to setCookies.size.toString(), "hasSession" to setCookies.any{it.contains("_otwarchive_session")}.toString())) }
+                } catch (e: Exception) { Diagnostics.event("cookie_recv_err", mapOf("host" to host, "err" to (e.message?:""))) }
                 com.co3.Diagnostics.event("ech_ok", mapOf("host" to host, "status" to statusCode, "ech" to echStatus))
                 Log.i(TAG, "ECH OK $host -> $statusCode $echStatus attempt=${attempt+1}")
                 return builder.build()
@@ -125,7 +136,7 @@ class CoEchInterceptor : Interceptor {
                 
                 // 回落：用同一 Gateway 查 cloudflare-ech.com 刷新全局 ECH（绕缓存）
                 try {
-                    val warmUrl = DOH_URL + (if (dohUrl.contains("?")) "&" else "?") + "name=cloudflare-ech.com&type=65&_=" + System.currentTimeMillis()
+                    val warmUrl = DOH_URL + (if (DOH_URL.contains("?")) "&" else "?") + "name=cloudflare-ech.com&type=65&_=" + System.currentTimeMillis()
                     val wReq = okhttp3.Request.Builder().url(warmUrl).addHeader("Accept", "application/dns-json").build()
                     val wCli = okhttp3.OkHttpClient.Builder().connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS).readTimeout(5, java.util.concurrent.TimeUnit.SECONDS).build()
                     wCli.newCall(wReq).execute().use { resp -> resp.body?.string() }

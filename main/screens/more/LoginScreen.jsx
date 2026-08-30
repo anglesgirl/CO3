@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppContext } from '../../app';
 import { getUsername, getCredsToken, setCredsToken } from '../../storage/Credentials';
 import { validateCookie } from '../../web/account/login';
+import { syncSessionFromNative } from '../../web/syncSession';
 
 const LoginScreen = () => {
   const { currentTheme } = useContext(AppContext);
@@ -17,9 +18,11 @@ const LoginScreen = () => {
 
   const check = useCallback(async () => {
     setValidating(true);
+    // 先把 WebView 的 HttpOnly 同步到 Keychain，避免旧版 14天丢失
     try {
       const u = await getUsername();
       setUser(u || '');
+      await syncSessionFromNative().catch(()=>{});
       // 1) 优先用原生 webkit CookieManager 直读（能读到 HttpOnly），但必须真校验
       try {
         const mod = NativeModules.CoCookieModule;
@@ -50,7 +53,14 @@ const LoginScreen = () => {
   useEffect(() => { check(); }, [check]);
   useFocusEffect(useCallback(() => { check(); }, [check]));
 
-  const open = (url, title) => navigation.navigate('InternalBrowser', { url, title });
+  const open = async (url, title) => {
+    // 旧 Go：登录前清 session cookie，避免带过期 session 导致 Session Expired/302
+    if (url.includes('/users/login')) {
+      try { await NativeModules.CoCookieModule.clearSession(); } catch {}
+      try { await syncSessionFromNative(); } catch {}
+    }
+    navigation.navigate('InternalBrowser', { url, title });
+  };
 
   if (validating) {
     return (

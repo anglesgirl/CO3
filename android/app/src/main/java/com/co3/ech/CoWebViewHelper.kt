@@ -4,6 +4,7 @@ import android.util.Base64
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
+import com.co3.Diagnostics
 import com.liar.han1meplus.EchHttpClient
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
@@ -19,21 +20,28 @@ object CoWebViewHelper {
 
     fun intercept(request: WebResourceRequest): WebResourceResponse? {
         val host = request.url.host ?: return null
+        // WebView 的 POST 拿不到 body（shouldInterceptRequest 无 body），旧 Go 是走 HTTP 代理所以能拿到。
+        // 这里 GET 才走 ECH，POST 放行让 WebView 直连，否则登录表单 body 丢失永远 Session Expired
+        val method = request.method ?: "GET"
+        if (method != "GET") return null
         if (!shouldIntercept(host)) return null
         repeat(2) { attempt ->
             try {
                 val url = request.url.toString()
-                val method = request.method ?: "GET"
+                // method 已在外层校验为 GET
                 // 注入 CookieManager 的 cookie（解决官方登录后 Session Expired）
                 val headersList = mutableListOf<String>()
+                var hasSession = false
                 try {
                     val cmCookie = CookieManager.getInstance().getCookie(url)
+                    hasSession = cmCookie?.contains("_otwarchive_session") == true
+                    Diagnostics.event("webview_cookie_send", mapOf("host" to host, "hasSession" to hasSession.toString(), "len" to (cmCookie?.length?:0).toString()))
+                    android.util.Log.i("CO-COOKIE", "WebView send $host hasSession=$hasSession")
                     if (!cmCookie.isNullOrEmpty()) {
-                        // 避免重复 Cookie 头
                         val hasCookie = request.requestHeaders.keys.any { it.equals("Cookie", true) }
                         if (!hasCookie) headersList.add("Cookie: $cmCookie")
                     }
-                } catch (_: Exception) {}
+                } catch (e: Exception) { Diagnostics.event("webview_cookie_err", mapOf("host" to host, "err" to (e.message?:""))) }
                 for ((k,v) in request.requestHeaders) {
                     if (k.equals("Host", true) || k.equals("Content-Length", true)) continue
                     if (k.equals("Cookie", true) && headersList.any { it.startsWith("Cookie:") }) continue
@@ -73,15 +81,16 @@ object CoWebViewHelper {
                 // 同步 Set-Cookie 到 CookieManager（OkHttp与WebView共用）
                 try {
                     val cm = CookieManager.getInstance()
+                    var sessionCount=0
                     for ((k, v) in responseHeaders) {
                         if (k.equals("set-cookie", true)) {
-                            // AO3 可能一次返回多条 set-cookie 合并，需拆分
-                            // EchHttpClient 已按头拆分，这里每条单独 set
                             cm.setCookie(url, v)
+                            if (v.contains("_otwarchive_session")) { sessionCount++; Diagnostics.event("webview_cookie_recv_session", mapOf("host" to host, "cookie" to v.take(140))) }
                         }
                     }
                     cm.flush()
-                } catch (_: Exception) {}
+                    if (sessionCount>0) android.util.Log.i("CO-COOKIE", "WebView recv $sessionCount session cookies")
+                } catch (e: Exception) { Diagnostics.event("webview_cookie_recv_err", mapOf("host" to host, "err" to (e.message?:""))) }
                 return WebResourceResponse(mimeType, encoding, statusCode, "OK", responseHeaders, stream)
             } catch (e: Exception) {
                 val isEch = e.message?.contains("ECH", true) == true || e.message?.contains("REJECTED", true) == true

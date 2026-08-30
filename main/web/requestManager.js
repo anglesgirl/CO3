@@ -14,6 +14,7 @@ import {
 import Toast from 'react-native-toast-message';
 import { navigationRef } from '../app';
 import { handleLogin } from './account/login';
+import { syncSessionFromNative } from './syncSession';
 
 const CF_STORAGE_KEY = 'cf_domains';
 const CF_MODE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
@@ -57,7 +58,8 @@ export default async function getUrl(url, noWebview = false) {
   const { hostname } = new URL(url);
 
   if (noWebview) {
-    // 后台下载/抓章：不弹 toast 刷屏，静默尝试自动登录
+    // 先同步 WebView 的 HttpOnly session 到 Keychain，再做 14天判断（修复旧版官方登录丢失）
+    syncSessionFromNative().catch(()=>{});
     getLastLogin().then(async (time) => {
       try {
         if (Date.now() - time > 14 * 24 * 60 * 60 * 1000) {
