@@ -78,7 +78,6 @@ import StorageScreen from './screens/more/StorageScreen';
 import StatsScreen from './screens/more/StatsScreen';
 import ReadLaterScreen from './screens/more/ReadLaterScreen';
 import PreferencesScreen from './screens/more/Preferences';
-import LoginScreen from './screens/more/LoginScreen';
 import KudoHistoryScreen from './screens/more/KudoHistory';
 import HelpScreen from './screens/more/HelpScreen';
 import DebugScreen from './screens/more/DebugScreen';
