@@ -93,9 +93,10 @@ object CoWebViewHelper {
                 } catch (e: Exception) { Diagnostics.event("webview_cookie_recv_err", mapOf("host" to host, "err" to (e.message?:""))) }
                 return WebResourceResponse(mimeType, encoding, statusCode, "OK", responseHeaders, stream)
             } catch (e: Exception) {
-                val isEch = e.message?.contains("ECH", true) == true || e.message?.contains("REJECTED", true) == true
-                if (!isEch || attempt == 1) return null
-                
+                // fail-closed：对 ECH 目标域名的请求，任何连接失败都按 ECH 失败处理。
+                // 错误消息可能是 "SSL connect error"（BoringSSL 握手失败）而非含 "ECH"，不能放行明文 SNI。
+                val isEch = true
+
                 // 回落：用同一 Gateway 查 cloudflare-ech.com 刷新全局 ECH（绕缓存）
                 try {
                     val warmUrl = dohUrl + (if (dohUrl.contains("?")) "&" else "?") + "name=cloudflare-ech.com&type=65&_=" + System.currentTimeMillis()
@@ -103,6 +104,7 @@ object CoWebViewHelper {
                     val wCli = okhttp3.OkHttpClient.Builder().connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS).readTimeout(5, java.util.concurrent.TimeUnit.SECONDS).build()
                     wCli.newCall(wReq).execute().use { resp -> resp.body?.string() }
                     android.util.Log.i("CO-ECH", "warm cloudflare-ech.com via Gateway done")
+                    Diagnostics.event("ech_warm_cf", mapOf("host" to host, "err" to (e.message ?: "")))
                 } catch (_: Exception) {}
                 // 通知 ech-sync Worker 立即更新 x.xn--pn1aul.eu.org 的 HTTPS 记录（App 专用 key；失败不影响主流程）
                 try {
@@ -115,11 +117,22 @@ object CoWebViewHelper {
                         .build()
                     notifyCli.newCall(notifyReq).execute().use { resp -> resp.body?.string() }
                     try { Diagnostics.event("ech_sync_notify", mapOf("host" to host, "status" to "ok")) } catch (_: Exception) {}
-                } catch (e: Exception) {
-                    try { Diagnostics.event("ech_sync_notify_fail", mapOf("host" to host, "err" to (e.message ?: "unknown"))) } catch (_: Exception) {}
+                } catch (e2: Exception) {
+                    try { Diagnostics.event("ech_sync_notify_fail", mapOf("host" to host, "err" to (e2.message ?: "unknown"))) } catch (_: Exception) {}
                 }
 
-                try { Thread.sleep(300) } catch (_: Exception) {}
+                if (attempt == 0) {
+                    try { Thread.sleep(300) } catch (_: Exception) {}
+                    return@repeat
+                }
+                // 重试仍失败：返回错误响应（fail-closed，不暴露 SNI）
+                Diagnostics.event("ech_fail_webview", mapOf("host" to host, "err" to (e.message ?: "unknown")))
+                return WebResourceResponse(
+                    "text/html", "utf-8", 502,
+                    "ECH Connection Failed",
+                    mapOf("Cache-Control" to "no-store"),
+                    ByteArrayInputStream("<!DOCTYPE html><html><body><h3>ECH 连接失败 (fail-closed)</h3><p>${e.message?.let { it.replace("<","&lt;") } ?: "unknown"}</p></body></html>".toByteArray())
+                )
             }
         }
         return null

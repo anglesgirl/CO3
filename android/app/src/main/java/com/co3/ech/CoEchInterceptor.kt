@@ -128,11 +128,14 @@ class CoEchInterceptor : Interceptor {
                 return builder.build()
             } catch (e: Exception) {
                 lastError = e
-                val isEch = e.message?.contains("ECH", true) == true || e.message?.contains("REJECTED", true) == true
+                // fail-closed：对 ECH 目标域名的请求，任何连接失败都按 ECH 失败处理。
+                // 错误消息可能是 "SSL connect error"（BoringSSL 握手失败）而非含 "ECH"，不能放行明文 SNI。
+                val isEch = true
                 com.co3.Diagnostics.event("ech_fail", mapOf("host" to host, "attempt" to (attempt+1), "error" to (e.message ?: "unknown")))
                 Log.w(TAG, "ECH fail $host attempt ${attempt+1}: ${e.message} isEch=$isEch")
                 if (!isEch || attempt == 1) {
-                    return chain.proceed(request)
+                    // fail-closed：不放行明文直连（会暴露 SNI），重试耗尽后抛异常
+                    throw e
                 }
                 
                 // 回落：用同一 Gateway 查 cloudflare-ech.com 刷新全局 ECH（绕缓存）
@@ -142,6 +145,7 @@ class CoEchInterceptor : Interceptor {
                     val wCli = okhttp3.OkHttpClient.Builder().connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS).readTimeout(5, java.util.concurrent.TimeUnit.SECONDS).build()
                     wCli.newCall(wReq).execute().use { resp -> resp.body?.string() }
                     android.util.Log.i("CO-ECH", "warm cloudflare-ech.com via Gateway done")
+                    com.co3.Diagnostics.event("ech_warm_cf", mapOf("host" to host, "err" to (e.message ?: "")))
                 } catch (_: Exception) {}
                 // 通知 ech-sync Worker 立即更新 x.xn--pn1aul.eu.org 的 HTTPS 记录（App 专用 key；失败不影响主流程）
                 try {
@@ -162,6 +166,7 @@ class CoEchInterceptor : Interceptor {
             }
         }
         Log.e(TAG, "ECH retry exhausted $host: ${lastError?.message}")
-        return chain.proceed(request)
+        // fail-closed：重试耗尽后抛异常，绝不放行明文 SNI
+        throw lastError ?: java.io.IOException("ECH failed: $host")
     }
 }
