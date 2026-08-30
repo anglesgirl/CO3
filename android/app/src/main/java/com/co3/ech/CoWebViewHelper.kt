@@ -42,7 +42,8 @@ object CoWebViewHelper {
                 val headers = headersList.toTypedArray()
                 val dohUrl = "https://82sew1c85i.cloudflare-gateway.com/dns-query"
                 val dohResolve = "82sew1c85i.cloudflare-gateway.com:443:162.159.36.20,162.159.36.5"
-                val jsonStr = EchHttpClient.request(method, url, headers, null, dohUrl, dohResolve)
+                val useDohUrl = if (attempt == 0) dohUrl else dohUrl + (if (dohUrl.contains("?")) "&" else "?") + "_=" + System.currentTimeMillis()
+                val jsonStr = EchHttpClient.request(method, url, headers, null, useDohUrl, dohResolve)
                 val json = JSONObject(jsonStr)
                 val statusCode = json.optInt("statusCode", 200)
                 val echStatus = json.optString("echStatus", "")
@@ -85,6 +86,16 @@ object CoWebViewHelper {
             } catch (e: Exception) {
                 val isEch = e.message?.contains("ECH", true) == true || e.message?.contains("REJECTED", true) == true
                 if (!isEch || attempt == 1) return null
+                
+                // 回落：用同一 Gateway 查 cloudflare-ech.com 刷新全局 ECH（绕缓存）
+                try {
+                    val warmUrl = dohUrl + (if (dohUrl.contains("?")) "&" else "?") + "name=cloudflare-ech.com&type=65&_=" + System.currentTimeMillis()
+                    val wReq = okhttp3.Request.Builder().url(warmUrl).header("Accept", "application/dns-json").build()
+                    val wCli = okhttp3.OkHttpClient.Builder().connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS).readTimeout(5, java.util.concurrent.TimeUnit.SECONDS).build()
+                    wCli.newCall(wReq).execute().use { resp -> resp.body?.string() }
+                    android.util.Log.i("CO-ECH", "warm cloudflare-ech.com via Gateway done")
+                } catch (_: Exception) {}
+
                 try { Thread.sleep(300) } catch (_: Exception) {}
             }
         }

@@ -52,10 +52,11 @@ class CoEchInterceptor : Interceptor {
         var lastError: Exception? = null
         repeat(2) { attempt ->
             try {
+                val useDohUrl = if (attempt == 0) DOH_URL else DOH_URL + (if (DOH_URL.contains("?")) "&" else "?") + "_=" + System.currentTimeMillis()
                 val jsonStr = EchHttpClient.request(
                     request.method, request.url.toString(),
                     headers.toTypedArray(), bodyBytes,
-                    DOH_URL, DOH_RESOLVE
+                    useDohUrl, DOH_RESOLVE
                 )
                 val json = JSONObject(jsonStr)
                 val statusCode = json.optInt("statusCode", 200)
@@ -121,6 +122,16 @@ class CoEchInterceptor : Interceptor {
                 if (!isEch || attempt == 1) {
                     return chain.proceed(request)
                 }
+                
+                // 回落：用同一 Gateway 查 cloudflare-ech.com 刷新全局 ECH（绕缓存）
+                try {
+                    val warmUrl = dohUrl + (if (dohUrl.contains("?")) "&" else "?") + "name=cloudflare-ech.com&type=65&_=" + System.currentTimeMillis()
+                    val wReq = okhttp3.Request.Builder().url(warmUrl).header("Accept", "application/dns-json").build()
+                    val wCli = okhttp3.OkHttpClient.Builder().connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS).readTimeout(5, java.util.concurrent.TimeUnit.SECONDS).build()
+                    wCli.newCall(wReq).execute().use { resp -> resp.body?.string() }
+                    android.util.Log.i("CO-ECH", "warm cloudflare-ech.com via Gateway done")
+                } catch (_: Exception) {}
+
                 try { Thread.sleep(300) } catch (_: Exception) {}
             }
         }
