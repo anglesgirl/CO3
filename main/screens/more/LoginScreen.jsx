@@ -20,22 +20,21 @@ const LoginScreen = () => {
     try {
       const u = await getUsername();
       setUser(u || '');
-      // 1) 优先用原生 webkit CookieManager 直读（能读到 HttpOnly）
+      // 1) 优先用原生 webkit CookieManager 直读（能读到 HttpOnly），但必须真校验
       try {
         const mod = NativeModules.CoCookieModule;
-        if (mod && mod.hasSession) {
-          const has = await mod.hasSession('https://archiveofourown.org/');
+        if (mod && mod.getCookie) {
           const cookie = await mod.getCookie('https://archiveofourown.org/').catch(()=> '');
-          setDebug(cookie ? cookie.slice(0,120) : 'empty');
-          if (has) {
-            setLogged(true);
-            // 同步到 Keychain，保证其他页面 validateCookie 也能过
-            try {
-              const m = cookie.match(/_otwarchive_session=([^;]+)/);
-              if (m && m[1]) await setCredsToken(decodeURIComponent(m[1]));
-            } catch {}
-            setValidating(false);
-            return;
+          setDebug(cookie ? cookie.slice(0,140) : 'empty');
+          const m = cookie.match(/_otwarchive_session=([^;]+)/);
+          const token = m ? decodeURIComponent(m[1]) : null;
+          // 匿名也会有 session，必须走网络校验；token 为空则直接未登录
+          if (token) {
+            // 同步到 Keychain
+            try { await setCredsToken(token); } catch {}
+            const ok = await validateCookie(token).catch(() => false);
+            if (ok) { setLogged(true); setValidating(false); return; }
+            // 校验失败则视为未登录，继续走回落
           }
         }
       } catch (e) { setDebug('native err:'+String(e).slice(0,60)); }
