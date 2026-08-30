@@ -201,6 +201,10 @@ const LoginScreen = ({ route }) => {
     navigation.navigate('InternalBrowser', { url: 'https://archiveofourown.org/invite_requests', title: 'Get Invited' });
   };
 
+  const openOfficialLogin = () => {
+    navigation.navigate('InternalBrowser', { url: 'https://archiveofourown.org/users/login', title: 'AO3 Login' });
+  };
+
   if (validating) {
     return (
       <SafeAreaView
@@ -485,6 +489,13 @@ const LoginScreen = ({ route }) => {
                   ? t('screen_account_login_loading')
                   : t('screen_account_login')}
               </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.loginButton, { backgroundColor: '#fff', borderWidth: 1, borderColor: currentTheme.primaryColor, marginTop: 12 }]}
+              onPress={openOfficialLogin}
+            >
+              <Text style={[styles.loginButtonText, { color: currentTheme.primaryColor }]}>官方登录（过人机验证）</Text>
             </TouchableOpacity>
 
             <View style={styles.footerButtons}>
