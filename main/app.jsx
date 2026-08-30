@@ -60,6 +60,7 @@ import { ChapterDAO } from './storage/dao/ChapterDAO';
 import GlobalSearchScreen from './screens/GlobalSearchScreen';
 import { Host } from 'react-native-portalize';
 import WebviewFetcher from './web/WebviewFetcher';
+import { syncSessionFromNative } from './web/syncSession';
 import MainOnboardScreen from './onboard/MainOnboardScreen';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import './storage/LanguageManager';
