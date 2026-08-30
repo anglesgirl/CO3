@@ -90,11 +90,13 @@ class CoEchInterceptor : Interceptor {
                     }
                 }
                 builder.headers(responseHeaders.build())
+                com.co3.Diagnostics.event("ech_ok", mapOf("host" to host, "status" to statusCode, "ech" to echStatus))
                 Log.i(TAG, "ECH OK $host -> $statusCode $echStatus attempt=${attempt+1}")
                 return builder.build()
             } catch (e: Exception) {
                 lastError = e
                 val isEch = e.message?.contains("ECH", true) == true || e.message?.contains("REJECTED", true) == true
+                com.co3.Diagnostics.event("ech_fail", mapOf("host" to host, "attempt" to (attempt+1), "error" to (e.message ?: "unknown")))
                 Log.w(TAG, "ECH fail $host attempt ${attempt+1}: ${e.message} isEch=$isEch")
                 if (!isEch || attempt == 1) {
                     // 非 ECH 错误或已重试，直接回落明文（过期期间保可用）

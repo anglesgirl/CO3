@@ -51,6 +51,7 @@ class MainApplication : Application(), ReactApplication {
     } catch (e: Exception) {
         android.util.Log.e("CO-ECH", "ECH init failed: " + e.message)
     }
+    com.co3.Diagnostics.initialize()
     ProcessLifecycleOwner.get().lifecycle.addObserver(AppForegroundTracker)
     loadReactNative(this)
   }
