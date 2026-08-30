@@ -135,7 +135,7 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                         try {
                             if (isWrongPassword) {
                                 // 密码错误：明确提示，不要渲染成"看起来成功"
-                                evaluateJavascript("alert('用户名或密码错误，请重试');", null)
+                                webView.evaluateJavascript("alert('用户名或密码错误，请重试');", null)
                                 webView.loadUrl("https://archiveofourown.org/users/login")
                             } else if (statusCode in 300..399 && location != null) {
                                 val target = if (location!!.startsWith("http")) location!! else "https://archiveofourown.org" + location!!
