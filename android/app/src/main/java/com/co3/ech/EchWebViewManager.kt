@@ -15,9 +15,11 @@ import com.liar.han1meplus.EchHttpClient
 import org.json.JSONObject
 
 class EchWebViewManager : SimpleViewManager<WebView>() {
+    private var reactContext: ThemedReactContext? = null
     override fun getName() = "EchWebView"
 
     override fun createViewInstance(reactContext: ThemedReactContext): WebView {
+        this.reactContext = reactContext
         val wv = WebView(reactContext)
         wv.settings.javaScriptEnabled = true
         wv.settings.domStorageEnabled = true
@@ -122,8 +124,17 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                         }
                         cm.flush()
                     }
-                    // 登录成功判定：有 user_credentials（真登录）或 302 跳转
-                    val loginSuccess = hasUserCredentials || (statusCode in 300..399 && location != null)
+                    // 登录成功判定：
+                    // - user_credentials cookie（真登录标志）
+                    // - 或 302 跳转
+                    // - 或 200 + 收到新 session cookie + 返回页面不含登录表单（AO3 登录成功返回 200 渲染 dashboard，set-cookie 里可能只有 _otwarchive_session）
+                    val isLoginFormPage = htmlText.contains("user[password]", true) ||
+                        htmlText.contains("user_password", true) ||
+                        htmlText.contains("new_user", true) ||
+                        htmlText.contains("Wrong username or password", true)
+                    val loginSuccess = hasUserCredentials ||
+                        (statusCode in 300..399 && location != null) ||
+                        (isSession && statusCode == 200 && !isLoginFormPage)
                     // 密码错误判定：200 且页面含错误提示
                     val isWrongPassword = !loginSuccess && statusCode == 200 &&
                         (htmlText.contains("Wrong username or password", true) || htmlText.contains("Invalid", true))
@@ -137,6 +148,21 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                                 // 密码错误：明确提示，不要渲染成"看起来成功"
                                 webView.evaluateJavascript("alert('用户名或密码错误，请重试');", null)
                                 webView.loadUrl("https://archiveofourown.org/users/login")
+                            } else if (loginSuccess) {
+                                // 登录成功：回传 RN 刷新登录状态
+                                try {
+                                    reactContext?.getJSModule(com.facebook.react.bridge.RCTEventEmitter::class.java)
+                                        ?.receiveEvent(webView.id, "topLoginSuccess", com.facebook.react.bridge.Arguments.createMap())
+                                } catch (_: Exception) {}
+                                try { com.co3.Diagnostics.event("login_success_notify", mapOf("status" to statusCode.toString())) } catch(_:Exception){}
+                                if (statusCode in 300..399 && location != null) {
+                                    val target = if (location!!.startsWith("http")) location!! else "https://archiveofourown.org" + location!!
+                                    webView.loadUrl(target)
+                                } else if (html.isNotEmpty()) {
+                                    webView.loadDataWithBaseURL(url, html, "text/html", "utf-8", url)
+                                } else {
+                                    webView.loadUrl(url)
+                                }
                             } else if (statusCode in 300..399 && location != null) {
                                 val target = if (location!!.startsWith("http")) location!! else "https://archiveofourown.org" + location!!
                                 webView.loadUrl(target)
@@ -159,5 +185,16 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
     @ReactProp(name = "sourceUrl")
     fun setSourceUrl(view: WebView, url: String?) {
         if (!url.isNullOrEmpty()) view.loadUrl(url)
+    }
+
+    override fun getExportedCustomBubblingEventTypeConstants(): Map<String, Any> {
+        return mapOf(
+            "topLoginSuccess" to mapOf(
+                "phasedRegistrationNames" to mapOf(
+                    "bubbled" to "onLoginSuccess",
+                    "captured" to "onLoginSuccessCapture"
+                )
+            )
+        )
     }
 }

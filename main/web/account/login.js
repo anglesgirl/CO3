@@ -1,4 +1,5 @@
 import { fetchLoginAuthenticityToken } from './fetchAuthenticityToken';
+import { syncSessionFromNative } from '../syncSession';
 import Toast from 'react-native-toast-message';
 import {
   deleteCredsPasswd,
@@ -164,5 +165,83 @@ export async function validateCookie(sessionToken) {
   } catch (error) {
     console.error('Error validating cookie:', error);
     throw error;
+  }
+}
+
+/**
+ * 原生表单登录提交（账号中心用）。
+ * 返回 { status: 'success' | 'wrong_password' | 'challenge' | 'error', message? }
+ * - challenge: CF 人机验证，需要走 WebView
+ */
+export async function submitLogin(username, password) {
+  if (!username || !password) return { status: 'error', message: '请输入用户名和密码' };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
+  try {
+    // 1. 拿 authenticity_token
+    let token;
+    try {
+      token = await fetchLoginAuthenticityToken();
+    } catch (e) {
+      // 拿 token 时可能已被 CF 挑战拦截
+      return { status: 'challenge', message: '登录页需要人机验证' };
+    }
+
+    // 2. POST 登录
+    const formData = new FormData();
+    formData.append('authenticity_token', token);
+    formData.append('user[login]', username);
+    formData.append('user[password]', password);
+    formData.append('user[remember_me]', '1');
+    formData.append('commit', 'Log in');
+
+    const response = await fetch('https://archiveofourown.org/users/login', {
+      method: 'POST',
+      body: formData,
+      credentials: 'include',
+      signal: ctrl.signal,
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate',
+        'Referer': 'https://archiveofourown.org/users/login',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      },
+    });
+    clearTimeout(timer);
+
+    const html = await response.text();
+
+    // 3. CF 挑战检测
+    if (response.status === 403 || response.status === 503 ||
+        html.includes('_cf_chl_opt') ||
+        html.includes('challenges.cloudflare.com') ||
+        html.includes('cdn-cgi/challenge-platform')) {
+      return { status: 'challenge' };
+    }
+
+    // 4. 密码错误
+    if (html.includes('Wrong username or password') || html.includes('Invalid')) {
+      return { status: 'wrong_password', message: '用户名或密码错误' };
+    }
+
+    // 5. 登录成功判定：页面不含登录表单（没有密码输入框）且状态 200
+    const stillLoginPage = html.includes('user[password]') || html.includes('user_password') || html.includes('new_user');
+    if (!stillLoginPage) {
+      // 同步 cookie 到 Keychain
+      try { await syncSessionFromNative(); } catch {}
+      return { status: 'success' };
+    }
+
+    // 6. 兜底：无法判断
+    return { status: 'error', message: '无法确认登录结果，请重试或使用官方登录' };
+  } catch (error) {
+    clearTimeout(timer);
+    console.error('submitLogin error:', error);
+    if (error && error.name === 'AbortError') {
+      return { status: 'error', message: '请求超时，请检查网络' };
+    }
+    // ECH 失败/网络问题
+    return { status: 'challenge', message: '网络异常，尝试官方登录' };
   }
 }

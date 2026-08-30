@@ -299,8 +299,7 @@ const AppWrapper = () => {
                     name={'Preferences'}
                     component={PreferencesScreen}
                   />
-                  <Stack.Screen name={'Account'} component={LoginScreen} />
-                  <Stack.Screen name={'AccountCenter'} component={AccountCenter} />
+                  <Stack.Screen name={'Account'} component={AccountCenter} />
                   <Stack.Screen
                     name={'KudosHistory'}
                     component={KudoHistoryScreen}

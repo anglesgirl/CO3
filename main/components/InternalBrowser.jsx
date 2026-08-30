@@ -28,7 +28,14 @@ export default function InternalBrowser() {
         </TouchableOpacity>
       </View>
       {isAO3 ? (
-        <EchWebView sourceUrl={url} style={styles.webview} />
+        <EchWebView
+          sourceUrl={url}
+          style={styles.webview}
+          onLoginSuccess={() => {
+            // 登录成功：同步 Keychain，返回时账号中心自动刷新
+            try { require('../web/syncSession').syncSessionFromNative(); } catch {}
+          }}
+        />
       ) : (
         <WebView
           source={{ uri: url }}
