@@ -124,10 +124,14 @@ export default async function login(username, password) {
 //And guess is a very important word in this sentence lmao.
 export async function validateCookie(sessionToken) {
   try {
+    // 15s 超时：ECH 失败/网络问题时不至于一直转圈
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
     // Send a request to the website with the provided cookies
     const response = await fetch('https://archiveofourown.org/', {
       method: 'GET',
       credentials: 'include', // Include cookies in the request
+      signal: ctrl.signal,
       headers: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
@@ -136,6 +140,7 @@ export async function validateCookie(sessionToken) {
         'Cookie': `user_credentials=1; _otwarchive_session=${sessionToken}` // Attach both cookies
       }
     });
+    clearTimeout(timer);
 
     // Check the response headers for the "set-cookie" header
     const setCookieHeader = response.headers.get('set-cookie');

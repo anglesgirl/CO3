@@ -31,7 +31,10 @@ export default function AccountCenter() {
   const fetchQueue = async () => {
     setQueue(s => ({ ...s, loading: true }));
     try {
-      const res = await fetch('https://archiveofourown.org/invite_requests', { headers: { 'Accept': 'text/html' } });
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 15000);
+      const res = await fetch('https://archiveofourown.org/invite_requests', { headers: { 'Accept': 'text/html' }, signal: ctrl.signal });
+      clearTimeout(timer);
       const html = await res.text();
       // 解析排队人数：仅认 "There are X people" 严格匹配，避免把页码/其他数字当排队
       let total = null;
