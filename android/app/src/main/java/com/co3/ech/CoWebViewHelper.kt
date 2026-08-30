@@ -26,6 +26,8 @@ object CoWebViewHelper {
         if (method != "GET") return null
         if (!shouldIntercept(host)) return null
         repeat(2) { attempt ->
+            val dohUrl = "https://82sew1c85i.cloudflare-gateway.com/dns-query"
+            val dohResolve = "82sew1c85i.cloudflare-gateway.com:443:162.159.36.20,162.159.36.5"
             try {
                 val url = request.url.toString()
                 // method 已在外层校验为 GET
@@ -48,8 +50,6 @@ object CoWebViewHelper {
                     headersList.add("$k: $v")
                 }
                 val headers = headersList.toTypedArray()
-                val dohUrl = "https://82sew1c85i.cloudflare-gateway.com/dns-query"
-                val dohResolve = "82sew1c85i.cloudflare-gateway.com:443:162.159.36.20,162.159.36.5"
                 val useDohUrl = if (attempt == 0) dohUrl else dohUrl + (if (dohUrl.contains("?")) "&" else "?") + "_=" + System.currentTimeMillis()
                 val jsonStr = EchHttpClient.request(method, url, headers, null, useDohUrl, dohResolve)
                 val json = JSONObject(jsonStr)

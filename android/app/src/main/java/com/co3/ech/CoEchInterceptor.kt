@@ -2,6 +2,7 @@ package com.co3.ech
 
 import android.util.Base64
 import android.util.Log
+import com.co3.Diagnostics
 import com.liar.han1meplus.EchHttpClient
 import android.webkit.CookieManager
 import okhttp3.*
