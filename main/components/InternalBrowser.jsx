@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, ActivityIndicator, TouchableOpacity, Text, StyleSheet } from 'react-native';
+import React, { useEffect } from 'react';
+import { View, ActivityIndicator, TouchableOpacity, Text, StyleSheet, DeviceEventEmitter } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import EchWebView from './EchWebView';
@@ -9,6 +9,14 @@ export default function InternalBrowser() {
   const navigation = useNavigation();
   const route = useRoute();
   const { url, title } = route.params || {};
+
+  // 登录成功事件：同步 Keychain，返回时账号中心自动刷新
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener('LoginSuccess', () => {
+      try { require('../web/syncSession').syncSessionFromNative(); } catch {}
+    });
+    return () => sub.remove();
+  }, []);
 
   if (!url) {
     return <View style={styles.center}><Text>无链接</Text></View>;
@@ -28,14 +36,7 @@ export default function InternalBrowser() {
         </TouchableOpacity>
       </View>
       {isAO3 ? (
-        <EchWebView
-          sourceUrl={url}
-          style={styles.webview}
-          onLoginSuccess={() => {
-            // 登录成功：同步 Keychain，返回时账号中心自动刷新
-            try { require('../web/syncSession').syncSessionFromNative(); } catch {}
-          }}
-        />
+        <EchWebView sourceUrl={url} style={styles.webview} />
       ) : (
         <WebView
           source={{ uri: url }}

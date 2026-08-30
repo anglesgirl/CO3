@@ -149,10 +149,10 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                                 webView.evaluateJavascript("alert('用户名或密码错误，请重试');", null)
                                 webView.loadUrl("https://archiveofourown.org/users/login")
                             } else if (loginSuccess) {
-                                // 登录成功：回传 RN 刷新登录状态
+                                // 登录成功：回传 RN 刷新登录状态（全局事件，兼容 RN 0.85）
                                 try {
-                                    reactContext?.getJSModule(com.facebook.react.bridge.RCTEventEmitter::class.java)
-                                        ?.receiveEvent(webView.id, "topLoginSuccess", com.facebook.react.bridge.Arguments.createMap())
+                                    reactContext?.getJSModule(com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                                        ?.emit("LoginSuccess", com.facebook.react.bridge.Arguments.createMap())
                                 } catch (_: Exception) {}
                                 try { com.co3.Diagnostics.event("login_success_notify", mapOf("status" to statusCode.toString())) } catch(_:Exception){}
                                 if (statusCode in 300..399 && location != null) {
@@ -185,16 +185,5 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
     @ReactProp(name = "sourceUrl")
     fun setSourceUrl(view: WebView, url: String?) {
         if (!url.isNullOrEmpty()) view.loadUrl(url)
-    }
-
-    override fun getExportedCustomBubblingEventTypeConstants(): Map<String, Any> {
-        return mapOf(
-            "topLoginSuccess" to mapOf(
-                "phasedRegistrationNames" to mapOf(
-                    "bubbled" to "onLoginSuccess",
-                    "captured" to "onLoginSuccessCapture"
-                )
-            )
-        )
     }
 }
