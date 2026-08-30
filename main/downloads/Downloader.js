@@ -7,7 +7,9 @@ export function buildPath(workId, chapterId) {
 }
 
 export async function downloadChapter(workId, chapterId) {
-  const [html, css] = await fetchChapter(workId, chapterId, true);
+  const res = await fetchChapter(workId, chapterId, true);
+  if (!res || !res[0]) throw new Error('需要登录或章节受限，请先到 账号中心 登录后再试');
+  const [html, css] = res;
   await saveFile(html, css, workId, chapterId);
 }
 

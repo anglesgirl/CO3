@@ -57,14 +57,15 @@ export default async function getUrl(url, noWebview = false) {
   const { hostname } = new URL(url);
 
   if (noWebview) {
+    // 后台下载/抓章：不弹 toast 刷屏，静默尝试自动登录
     getLastLogin().then(async (time) => {
       try {
         if (Date.now() - time > 14 * 24 * 60 * 60 * 1000) {
           Toast.show(
             {
               type: 'error',
-              text1: "You have been logged out !",
-              text2: "It's been two week since you last logged in.",
+              text1: "登录已过期（2周）",
+              text2: "请到 账号中心 重新登录后再下载",
               onPress: async () => {
                 if (await hasStoredPassword()) {
                   try {
