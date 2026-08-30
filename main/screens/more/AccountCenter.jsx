@@ -12,6 +12,8 @@ export default function AccountCenter() {
   const [logged, setLogged] = useState(false);
   const [queue, setQueue] = useState({ total: null, myPos: null, loading: false });
   const [email, setEmail] = useState('');
+  const [inviteLink, setInviteLink] = useState('');
+  const [activateLink, setActivateLink] = useState('');
 
   useEffect(() => { refresh(); }, []);
 
@@ -31,18 +33,14 @@ export default function AccountCenter() {
     try {
       const res = await fetch('https://archiveofourown.org/invite_requests', { headers: { 'Accept': 'text/html' } });
       const html = await res.text();
-      // 解析排队人数：AO3 页面含 "There are X people" 或 "queue" 文案
+      // 解析排队人数：仅认 "There are X people" 严格匹配，避免把页码/其他数字当排队
       let total = null;
-      const m1 = html.match(/(\d[\d,]*)\s+people\s+in\s+the\s+queue/i);
-      const m2 = html.match(/queue[^<]*?(\d[\d,]*)/i);
+      const m1 = html.match(/There are\s+(\d[\d,]*)\s+people\s+in\s+the\s+queue/i);
       if (m1) total = m1[1];
-      else if (m2) total = m2[1];
-      // 我的位置：You are number X / your request ... position
+      // 我的位置：You are number X
       let myPos = null;
       const m3 = html.match(/you\s+are\s+number\s*(\d+)/i);
-      const m4 = html.match(/position[^<]*?(\d+)/i);
       if (m3) myPos = m3[1];
-      else if (m4) myPos = m4[1];
       setQueue({ total, myPos, loading: false });
     } catch (e) {
       setQueue(s => ({ ...s, loading: false }));
@@ -70,13 +68,41 @@ export default function AccountCenter() {
       <Card title="官方登录" desc="走 ECH 内部浏览器，可过人机验证" onPress={() => open('https://archiveofourown.org/users/login', '官方登录')} />
       <Card title="找回密码" desc="重置账号密码" onPress={() => open('https://archiveofourown.org/users/password/new', '找回密码')} />
       <Card title="获取邀请" desc="申请新账号邀请码" onPress={() => open('https://archiveofourown.org/invite_requests', '获取邀请')} />
-      <Card title="注册新号" desc="已有邀请码在此注册" onPress={() => open('https://archiveofourown.org/users/new', '注册')} />
+      <View style={[styles.queueBox, { backgroundColor: currentTheme.cardBackground, borderColor: currentTheme.borderColor, marginBottom: 10 }]}>
+        <Text style={{ color: currentTheme.textColor, fontWeight: '600' }}>粘贴邀请链接注册</Text>
+        <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>粘贴官方邀请邮件中的链接，自动提取 token 跳注册页</Text>
+        <View style={{ flexDirection: 'row', marginTop: 10 }}>
+          <TextInput placeholder="https://archiveofourown.org/...invitation_token=xxx" placeholderTextColor={currentTheme.placeholderColor} value={inviteLink} onChangeText={setInviteLink} style={[styles.input, { borderColor: currentTheme.borderColor, color: currentTheme.textColor }]} autoCapitalize="none" autoCorrect={false} />
+          <TouchableOpacity onPress={() => {
+            let url = inviteLink.trim();
+            if (!url) return Alert.alert('请粘贴邀请链接');
+            // 提取 token
+            const m = url.match(/invitation_token=([^&\s]+)/);
+            if (m) url = `https://archiveofourown.org/users/new?invitation_token=${m[1]}`;
+            else if (!url.startsWith('http')) url = `https://archiveofourown.org/users/new?invitation_token=${url}`;
+            open(url, '注册');
+          }} style={[styles.btnSmall, { backgroundColor: currentTheme.primaryColor }]}><Text style={styles.btnText}>打开</Text></TouchableOpacity>
+        </View>
+      </View>
+      <View style={[styles.queueBox, { backgroundColor: currentTheme.cardBackground, borderColor: currentTheme.borderColor, marginBottom: 10 }]}>
+        <Text style={{ color: currentTheme.textColor, fontWeight: '600' }}>粘贴激活链接</Text>
+        <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>粘贴激活邮件链接，直接跳激活页</Text>
+        <View style={{ flexDirection: 'row', marginTop: 10 }}>
+          <TextInput placeholder="https://archiveofourown.org/users/confirmation..." placeholderTextColor={currentTheme.placeholderColor} value={activateLink} onChangeText={setActivateLink} style={[styles.input, { borderColor: currentTheme.borderColor, color: currentTheme.textColor }]} autoCapitalize="none" autoCorrect={false} />
+          <TouchableOpacity onPress={() => {
+            let url = activateLink.trim();
+            if (!url) return Alert.alert('请粘贴激活链接');
+            if (!url.startsWith('http')) url = url;
+            open(url, '激活');
+          }} style={[styles.btnSmall, { backgroundColor: currentTheme.primaryColor }]}><Text style={styles.btnText}>打开</Text></TouchableOpacity>
+        </View>
+      </View>
 
       <Text style={[styles.section, { color: currentTheme.textColor }]}>邀请排队</Text>
       <View style={[styles.queueBox, { backgroundColor: currentTheme.cardBackground, borderColor: currentTheme.borderColor }]}>
         {queue.loading ? <ActivityIndicator /> : (
           <>
-            <Text style={{ color: currentTheme.textColor }}>当前排队人数：{queue.total ?? '—（点击刷新）'}</Text>
+            <Text style={{ color: currentTheme.textColor }}>当前排队人数：{queue.total ?? '—（未匹配到官方文案，点击刷新）'}</Text>
             <Text style={{ color: currentTheme.textColor, marginTop: 6 }}>我的位置：{queue.myPos ?? '未查询（提交邀请后显示）'}</Text>
             <TouchableOpacity onPress={fetchQueue} style={[styles.btn, { backgroundColor: currentTheme.primaryColor }]}>
               <Text style={styles.btnText}>刷新排队</Text>

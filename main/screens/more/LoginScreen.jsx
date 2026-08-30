@@ -79,7 +79,13 @@ const LoginScreen = () => {
         <Card theme={currentTheme} title="官方登录 / 切换账号" desc="archiveofourown.org/users/login" onPress={() => open('https://archiveofourown.org/users/login', '官方登录')} primary />
         <Card theme={currentTheme} title="找回密码" desc="重置密码" onPress={() => open('https://archiveofourown.org/users/password/new', '找回密码')} />
         <Card theme={currentTheme} title="获取邀请" desc="申请邀请码/查看排队" onPress={() => open('https://archiveofourown.org/invite_requests', '获取邀请')} />
-        <Card theme={currentTheme} title="注册新号" desc="已有邀请码注册" onPress={() => open('https://archiveofourown.org/users/new', '注册')} />
+        <Card theme={currentTheme} title="粘贴邀请链接注册" desc="粘贴官方邀请邮件链接，跳注册页" onPress={() => {
+          // 复用 AccountCenter 的粘贴逻辑：弹输入后跳 InternalBrowser
+          navigation.navigate('AccountCenter', { focus: 'invite' });
+        }} />
+        <Card theme={currentTheme} title="粘贴激活链接" desc="粘贴激活邮件链接，完成激活" onPress={() => {
+          navigation.navigate('AccountCenter', { focus: 'activate' });
+        }} />
         <Card theme={currentTheme} title="邀请排队查询" desc="邮箱查位置" onPress={() => navigation.navigate('AccountCenter')} />
 
         <TouchableOpacity onPress={check} style={styles.refreshBtn}><Text style={{ color: currentTheme.primaryColor }}>刷新登录状态</Text></TouchableOpacity>
