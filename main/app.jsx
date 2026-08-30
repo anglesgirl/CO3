@@ -85,6 +85,7 @@ import CategoryScreen from './screens/more/CategoryScreen';
 import BookmarksScreen from './screens/more/BookmarksScreen';
 import AboutScreen from './screens/more/AboutScreen';
 import WordReplacer from './screens/more/WordReplacer';
+import InternalBrowser from './components/InternalBrowser';
 
 export const AppContext = createContext();
 const Stack = createNativeStackNavigator();
@@ -316,6 +317,7 @@ const AppWrapper = () => {
                     name={'WordReplacer'}
                     component={WordReplacer}
                   />
+                  <Stack.Screen name={'InternalBrowser'} component={InternalBrowser} />
                 </Stack.Navigator>
               </NavigationContainer>
             </SafeAreaProvider>

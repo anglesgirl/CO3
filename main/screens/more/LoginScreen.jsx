@@ -194,11 +194,11 @@ const LoginScreen = ({ route }) => {
   };
 
   const openForgotPassword = () => {
-    Linking.openURL('https://archiveofourown.org/users/password/new');
+    navigation.navigate('InternalBrowser', { url: 'https://archiveofourown.org/users/password/new', title: 'Forgot Password' });
   };
 
   const openGetInvited = () => {
-    Linking.openURL('https://archiveofourown.org/invite_requests');
+    navigation.navigate('InternalBrowser', { url: 'https://archiveofourown.org/invite_requests', title: 'Get Invited' });
   };
 
   if (validating) {
