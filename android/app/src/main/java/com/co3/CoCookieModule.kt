@@ -65,4 +65,15 @@ class CoCookieModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
             promise.resolve(has)
         } catch (e: Exception) { promise.resolve(false) }
     }
+
+    // 远程诊断日志开关（关于页连点 7 次版本号切换）
+    @ReactMethod
+    fun setDiagnosticsEnabled(enabled: Boolean) {
+        try { Diagnostics.setEnabled(enabled) } catch (_: Exception) {}
+    }
+
+    @ReactMethod
+    fun isDiagnosticsEnabled(promise: Promise) {
+        try { promise.resolve(Diagnostics.isEnabled()) } catch (e: Exception) { promise.resolve(false) }
+    }
 }

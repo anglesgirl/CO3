@@ -6,6 +6,7 @@ import {
   Text,
   TouchableOpacity,
   View,
+  NativeModules,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { co3Version } from '../../constant';
@@ -13,10 +14,29 @@ import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import InAppBrowser from 'react-native-inappbrowser-reborn';
+import React, { useRef, useState } from 'react';
 
 export default function AboutScreen({ route }) {
   const { setScreens, currentTheme, db } = route.params;
   const navigation = useNavigation();
+  const tapCount = useRef(0);
+  const [diagMsg, setDiagMsg] = useState('');
+
+  function onVersionTap() {
+    tapCount.current += 1;
+    if (tapCount.current >= 7) {
+      tapCount.current = 0;
+      const mod = NativeModules.CoCookieModule;
+      if (!mod) return;
+      // 切换开关
+      mod.isDiagnosticsEnabled(prev => {
+        const next = !prev;
+        mod.setDiagnosticsEnabled(next);
+        setDiagMsg(next ? '远程诊断日志已开启（连点 7 次可关闭）' : '远程诊断日志已关闭');
+        setTimeout(() => setDiagMsg(''), 2500);
+      });
+    }
+  }
 
   function onBack() {
     navigation.goBack();
@@ -92,17 +112,24 @@ export default function AboutScreen({ route }) {
             theme={currentTheme}
           />
         </View>
-        <Text
-          style={[
-            {
-              color: currentTheme.secondaryTextColor,
-              width: '100%',
-              textAlign: 'center',
-            },
-          ]}
-        >
-          {t('screen_about_version', { co3Version: co3Version })}
-        </Text>
+        <TouchableOpacity onPress={onVersionTap} style={{ paddingVertical: 4 }}>
+          <Text
+            style={[
+              {
+                color: currentTheme.secondaryTextColor,
+                width: '100%',
+                textAlign: 'center',
+              },
+            ]}
+          >
+            {t('screen_about_version', { co3Version: co3Version })}
+          </Text>
+          {!!diagMsg && (
+            <Text style={[{ color: currentTheme.primaryColor, textAlign: 'center', marginTop: 6, fontSize: 13 }]}>
+              {diagMsg}
+            </Text>
+          )}
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );

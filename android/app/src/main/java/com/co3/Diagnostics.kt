@@ -1,5 +1,6 @@
 package com.co3
 
+import android.content.Context
 import android.os.Build
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -14,12 +15,27 @@ import java.time.Instant
 object Diagnostics {
     private const val endpoint = "https://log.anglesgirl.eu.org/v1/events"
     private const val appId = "co3"
+    private const val PREF_NAME = "co3_diagnostics"
+    private const val KEY_ENABLED = "enabled"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var initialized = false
+    @Volatile private var appContext: Context? = null
 
-    fun initialize() {
+    /** 远程诊断日志开关：默认关，关于页连点 7 次版本号开启 */
+    fun isEnabled(): Boolean {
+        val ctx = appContext ?: return false
+        return ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).getBoolean(KEY_ENABLED, false)
+    }
+
+    fun setEnabled(enabled: Boolean) {
+        val ctx = appContext ?: return
+        ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, enabled).apply()
+    }
+
+    fun initialize(context: Context) {
         if (initialized) return
         initialized = true
+        appContext = context.applicationContext
         installCrashReporter()
         event("app_started", mapOf("sdk" to Build.VERSION.SDK_INT, "device" to "${Build.MANUFACTURER} ${Build.MODEL}"))
     }
@@ -46,6 +62,8 @@ object Diagnostics {
     }
 
     fun event(name: String, fields: Map<String, Any?> = emptyMap()) {
+        // 远程诊断开关：默认关（关于页连点 7 次版本号开启），避免大量无关日志上传
+        if (!isEnabled()) return
         val safe = fields.mapNotNull { (k, v) -> if (v == null) null else k to v.toString().take(512) }.toMap()
         scope.launch { runCatching { upload(name, safe) } }
     }
