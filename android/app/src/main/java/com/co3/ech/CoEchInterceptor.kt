@@ -143,6 +143,20 @@ class CoEchInterceptor : Interceptor {
                     wCli.newCall(wReq).execute().use { resp -> resp.body?.string() }
                     android.util.Log.i("CO-ECH", "warm cloudflare-ech.com via Gateway done")
                 } catch (_: Exception) {}
+                // 通知 ech-sync Worker 立即更新 x.xn--pn1aul.eu.org 的 HTTPS 记录（App 专用 key；失败不影响主流程）
+                try {
+                    val notifyReq = okhttp3.Request.Builder()
+                        .url("https://ech-sync.lintoya.workers.dev/?key=a1b6071f9147b44e0b1e08b25aee9ee3")
+                        .get().build()
+                    val notifyCli = okhttp3.OkHttpClient.Builder()
+                        .connectTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
+                        .build()
+                    notifyCli.newCall(notifyReq).execute().use { resp -> resp.body?.string() }
+                    try { com.co3.Diagnostics.event("ech_sync_notify", mapOf("host" to host, "status" to "ok")) } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    try { com.co3.Diagnostics.event("ech_sync_notify_fail", mapOf("host" to host, "err" to (e.message ?: "unknown"))) } catch (_: Exception) {}
+                }
 
                 try { Thread.sleep(300) } catch (_: Exception) {}
             }
