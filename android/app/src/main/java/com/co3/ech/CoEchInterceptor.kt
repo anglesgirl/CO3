@@ -29,7 +29,7 @@ class CoEchInterceptor : Interceptor {
         if (!shouldIntercept(host)) return chain.proceed(request)
 
         val headers = mutableListOf<String>()
-        // 注入 WebView 的 Cookie 到 OkHttp
+        // 注入 WebView 的 Cookie 到 OkHttp（双向同步核心）
         try {
             val cookie = CookieManager.getInstance().getCookie(request.url.toString())
             if (!cookie.isNullOrEmpty() && request.header("Cookie") == null) {
@@ -63,7 +63,6 @@ class CoEchInterceptor : Interceptor {
                 val echStatus = json.optString("echStatus", "")
                 val headersJson = json.optJSONArray("headers")
 
-                // ECH 被拒绝时 echStatus 会含 REJECTED，视为可重试
                 if (echStatus.contains("REJECTED", true) || echStatus.contains("ECH", true) && statusCode >= 400) {
                     throw java.io.IOException("ECH_REJECTED: $echStatus")
                 }
@@ -89,15 +88,28 @@ class CoEchInterceptor : Interceptor {
                     .body(responseBody)
 
                 val responseHeaders = Headers.Builder()
+                val setCookies = mutableListOf<String>()
                 if (headersJson != null) {
                     for (i in 0 until headersJson.length()) {
                         val h = headersJson.optString(i) ?: continue
                         val idx = h.indexOf('\t')
                         if (idx <= 0) continue
-                        responseHeaders.add(h.substring(0, idx), h.substring(idx + 1))
+                        val n = h.substring(0, idx)
+                        val v = h.substring(idx + 1)
+                        responseHeaders.add(n, v)
+                        if (n.equals("set-cookie", true)) setCookies.add(v)
                     }
                 }
                 builder.headers(responseHeaders.build())
+                // 同步 Set-Cookie 回 CookieManager（解决章节/下载认证）
+                try {
+                    val cm = CookieManager.getInstance()
+                    val urlStr = request.url.toString()
+                    for (sc in setCookies) {
+                        cm.setCookie(urlStr, sc)
+                    }
+                    if (setCookies.isNotEmpty()) cm.flush()
+                } catch (_: Exception) {}
                 com.co3.Diagnostics.event("ech_ok", mapOf("host" to host, "status" to statusCode, "ech" to echStatus))
                 Log.i(TAG, "ECH OK $host -> $statusCode $echStatus attempt=${attempt+1}")
                 return builder.build()
@@ -107,7 +119,6 @@ class CoEchInterceptor : Interceptor {
                 com.co3.Diagnostics.event("ech_fail", mapOf("host" to host, "attempt" to (attempt+1), "error" to (e.message ?: "unknown")))
                 Log.w(TAG, "ECH fail $host attempt ${attempt+1}: ${e.message} isEch=$isEch")
                 if (!isEch || attempt == 1) {
-                    // 非 ECH 错误或已重试，直接回落明文（过期期间保可用）
                     return chain.proceed(request)
                 }
                 try { Thread.sleep(300) } catch (_: Exception) {}

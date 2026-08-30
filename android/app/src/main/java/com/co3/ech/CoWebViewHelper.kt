@@ -24,7 +24,22 @@ object CoWebViewHelper {
             try {
                 val url = request.url.toString()
                 val method = request.method ?: "GET"
-                val headers = request.requestHeaders.map { (k, v) -> "$k: $v" }.toTypedArray()
+                // 注入 CookieManager 的 cookie（解决官方登录后 Session Expired）
+                val headersList = mutableListOf<String>()
+                try {
+                    val cmCookie = CookieManager.getInstance().getCookie(url)
+                    if (!cmCookie.isNullOrEmpty()) {
+                        // 避免重复 Cookie 头
+                        val hasCookie = request.requestHeaders.keys.any { it.equals("Cookie", true) }
+                        if (!hasCookie) headersList.add("Cookie: $cmCookie")
+                    }
+                } catch (_: Exception) {}
+                for ((k,v) in request.requestHeaders) {
+                    if (k.equals("Host", true) || k.equals("Content-Length", true)) continue
+                    if (k.equals("Cookie", true) && headersList.any { it.startsWith("Cookie:") }) continue
+                    headersList.add("$k: $v")
+                }
+                val headers = headersList.toTypedArray()
                 val dohUrl = "https://82sew1c85i.cloudflare-gateway.com/dns-query"
                 val dohResolve = "82sew1c85i.cloudflare-gateway.com:443:162.159.36.20,162.159.36.5"
                 val jsonStr = EchHttpClient.request(method, url, headers, null, dohUrl, dohResolve)
@@ -54,11 +69,15 @@ object CoWebViewHelper {
                     }
                 }
                 val stream = ByteArrayInputStream(bodyBytes)
-                // 同步到 CookieManager 供 OkHttp 共享
+                // 同步 Set-Cookie 到 CookieManager（OkHttp与WebView共用）
                 try {
                     val cm = CookieManager.getInstance()
                     for ((k, v) in responseHeaders) {
-                        if (k.equals("set-cookie", true)) cm.setCookie(url, v)
+                        if (k.equals("set-cookie", true)) {
+                            // AO3 可能一次返回多条 set-cookie 合并，需拆分
+                            // EchHttpClient 已按头拆分，这里每条单独 set
+                            cm.setCookie(url, v)
+                        }
                     }
                     cm.flush()
                 } catch (_: Exception) {}

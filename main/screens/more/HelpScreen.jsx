@@ -1,6 +1,6 @@
 import {
   Image,
-  Linking,
+
   ScrollView,
   StyleSheet,
   Text,
@@ -84,7 +84,7 @@ function LinkButton({ url, label, theme }) {
           paddingTop: 16,
         },
       ]}
-      onPress={() => Linking.openURL(url)}
+      onPress={() => navigation.navigate('InternalBrowser', { url, title: label })}
     >
       <Icon name={"link"} size={20} color={theme.textColor} />
       <Text style={[styles.buttonText, { color: theme.textColor}]}>

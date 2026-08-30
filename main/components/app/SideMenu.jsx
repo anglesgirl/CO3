@@ -350,7 +350,7 @@ const SideMenu = ({
                       { backgroundColor: '#22c55e' },
                     ]}
                     onPress={() =>
-                      Linking.openURL('https://archiveofourown.org/donate')
+                      navigationRef.navigate('InternalBrowser', { url: 'https://archiveofourown.org/donate', title: 'Donate' })
                     }
                   >
                     <Text style={styles.supportButtonText}>AO3</Text>

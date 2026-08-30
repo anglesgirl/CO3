@@ -69,7 +69,7 @@ export default function Step4({ currentTheme, setScreen, onFinish }) {
                 </Text>
                 <TouchableOpacity
                   style={[styles.ctaButton, { backgroundColor: item.color }]}
-                  onPress={() => Linking.openURL(item.url)}
+                  onPress={() => item.url.includes('archiveofourown.org') ? navigation.navigate('InternalBrowser', { url: item.url }) : Linking.openURL(item.url)}
                   activeOpacity={0.85}
                 >
                   <Icon name="open-in-new" size={14} color="#fff" />
