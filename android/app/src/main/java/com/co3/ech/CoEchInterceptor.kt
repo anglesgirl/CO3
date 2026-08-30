@@ -16,12 +16,12 @@ class CoEchInterceptor : Interceptor {
         private const val TAG = "CO-ECH"
         private const val DOH_URL = "https://82sew1c85i.cloudflare-gateway.com/dns-query"
         private const val DOH_RESOLVE = "82sew1c85i.cloudflare-gateway.com:443:162.159.36.20,162.159.36.5"
-        private val TARGET_HOSTS = setOf("archiveofourown.org", "www.archiveofourown.org")
     }
 
     private fun shouldIntercept(host: String): Boolean {
         if (!EchHttpClient.isLoaded) return false
-        return host in TARGET_HOSTS || host.endsWith(".archiveofourown.org")
+        // 所有请求都进 ECH 保护，不再限定 archiveofourown.org
+        return true
     }
 
     override fun intercept(chain: Interceptor.Chain): Response {

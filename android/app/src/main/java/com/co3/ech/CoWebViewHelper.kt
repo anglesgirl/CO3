@@ -10,12 +10,11 @@ import org.json.JSONObject
 import java.io.ByteArrayInputStream
 
 object CoWebViewHelper {
-    private val targetHosts = setOf("archiveofourown.org", "www.archiveofourown.org")
-
     private fun shouldIntercept(host: String?): Boolean {
         if (host == null) return false
         if (!EchHttpClient.isLoaded) return false
-        return host in targetHosts || host.endsWith(".archiveofourown.org")
+        // 所有请求都进 ECH 保护（DoH 网关注入 ECHConfig；无 ECH 的域名由 BoringSSL 回落正常 TLS）
+        return true
     }
 
     fun intercept(request: WebResourceRequest): WebResourceResponse? {
