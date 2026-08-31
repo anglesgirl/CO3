@@ -67,24 +67,28 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
         try {
             view.evaluateJavascript("""
                 (function(){
-                  var f=document.getElementById('new_user');
-                  if(!f || f._coHijacked) return;
-                  f._coHijacked=true;
-                  try{ window.CoBridge.onLoginHijacked('found new_user'); }catch(e){}
-                  f.addEventListener('submit', function(e){
-                    e.preventDefault();
-                    e.stopPropagation();
-                    try{
-                      var fd=new FormData(f);
-                      var params=new URLSearchParams();
-                      for(var pair of fd.entries()){ params.append(pair[0], pair[1]); }
-                      var body=params.toString();
-                      window.CoBridge.postLogin(f.action || window.location.href, body);
-                    }catch(err){
-                      try{ window.CoBridge.onLoginHijacked('hijack err:'+err); }catch(e){}
-                      f.submit();
+                  // MutationObserver 持久化劫持：页面跳转/刷新/动态插入表单都能捕获
+                  new MutationObserver(function(){
+                    var f=document.getElementById('new_user');
+                    if(f && !f._coHijacked){
+                      f._coHijacked=true;
+                      try{ window.CoBridge.onLoginHijacked('found new_user'); }catch(e){}
+                      f.addEventListener('submit', function(e){
+                        e.preventDefault();
+                        e.stopPropagation();
+                        try{
+                          var fd=new FormData(f);
+                          var params=new URLSearchParams();
+                          for(var pair of fd.entries()){ params.append(pair[0], pair[1]); }
+                          var body=params.toString();
+                          window.CoBridge.postLogin(f.action || window.location.href, body);
+                        }catch(err){
+                          try{ window.CoBridge.onLoginHijacked('hijack err:'+err); }catch(e){}
+                          f.submit();
+                        }
+                      }, true);
                     }
-                  }, true);
+                  }).observe(document, {childList: true, subtree: true});
                 })();
             """.trimIndent(), null)
         } catch(_:Exception){}
@@ -96,15 +100,17 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
             try { com.co3.Diagnostics.event("webview_login_hijack", mapOf("msg" to msg.take(120))) } catch(_:Exception){}
         }
         @JavascriptInterface fun postLogin(url: String, body: String) {
-            android.util.Log.i("CO-ECH", "postLogin "+url+" bodyLen="+body.length)
-            try { com.co3.Diagnostics.event("webview_postLogin", mapOf("url" to url.take(80), "len" to body.length.toString(), "hasToken" to body.contains("authenticity_token").toString(), "hasLogin" to body.contains("user%5Blogin%5D").toString())) } catch(_:Exception){}
+            // ① 入口立即把 url 规范化为绝对 URL（JS 传来的 f.action 可能是相对路径 "/users/login"）
+            val absoluteUrl = if (url.startsWith("http")) url else "https://archiveofourown.org" + url
+            android.util.Log.i("CO-ECH", "postLogin "+absoluteUrl+" bodyLen="+body.length)
+            try { com.co3.Diagnostics.event("webview_postLogin", mapOf("url" to absoluteUrl.take(80), "len" to body.length.toString(), "hasToken" to body.contains("authenticity_token").toString(), "hasLogin" to body.contains("user%5Blogin%5D").toString())) } catch(_:Exception){}
             Thread {
                 try {
                     val dohUrl = "https://82sew1c85i.cloudflare-gateway.com/dns-query"
                     val dohResolve = "82sew1c85i.cloudflare-gateway.com:443:162.159.36.20,162.159.36.5"
                     // 注入 Cookie
                     val cm = CookieManager.getInstance()
-                    val cookie = try { cm.getCookie(url) ?: "" } catch(_:Exception){ "" }
+                    val cookie = try { cm.getCookie(absoluteUrl) ?: "" } catch(_:Exception){ "" }
                     val headers = mutableListOf<String>()
                     if (cookie.isNotEmpty()) headers.add("Cookie: "+cookie)
                     headers.add("Content-Type: application/x-www-form-urlencoded")
@@ -112,7 +118,7 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                     headers.add("Accept-Language: zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en-US;q=0.6,en;q=0.5")
                     // HAR 成功：Referer 带 ?return_to=%2F，Origin 必带
                     // 确保 POST URL 带 return_to，否则 AO3 可能返回 200 无跳转
-                    val postUrl = if (url.contains("?")) url else if (url.contains("/users/login")) url + "?return_to=%2F" else url
+                    val postUrl = if (absoluteUrl.contains("?")) absoluteUrl else if (absoluteUrl.contains("/users/login")) absoluteUrl + "?return_to=%2F" else absoluteUrl
                     headers.add("Referer: https://archiveofourown.org/users/login?return_to=%2F")
                     headers.add("Origin: https://archiveofourown.org")
                     headers.add("User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
@@ -146,7 +152,7 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                                 fixed = fixed.replace(Regex(";\\s*Domain=[^;]+", RegexOption.IGNORE_CASE), "")
                                 fixed = fixed.replace(Regex(";\\s*Secure", RegexOption.IGNORE_CASE), "")
                                 fixed = fixed.replace(Regex(";\\s*SameSite=[^;]+", RegexOption.IGNORE_CASE), "; SameSite=Lax")
-                                try { cm.setCookie(url, fixed) } catch(_:Exception){}
+                                try { cm.setCookie(absoluteUrl, fixed) } catch(_:Exception){}
                                 try { cm.setCookie("https://archiveofourown.org/", fixed) } catch(_:Exception){}
                                 if (value.contains("user_credentials")) hasUserCredentials = true
                                 if (value.contains("_otwarchive_session")) isSession = true
@@ -202,16 +208,16 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                                 val target = if (location!!.startsWith("http")) location!! else "https://archiveofourown.org" + location!!
                                 webView.loadUrl(target)
                             } else if (html.isNotEmpty()) {
-                                webView.loadDataWithBaseURL(url, html, "text/html", "utf-8", url)
+                                webView.loadDataWithBaseURL(absoluteUrl, html, "text/html", "utf-8", absoluteUrl)
                             } else {
-                                webView.loadUrl(url)
+                                webView.loadUrl(absoluteUrl)
                             }
                         } catch(e:Exception){ android.util.Log.e("CO-ECH", "load result err "+e.message) }
                     }
                 } catch (e: Exception) {
                     android.util.Log.e("CO-ECH", "postLogin failed "+e.message)
                     try { com.co3.Diagnostics.event("webview_postLogin_fail", mapOf("err" to (e.message?:"unknown").take(120))) } catch(_:Exception){}
-                    webView.post { try { webView.loadUrl(url) } catch(_:Exception){} }
+                    webView.post { try { webView.loadUrl(absoluteUrl) } catch(_:Exception){} }
                 }
             }.start()
         }

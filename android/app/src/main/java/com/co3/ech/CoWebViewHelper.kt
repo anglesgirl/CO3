@@ -22,7 +22,19 @@ object CoWebViewHelper {
         // WebView 的 POST 拿不到 body（shouldInterceptRequest 无 body），旧 Go 是走 HTTP 代理所以能拿到。
         // 这里 GET 才走 ECH，POST 放行让 WebView 直连，否则登录表单 body 丢失永远 Session Expired
         val method = request.method ?: "GET"
-        if (method != "GET") return null
+        val url = request.url.toString()
+        // 登录 POST 特殊处理：返回 502 引导 JS 劫持接管（避免裸连被 GFW 重置）
+        val isLoginPost = method == "POST" && url.contains("/users/login")
+        if (method != "GET" && !isLoginPost) return null
+        if (isLoginPost) {
+            Diagnostics.event("webview_login_post_intercept", mapOf("url" to url.take(80)))
+            return WebResourceResponse(
+                "text/html", "utf-8", 502,
+                "Use JS Hijack",
+                mapOf("X-Co3-Use-Hijack" to "1"),
+                ByteArrayInputStream("".toByteArray())
+            )
+        }
         if (!shouldIntercept(host)) return null
         repeat(2) { attempt ->
             val dohUrl = "https://82sew1c85i.cloudflare-gateway.com/dns-query"
