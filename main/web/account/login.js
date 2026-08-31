@@ -173,20 +173,21 @@ export async function validateCookie(sessionToken) {
 
 /**
  * 原生表单登录提交（账号中心用）。
+ * 参考旧版（B0.0.20 能登录）的核心逻辑：登录成功 → URL 跳离 /users/login（302 到 dashboard）；
+ * 密码错误 → URL 仍停在 /users/login。
  * 返回 { status: 'success' | 'wrong_password' | 'challenge' | 'error', message? }
  * - challenge: CF 人机验证，需要走 WebView
  */
 export async function submitLogin(username, password) {
   if (!username || !password) return { status: 'error', message: '请输入用户名和密码' };
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 20000);
+  const timer = setTimeout(() => ctrl.abort(), 25000);
   try {
-    // 1. 拿 authenticity_token
+    // 1. 拿 authenticity_token（失败=可能被 CF 拦截 → challenge）
     let token;
     try {
       token = await fetchLoginAuthenticityToken();
     } catch (e) {
-      // 拿 token 时可能已被 CF 挑战拦截
       return { status: 'challenge', message: '登录页需要人机验证' };
     }
 
@@ -203,6 +204,7 @@ export async function submitLogin(username, password) {
       body: formData,
       credentials: 'include',
       signal: ctrl.signal,
+      redirect: 'follow',
       headers: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
@@ -213,9 +215,8 @@ export async function submitLogin(username, password) {
     });
     clearTimeout(timer);
 
+    // 3. CF 挑战检测（响应体特征）
     const html = await response.text();
-
-    // 3. CF 挑战检测
     if (response.status === 403 || response.status === 503 ||
         html.includes('_cf_chl_opt') ||
         html.includes('challenges.cloudflare.com') ||
@@ -223,28 +224,30 @@ export async function submitLogin(username, password) {
       return { status: 'challenge' };
     }
 
-    // 4. 密码错误
-    if (html.includes('Wrong username or password') || html.includes('Invalid')) {
-      return { status: 'wrong_password', message: '用户名或密码错误' };
+    // 4. 核心：旧版 URL 判断
+    //    密码错误 → URL 仍停在 /users/login
+    //    登录成功 → URL 跳离 login（dashboard 等）
+    const finalUrl = response.url || '';
+    const stillOnLogin = finalUrl.includes('/users/login') || finalUrl === 'https://archiveofourown.org/';
+    if (stillOnLogin) {
+      // 停在登录页：密码错误 或 未正确跳转
+      if (html.includes('Wrong username or password') || html.includes('Invalid')) {
+        return { status: 'wrong_password', message: '用户名或密码错误' };
+      }
+      return { status: 'error', message: '登录未跳转，请重试或使用官方登录' };
     }
 
-    // 5. 登录成功判定：页面不含登录表单（没有密码输入框）且状态 200
-    const stillLoginPage = html.includes('user[password]') || html.includes('user_password') || html.includes('new_user');
-    if (!stillLoginPage) {
-      // 同步 cookie 到 Keychain
-      try { await syncSessionFromNative(); } catch {}
-      return { status: 'success' };
-    }
-
-    // 6. 兜底：无法判断
-    return { status: 'error', message: '无法确认登录结果，请重试或使用官方登录' };
+    // 5. URL 已跳走 → 登录成功
+    // 同步 cookie 到 Keychain
+    try { await syncSessionFromNative(); } catch {}
+    return { status: 'success' };
   } catch (error) {
     clearTimeout(timer);
     console.error('submitLogin error:', error);
     if (error && error.name === 'AbortError') {
       return { status: 'error', message: '请求超时，请检查网络' };
     }
-    // ECH 失败/网络问题
+    // ECH 失败/网络问题 → 走官方 WebView 兜底
     return { status: 'challenge', message: '网络异常，尝试官方登录' };
   }
 }

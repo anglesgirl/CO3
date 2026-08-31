@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { View, ActivityIndicator, TouchableOpacity, Text, StyleSheet, DeviceEventEmitter } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import EchWebView from './EchWebView';
@@ -25,6 +26,7 @@ export default function InternalBrowser() {
   const isAO3 = url.includes('archiveofourown.org');
 
   return (
+    <SafeAreaView style={styles.container}>
     <View style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
@@ -48,6 +50,7 @@ export default function InternalBrowser() {
         />
       )}
     </View>
+    </SafeAreaView>
   );
 }
 

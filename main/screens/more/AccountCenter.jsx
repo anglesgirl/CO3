@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, ActivityIndicator, TextInput, Alert, NativeModules } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { AppContext } from '../../app';
 import { getUsername, getCredsToken } from '../../storage/Credentials';
@@ -97,7 +98,8 @@ export default function AccountCenter() {
   );
 
   return (
-    <ScrollView style={[styles.container, { backgroundColor: currentTheme.backgroundColor }]} contentContainerStyle={{ padding: 16 }}>
+    <SafeAreaView style={[styles.container, { backgroundColor: currentTheme.backgroundColor }]}>
+    <ScrollView style={styles.container} contentContainerStyle={{ padding: 16 }}>
       <Text style={[styles.header, { color: currentTheme.textColor }]}>账号中心</Text>
 
       {/* 登录状态 */}
@@ -233,6 +235,7 @@ export default function AccountCenter() {
         <Text style={{ color: currentTheme.primaryColor }}>刷新状态</Text>
       </TouchableOpacity>
     </ScrollView>
+    </SafeAreaView>
   );
 }
 
