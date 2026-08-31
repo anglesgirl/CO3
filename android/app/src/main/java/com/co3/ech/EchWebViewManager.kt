@@ -41,14 +41,20 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                 super.onPageFinished(view, url)
                 if (url != null && url.contains("archiveofourown.org")) {
                     injectLoginHijack(view)
-                    // 兜底：页面跳离登录页 = 登录成功（覆盖 JS 劫持未生效/原生提交路径）
-                    // AO3 登录成功后跳 /users/<用户名> 等；无 /users/dashboard 路径
+                    // 登录成功检测：页面跳离登录页 且 CookieManager 里有 user_credentials（AO3 登录成功才下发）
+                    // 这才是"WebView 登录成功 → App 取到登录信息"的正确路径，不依赖 postLogin 劫持判定
                     if (!url.contains("/users/login") && !url.contains("/login") &&
-                        (url.contains("/users/") || url.contains("/works") || url.contains("/series") || url.contains("/collections"))) {
+                        (url.contains("/users/") || url.contains("/works") || url.contains("/series") || url.contains("/collections") || url.endsWith("archiveofourown.org/") || url.endsWith("archiveofourown.org"))) {
                         try {
-                            reactContext?.getJSModule(com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                                ?.emit("LoginSuccess", com.facebook.react.bridge.Arguments.createMap())
-                            com.co3.Diagnostics.event("login_success_page_detect", mapOf("url" to url.take(80)))
+                            val cm = CookieManager.getInstance()
+                            val cookie = cm.getCookie("https://archiveofourown.org/") ?: ""
+                            val hasCred = cookie.contains("user_credentials")
+                            com.co3.Diagnostics.event("login_page_check", mapOf("url" to url.take(80), "hasCred" to hasCred.toString(), "cookieLen" to cookie.length.toString()))
+                            if (hasCred) {
+                                reactContext?.getJSModule(com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                                    ?.emit("LoginSuccess", com.facebook.react.bridge.Arguments.createMap())
+                                com.co3.Diagnostics.event("login_success_emit", mapOf("url" to url.take(80)))
+                            }
                         } catch (_: Exception) {}
                     }
                 }
@@ -134,31 +140,9 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                         }
                         cm.flush()
                     }
-                    // 登录成功判定：POST 响应不可靠（EchHttpClient 不跟随重定向，拿不到最终 URL）。
-                    // 最稳：POST 后再 GET /users/dashboard 验证——dashboard 页无登录表单 = 真登录成功。
-                    var loginSuccess = hasUserCredentials || (statusCode in 300..399 && location != null)
-                    // 兜底：200 时主动验证（AO3 无 /users/dashboard 路径！用首页判定：登录后含 Log Out）
-                    if (!loginSuccess && isSession) {
-                        try {
-                            val dashHeaders = mutableListOf<String>()
-                            val cmCookie = cm.getCookie("https://archiveofourown.org/") ?: ""
-                            if (cmCookie.isNotEmpty()) dashHeaders.add("Cookie: " + cmCookie)
-                            dashHeaders.add("User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                            val dashJsonStr = EchHttpClient.request(
-                                "GET", "https://archiveofourown.org/",
-                                dashHeaders.toTypedArray(), null, dohUrl, dohResolve
-                            )
-                            val dashJson = JSONObject(dashJsonStr)
-                            val dashBody = dashJson.optString("body", "")
-                            val dashHtml = if (dashBody.isNotEmpty()) String(Base64.decode(dashBody, Base64.DEFAULT), Charsets.UTF_8) else ""
-                            val isLoginPage = dashHtml.contains("user[password]", true) || dashHtml.contains("user_password", true)
-                            val hasLogout = dashHtml.contains("Log Out", true) || dashHtml.contains("log_out", true) || dashHtml.contains("logout", true)
-                            loginSuccess = !isLoginPage && hasLogout && dashJson.optInt("statusCode", 0) == 200
-                            com.co3.Diagnostics.event("postLogin_home_verify", mapOf("status" to dashJson.optInt("statusCode", 0).toString(), "loginSuccess" to loginSuccess.toString(), "hasLogout" to hasLogout.toString(), "len" to dashHtml.length.toString()))
-                        } catch (e: Exception) {
-                            com.co3.Diagnostics.event("postLogin_home_verify_fail", mapOf("err" to (e.message ?: "unknown")))
-                        }
-                    }
+                    // 登录成功判定：POST 后直接读 CookieManager 的 user_credentials（AO3 登录成功才下发）。
+                    // 信任本地真实 cookie，不再解析 HTML/发额外验证请求。
+                    val loginSuccess = hasUserCredentials
                     // 密码错误判定：200 且页面含错误提示
                     val isWrongPassword = !loginSuccess && statusCode == 200 &&
                         (htmlText.contains("Wrong username or password", true) || htmlText.contains("Invalid", true))
