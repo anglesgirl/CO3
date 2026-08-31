@@ -109,9 +109,17 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                     if (cookie.isNotEmpty()) headers.add("Cookie: "+cookie)
                     headers.add("Content-Type: application/x-www-form-urlencoded")
                     headers.add("Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                    headers.add("Referer: https://archiveofourown.org/users/login")
+                    headers.add("Accept-Language: zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en-US;q=0.6,en;q=0.5")
+                    // HAR 成功：Referer 带 ?return_to=%2F，Origin 必带
+                    headers.add("Referer: " + url)
+                    headers.add("Origin: https://archiveofourown.org")
                     headers.add("User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                    headers.add("Accept-Language: en-US,en;q=0.5")
+                    headers.add("Upgrade-Insecure-Requests: 1")
+                    headers.add("Sec-Fetch-Dest: document")
+                    headers.add("Sec-Fetch-Mode: navigate")
+                    headers.add("Sec-Fetch-Site: same-origin")
+                    headers.add("Sec-Fetch-User: ?1")
+                    headers.add("Priority: u=0, i")
                     val bodyBytes = body.toByteArray(Charsets.UTF_8)
                     // ECH POST，带 body
                     val jsonStr = EchHttpClient.request("POST", url, headers.toTypedArray(), bodyBytes, dohUrl, dohResolve)
@@ -143,9 +151,9 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                     // 登录成功判定：POST 后直接读 CookieManager 的 user_credentials（AO3 登录成功才下发）。
                     // 信任本地真实 cookie，不再解析 HTML/发额外验证请求。
                     val loginSuccess = hasUserCredentials
-                    // 密码错误判定：200 且页面含错误提示
+                    // 密码错误判定：200 且页面含错误提示（HAR 失败页是 "The password or username you entered doesn't match"）
                     val isWrongPassword = !loginSuccess && statusCode == 200 &&
-                        (htmlText.contains("Wrong username or password", true) || htmlText.contains("Invalid", true))
+                        (htmlText.contains("Wrong username or password", true) || htmlText.contains("doesn't match", true) || htmlText.contains("does not match", true) || htmlText.contains("Invalid", true))
                     try { com.co3.Diagnostics.event("webview_postLogin_result", mapOf("status" to statusCode.toString(), "hasSession" to isSession.toString(), "loginSuccess" to loginSuccess.toString(), "wrongPwd" to isWrongPassword.toString(), "location" to (location?: "").take(80))) } catch(_:Exception){}
                     android.util.Log.i("CO-ECH", "postLogin result status="+statusCode+" loginSuccess="+loginSuccess+" wrongPwd="+isWrongPassword+" location="+location)
                     val bodyBytesDecoded = if (bodyBase64.isNotEmpty()) Base64.decode(bodyBase64, Base64.DEFAULT) else ByteArray(0)
