@@ -115,20 +115,30 @@ class CoEchInterceptor : Interceptor {
                     }
                 }
                 builder.headers(responseHeaders.build())
-                // 同步 Set-Cookie 回 CookieManager（解决章节/下载认证）
+                    // 同步 Set-Cookie 到 CookieManager（OkHttp与WebView共用）
                 try {
                     val cm = CookieManager.getInstance()
                     val urlStr = request.url.toString()
                     for (sc in setCookies) {
-                        cm.setCookie(urlStr, sc)
+                        // 仿 Go 旧版：去 Domain/Secure/SameSite 改写，确保 WebView 能接收（尤其是 user_credentials）
+                        var fixed = sc
+                        // 移除 Domain 属性（让 cookie 成为 host-only，避免 domain 不匹配被拒）
+                        fixed = fixed.replace(Regex(";\\s*Domain=[^;]+", RegexOption.IGNORE_CASE), "")
+                        fixed = fixed.replace(Regex(";\\s*Secure", RegexOption.IGNORE_CASE), "")
+                        // 统一 SameSite 为 Lax（WebView 兼容最好）
+                        fixed = fixed.replace(Regex(";\\s*SameSite=[^;]+", RegexOption.IGNORE_CASE), "; SameSite=Lax")
+                        cm.setCookie(urlStr, fixed)
+                        // 同时用精简版再设一次到根域，确保 getCookie 能拿到
+                        try { cm.setCookie("https://archiveofourown.org/", fixed) } catch(_:Exception){}
                         val isSession = sc.contains("_otwarchive_session")
-                        if (isSession) {
+                        val isCred = sc.contains("user_credentials")
+                        if (isSession || isCred) {
                             Diagnostics.event("cookie_recv_session", mapOf("host" to host, "url" to urlStr.take(80), "cookie" to sc.take(140)))
-                            android.util.Log.i("CO-COOKIE", "recv session cookie $sc")
+                            android.util.Log.i("CO-COOKIE", "recv cookie ${if(isCred) "user_credentials" else "session"} $sc")
                         }
                     }
                     if (setCookies.isNotEmpty()) { cm.flush(); Diagnostics.event("cookie_recv", mapOf("host" to host, "count" to setCookies.size.toString(), "hasSession" to setCookies.any{it.contains("_otwarchive_session")}.toString())) }
-                } catch (e: Exception) { Diagnostics.event("cookie_recv_err", mapOf("host" to host, "err" to (e.message?:""))) }
+                } catch (e: Exception) { Diagnostics.event("cookie_recv_err", mapOf("host" to host, "err" to (e.message?:"")))}
                 com.co3.Diagnostics.event("ech_ok", mapOf("host" to host, "status" to statusCode, "ech" to echStatus))
                 Log.i(TAG, "ECH OK $host -> $statusCode $echStatus attempt=${attempt+1}")
                 return builder.build()

@@ -51,9 +51,8 @@ export default function AccountCenter() {
       } else if (result.status === 'wrong_password') {
         Alert.alert('登录失败', result.message || '用户名或密码错误');
       } else if (result.status === 'challenge') {
-        // 需要人机验证：走 WebView 官方登录页
-        try { await NativeModules.CoCookieModule.clearSession(); } catch {}
-        navigation.navigate('InternalBrowser', { url: 'https://archiveofourown.org/users/login', title: '官方登录（过人机验证）' });
+        // 需要人机验证：走 WebView 官方登录页（不要 clearSession，否则 token/session 丢失导致 Session Expired）
+        navigation.navigate('InternalBrowser', { url: 'https://archiveofourown.org/users/login?return_to=%2F', title: '官方登录（过人机验证）' });
       } else {
         Alert.alert('登录失败', result.message || '登录失败，请重试');
       }
@@ -140,7 +139,7 @@ export default function AccountCenter() {
           <TouchableOpacity onPress={doLogin} disabled={submitting} style={[styles.btn, { backgroundColor: currentTheme.primaryColor }]}>
             {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>登录</Text>}
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => open('https://archiveofourown.org/users/login', '官方登录')} style={{ marginTop: 8, alignItems: 'center' }}>
+          <TouchableOpacity onPress={() => open('https://archiveofourown.org/users/login?return_to=%2F', '官方登录')} style={{ marginTop: 8, alignItems: 'center' }}>
             <Text style={{ color: currentTheme.primaryColor, fontSize: 13 }}>官方页面登录（过人机验证）</Text>
           </TouchableOpacity>
         </View>

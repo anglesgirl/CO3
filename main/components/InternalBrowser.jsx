@@ -5,16 +5,21 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import EchWebView from './EchWebView';
 import { WebView } from 'react-native-webview';
+import Toast from 'react-native-toast-message';
 
 export default function InternalBrowser() {
   const navigation = useNavigation();
   const route = useRoute();
   const { url, title } = route.params || {};
 
-  // 登录成功事件：同步 Keychain，返回时账号中心自动刷新
+  // 登录成功事件：同步 Keychain，自动返回账号中心
   useEffect(() => {
     const sub = DeviceEventEmitter.addListener('LoginSuccess', () => {
       try { require('../web/syncSession').syncSessionFromNative(); } catch {}
+      Toast.show({ type: 'success', text1: '登录成功', text2: '已同步登录状态，返回中...' });
+      setTimeout(() => {
+        try { navigation.goBack(); } catch {}
+      }, 800);
     });
     return () => sub.remove();
   }, []);

@@ -111,7 +111,9 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                     headers.add("Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
                     headers.add("Accept-Language: zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en-US;q=0.6,en;q=0.5")
                     // HAR 成功：Referer 带 ?return_to=%2F，Origin 必带
-                    headers.add("Referer: " + url)
+                    // 确保 POST URL 带 return_to，否则 AO3 可能返回 200 无跳转
+                    val postUrl = if (url.contains("?")) url else if (url.contains("/users/login")) url + "?return_to=%2F" else url
+                    headers.add("Referer: https://archiveofourown.org/users/login?return_to=%2F")
                     headers.add("Origin: https://archiveofourown.org")
                     headers.add("User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                     headers.add("Upgrade-Insecure-Requests: 1")
@@ -122,7 +124,7 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                     headers.add("Priority: u=0, i")
                     val bodyBytes = body.toByteArray(Charsets.UTF_8)
                     // ECH POST，带 body
-                    val jsonStr = EchHttpClient.request("POST", url, headers.toTypedArray(), bodyBytes, dohUrl, dohResolve)
+                    val jsonStr = EchHttpClient.request("POST", postUrl, headers.toTypedArray(), bodyBytes, dohUrl, dohResolve)
                     val json = JSONObject(jsonStr)
                     val statusCode = json.optInt("statusCode", 200)
                     val bodyBase64 = json.optString("body", "")
@@ -140,7 +142,12 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                             val name = h.substring(0, idx)
                             val value = h.substring(idx+1)
                             if (name.equals("set-cookie", true)) {
-                                try { cm.setCookie(url, value) } catch(_:Exception){}
+                                var fixed = value
+                                fixed = fixed.replace(Regex(";\\s*Domain=[^;]+", RegexOption.IGNORE_CASE), "")
+                                fixed = fixed.replace(Regex(";\\s*Secure", RegexOption.IGNORE_CASE), "")
+                                fixed = fixed.replace(Regex(";\\s*SameSite=[^;]+", RegexOption.IGNORE_CASE), "; SameSite=Lax")
+                                try { cm.setCookie(url, fixed) } catch(_:Exception){}
+                                try { cm.setCookie("https://archiveofourown.org/", fixed) } catch(_:Exception){}
                                 if (value.contains("user_credentials")) hasUserCredentials = true
                                 if (value.contains("_otwarchive_session")) isSession = true
                             }
@@ -148,6 +155,8 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                         }
                         cm.flush()
                     }
+                    // 诊断：POST 响应 HTML 片段（脱敏）用于定位 Session Expired 等
+                    try { com.co3.Diagnostics.event("webview_postLogin_html", mapOf("status" to statusCode.toString(), "snippet" to htmlText.take(600).replace("\n"," ").take(600), "hasCred" to hasUserCredentials.toString())) } catch(_:Exception){}
                     // 登录成功判定：POST 后直接读 CookieManager 的 user_credentials（AO3 登录成功才下发）。
                     // 信任本地真实 cookie，不再解析 HTML/发额外验证请求。
                     val loginSuccess = hasUserCredentials

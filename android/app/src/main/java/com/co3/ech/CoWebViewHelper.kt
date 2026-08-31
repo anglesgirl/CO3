@@ -83,13 +83,20 @@ object CoWebViewHelper {
                     var sessionCount=0
                     for ((k, v) in responseHeaders) {
                         if (k.equals("set-cookie", true)) {
-                            cm.setCookie(url, v)
+                            // 同 CoEchInterceptor：去 Domain/Secure，避免 WebView 拒收 user_credentials
+                            var fixed = v
+                            fixed = fixed.replace(Regex(";\\s*Domain=[^;]+", RegexOption.IGNORE_CASE), "")
+                            fixed = fixed.replace(Regex(";\\s*Secure", RegexOption.IGNORE_CASE), "")
+                            fixed = fixed.replace(Regex(";\\s*SameSite=[^;]+", RegexOption.IGNORE_CASE), "; SameSite=Lax")
+                            cm.setCookie(url, fixed)
+                            try { cm.setCookie("https://archiveofourown.org/", fixed) } catch(_:Exception){}
                             if (v.contains("_otwarchive_session")) { sessionCount++; Diagnostics.event("webview_cookie_recv_session", mapOf("host" to host, "cookie" to v.take(140))) }
+                            if (v.contains("user_credentials")) Diagnostics.event("webview_cookie_recv_creds", mapOf("host" to host, "cookie" to v.take(140)))
                         }
                     }
                     cm.flush()
                     if (sessionCount>0) android.util.Log.i("CO-COOKIE", "WebView recv $sessionCount session cookies")
-                } catch (e: Exception) { Diagnostics.event("webview_cookie_recv_err", mapOf("host" to host, "err" to (e.message?:""))) }
+                } catch (e: Exception) { Diagnostics.event("webview_cookie_recv_err", mapOf("host" to host, "err" to (e.message?:"")))}
                 return WebResourceResponse(mimeType, encoding, statusCode, "OK", responseHeaders, stream)
             } catch (e: Exception) {
                 // fail-closed：对 ECH 目标域名的请求，任何连接失败都按 ECH 失败处理。
