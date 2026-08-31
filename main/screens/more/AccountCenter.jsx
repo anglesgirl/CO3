@@ -13,9 +13,6 @@ export default function AccountCenter() {
   const [user, setUser] = useState('');
   const [logged, setLogged] = useState(false);
   const [validating, setValidating] = useState(true);
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [submitting, setSubmitting] = useState(false);
   const [queue, setQueue] = useState({ total: null, myPos: null, loading: false });
   const [email, setEmail] = useState('');
   const [inviteLink, setInviteLink] = useState('');
@@ -38,30 +35,6 @@ export default function AccountCenter() {
 
   useEffect(() => { refresh(); }, []);
   useFocusEffect(React.useCallback(() => { refresh(); }, []));
-
-  const doLogin = async () => {
-    if (submitting) return;
-    setSubmitting(true);
-    try {
-      const result = await submitLogin(username.trim(), password);
-      if (result.status === 'success') {
-        Alert.alert('登录成功', '已同步登录状态');
-        setPassword('');
-        await refresh();
-      } else if (result.status === 'wrong_password') {
-        Alert.alert('登录失败', result.message || '用户名或密码错误');
-      } else if (result.status === 'challenge') {
-        // 需要人机验证：走 WebView 官方登录页（不要 clearSession，否则 token/session 丢失导致 Session Expired）
-        navigation.navigate('InternalBrowser', { url: 'https://archiveofourown.org/users/login?return_to=%2F', title: '官方登录（过人机验证）' });
-      } else {
-        Alert.alert('登录失败', result.message || '登录失败，请重试');
-      }
-    } catch (e) {
-      Alert.alert('登录失败', '网络异常，请重试');
-    } finally {
-      setSubmitting(false);
-    }
-  };
 
   const fetchQueue = async () => {
     setQueue(s => ({ ...s, loading: true }));
@@ -111,37 +84,15 @@ export default function AccountCenter() {
         )}
       </View>
 
-      {/* 原生登录表单 */}
+      {/* 登录：只留官方 WebView 登录（最稳，像浏览器一样） */}
       {!logged && (
         <View style={[styles.queueBox, { backgroundColor: currentTheme.cardBackground, borderColor: currentTheme.borderColor, marginBottom: 10 }]}>
-          <Text style={{ color: currentTheme.textColor, fontWeight: '600' }}>登录</Text>
-          <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>使用 AO3 账号登录（被要求人机验证时自动转官方页）</Text>
-          <TextInput
-            placeholder="用户名"
-            placeholderTextColor={currentTheme.placeholderColor}
-            value={username}
-            onChangeText={setUsername}
-            style={[styles.input, { borderColor: currentTheme.borderColor, color: currentTheme.textColor, marginTop: 10 }]}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          <TextInput
-            placeholder="密码"
-            placeholderTextColor={currentTheme.placeholderColor}
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            style={[styles.input, { borderColor: currentTheme.borderColor, color: currentTheme.textColor, marginTop: 8 }]}
-            autoCapitalize="none"
-            autoCorrect={false}
-            onSubmitEditing={doLogin}
-          />
-          <TouchableOpacity onPress={doLogin} disabled={submitting} style={[styles.btn, { backgroundColor: currentTheme.primaryColor }]}>
-            {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>登录</Text>}
+          <Text style={{ color: currentTheme.textColor, fontWeight: '600' }}>登录 AO3</Text>
+          <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>通过官方页面登录，自动同步登录状态（ECH 加密，无需手动输入）</Text>
+          <TouchableOpacity onPress={() => open('https://archiveofourown.org/users/login?return_to=%2F', '官方登录')} style={[styles.btn, { backgroundColor: currentTheme.primaryColor }]}>
+            <Text style={styles.btnText}>官方登录</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => open('https://archiveofourown.org/users/login?return_to=%2F', '官方登录')} style={{ marginTop: 8, alignItems: 'center' }}>
-            <Text style={{ color: currentTheme.primaryColor, fontSize: 13 }}>官方页面登录（过人机验证）</Text>
-          </TouchableOpacity>
+          <Text style={{ color: currentTheme.placeholderColor, fontSize: 11, marginTop: 8, textAlign: 'center' }}>登录成功后自动返回并显示已登录</Text>
         </View>
       )}
       {logged && (
