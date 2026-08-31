@@ -177,14 +177,12 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                                         ?.emit("LoginSuccess", com.facebook.react.bridge.Arguments.createMap())
                                 } catch (_: Exception) {}
                                 try { com.co3.Diagnostics.event("login_success_notify", mapOf("status" to statusCode.toString())) } catch(_:Exception){}
-                                if (statusCode in 300..399 && location != null) {
-                                    val target = if (location!!.startsWith("http")) location!! else "https://archiveofourown.org" + location!!
-                                    webView.loadUrl(target)
-                                } else if (html.isNotEmpty()) {
-                                    webView.loadDataWithBaseURL(url, html, "text/html", "utf-8", url)
-                                } else {
-                                    webView.loadUrl(url)
-                                }
+                                // 关键：不能 loadDataWithBaseURL 渲染静态 HTML（JS 不执行、cookie 不同步，右上角不更新）。
+                                // 重新 loadUrl 真实页面 → 走 ECH 拦截 + CookieManager 注入 cookie → 页面正常显示登录态
+                                val target = if (location != null && (location!!.startsWith("http"))) location!!
+                                    else if (location != null) "https://archiveofourown.org" + location!!
+                                    else "https://archiveofourown.org/"
+                                webView.loadUrl(target)
                             } else if (statusCode in 300..399 && location != null) {
                                 val target = if (location!!.startsWith("http")) location!! else "https://archiveofourown.org" + location!!
                                 webView.loadUrl(target)
