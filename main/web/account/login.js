@@ -128,10 +128,10 @@ export async function validateCookie(sessionToken) {
     // 15s 超时：ECH 失败/网络问题时不至于一直转圈
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 15000);
-    // 请求必须登录的页面 /users/dashboard：
-    // 真登录 → 200 + 页面含用户名/退出链接（无登录表单）
-    // 未登录/过期 → 302 到 /users/login 或返回登录页（含 user[password] 表单）
-    const response = await fetch('https://archiveofourown.org/users/dashboard', {
+    // 请求首页（AO3 无 /users/dashboard 路径，404！）：
+    // 真登录 → 200 + HTML 含 Log Out/用户名（右上角）
+    // 未登录 → 200 + 登录表单（user[password]）
+    const response = await fetch('https://archiveofourown.org/', {
       method: 'GET',
       credentials: 'include', // Include cookies in the request
       signal: ctrl.signal,
@@ -150,17 +150,17 @@ export async function validateCookie(sessionToken) {
     const finalUrl = response.url || '';
 
     // 1. 被重定向到登录页 → 未登录/过期
-    if (finalUrl.includes('/users/login') || finalUrl.includes('/login')) {
+    if (finalUrl.includes('/users/login')) {
       return false;
     }
     // 2. 返回的是登录表单（password 输入框）→ 未登录
-    if (html.includes('user[password]') || html.includes('user_password') || html.includes('new_user')) {
+    if (html.includes('user[password]') || html.includes('user_password')) {
       return false;
     }
-    // 3. dashboard 页成功（200 且含 logout/用户菜单）→ 真登录
+    // 3. 首页成功（200 且含 Log Out/用户名菜单）→ 真登录
     if (response.status === 200 &&
         (html.includes('Log Out') || html.includes('log_out') || html.includes('logout') ||
-         html.includes('Dashboard') || html.includes('dashboard'))) {
+         html.includes('Dashboard') || html.includes('My Dashboard') || html.includes('my dashboard'))) {
       return true;
     }
     // 4. 兜底：无法确认
