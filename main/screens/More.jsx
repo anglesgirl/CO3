@@ -246,11 +246,16 @@ const MoreScreen = ({
       icon: 'settings',
       handler: () => handlePress('Preferences'),
     },
-    {
-      name: t('screen_more_nav_account'),
-      icon: 'account-circle',
-      handler: () => handlePress('Account'),
-    },
+    // 未登录时隐藏“账号”菜单，避免与顶部大卡片重复（顶部卡片已是登录入口）
+    ...(userInfo?.logged
+      ? [
+          {
+            name: t('screen_more_nav_account'),
+            icon: 'account-circle',
+            handler: () => handlePress('Account'),
+          },
+        ]
+      : []),
     {
       name: t('screen_more_nav_kudos'),
       icon: 'favorite',
