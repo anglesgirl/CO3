@@ -41,6 +41,15 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                 super.onPageFinished(view, url)
                 if (url != null && url.contains("archiveofourown.org")) {
                     injectLoginHijack(view)
+                    // 兜底：页面跳离登录页 = 登录成功（覆盖 JS 劫持未生效/原生提交路径）
+                    if (!url.contains("/users/login") && !url.contains("/login") &&
+                        (url.contains("/users/") || url.contains("/dashboard") || url.contains("/works") || url.contains("/users/me"))) {
+                        try {
+                            reactContext?.getJSModule(com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                                ?.emit("LoginSuccess", com.facebook.react.bridge.Arguments.createMap())
+                            com.co3.Diagnostics.event("login_success_page_detect", mapOf("url" to url.take(80)))
+                        } catch (_: Exception) {}
+                    }
                 }
             }
         }
@@ -124,17 +133,30 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                         }
                         cm.flush()
                     }
-                    // 登录成功判定：
-                    // - user_credentials cookie（真登录标志）
-                    // - 或 302 跳转
-                    // - 或 200 + 收到新 session cookie + 返回页面不含登录表单（AO3 登录成功返回 200 渲染 dashboard，set-cookie 里可能只有 _otwarchive_session）
-                    // 注意：不能检查 "new_user" 字样——dashboard 页面也包含该字符串，会误判
-                    val isLoginFormPage = htmlText.contains("user[password]", true) ||
-                        htmlText.contains("user_password", true) ||
-                        htmlText.contains("Wrong username or password", true)
-                    val loginSuccess = hasUserCredentials ||
-                        (statusCode in 300..399 && location != null) ||
-                        (isSession && statusCode == 200 && !isLoginFormPage)
+                    // 登录成功判定：POST 响应不可靠（EchHttpClient 不跟随重定向，拿不到最终 URL）。
+                    // 最稳：POST 后再 GET /users/dashboard 验证——dashboard 页无登录表单 = 真登录成功。
+                    var loginSuccess = hasUserCredentials || (statusCode in 300..399 && location != null)
+                    // 兜底：200 时主动验证 dashboard
+                    if (!loginSuccess && isSession) {
+                        try {
+                            val dashHeaders = mutableListOf<String>()
+                            val cmCookie = cm.getCookie("https://archiveofourown.org/") ?: ""
+                            if (cmCookie.isNotEmpty()) dashHeaders.add("Cookie: " + cmCookie)
+                            dashHeaders.add("User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                            val dashJsonStr = EchHttpClient.request(
+                                "GET", "https://archiveofourown.org/users/dashboard",
+                                dashHeaders.toTypedArray(), null, dohUrl, dohResolve
+                            )
+                            val dashJson = JSONObject(dashJsonStr)
+                            val dashBody = dashJson.optString("body", "")
+                            val dashHtml = if (dashBody.isNotEmpty()) String(Base64.decode(dashBody, Base64.DEFAULT), Charsets.UTF_8) else ""
+                            val isLoginPage = dashHtml.contains("user[password]", true) || dashHtml.contains("user_password", true)
+                            loginSuccess = !isLoginPage && dashJson.optInt("statusCode", 0) == 200
+                            com.co3.Diagnostics.event("postLogin_dashboard_verify", mapOf("status" to dashJson.optInt("statusCode", 0).toString(), "loginSuccess" to loginSuccess.toString(), "len" to dashHtml.length.toString()))
+                        } catch (e: Exception) {
+                            com.co3.Diagnostics.event("postLogin_dashboard_verify_fail", mapOf("err" to (e.message ?: "unknown")))
+                        }
+                    }
                     // 密码错误判定：200 且页面含错误提示
                     val isWrongPassword = !loginSuccess && statusCode == 200 &&
                         (htmlText.contains("Wrong username or password", true) || htmlText.contains("Invalid", true))
