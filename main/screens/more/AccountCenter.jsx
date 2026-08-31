@@ -68,7 +68,7 @@ export default function AccountCenter() {
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 15000);
-      const res = await fetch('https://archiveofourown.org/invite_requests', { headers: { 'Accept': 'text/html' }, signal: ctrl.signal });
+      const res = await fetch('https://archiveofourown.org/invite_requests/status', { headers: { 'Accept': 'text/html' }, signal: ctrl.signal });
       clearTimeout(timer);
       const html = await res.text();
       // 解析排队人数：AO3 文案 "There are currently 339973 people on the waiting list"
@@ -217,7 +217,8 @@ export default function AccountCenter() {
               <TouchableOpacity
                 onPress={() => {
                   if (!email.includes('@')) return Alert.alert('请输入有效邮箱');
-                  open(`https://archiveofourown.org/invite_requests?email=${encodeURIComponent(email)}`, '查询位置');
+                  // AO3 查位置需登录：打开官方 status 页（登录后可见位置）
+                  open(`https://archiveofourown.org/invite_requests/status`, '查询位置');
                 }}
                 style={[styles.btnSmall, { backgroundColor: currentTheme.primaryColor }]}
               >
