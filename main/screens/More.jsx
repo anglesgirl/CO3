@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Animated,
   DeviceEventEmitter,
@@ -11,7 +11,7 @@ import {
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 
 const MoreScreen = ({
   currentTheme,
@@ -40,6 +40,40 @@ const MoreScreen = ({
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
   const { t } = useTranslation();
+
+  // 顶部用户信息卡：登录状态（登录成功后刷新）
+  const [userInfo, setUserInfo] = useState(null);
+  const [checkingUser, setCheckingUser] = useState(false);
+
+  const refreshUserInfo = useCallback(async () => {
+    try {
+      setCheckingUser(true);
+      const { getUsername, getCredsToken } = require('../storage/Credentials');
+      const { validateCookie } = require('../web/account/login');
+      const u = await getUsername();
+      const token = await getCredsToken();
+      if (token) {
+        const ok = await validateCookie(token).catch(() => false);
+        setUserInfo(ok ? { username: u || 'AO3用户', logged: true } : { username: u || '', logged: false });
+      } else {
+        setUserInfo({ username: u || '', logged: false });
+      }
+    } catch (e) {
+      setUserInfo(null);
+    } finally {
+      setCheckingUser(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // 登录成功事件 → 刷新顶部用户卡
+    const sub = DeviceEventEmitter.addListener('LoginSuccess', () => {
+      refreshUserInfo();
+    });
+    return () => sub.remove();
+  }, [refreshUserInfo]);
+
+  useFocusEffect(useCallback(() => { refreshUserInfo(); }, [refreshUserInfo]));
 
   useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -284,6 +318,30 @@ const MoreScreen = ({
           {t('screen_more_subtitle')}
         </Text>
 
+        {/* 用户信息卡：显示登录状态，点击进账号中心 */}
+        <TouchableOpacity
+          onPress={() => handlePress('Account')}
+          style={[
+            styles.userCard,
+            { backgroundColor: currentTheme.cardBackground, borderColor: currentTheme.borderColor },
+          ]}
+        >
+          <Icon
+            name={userInfo?.logged ? 'check-circle' : 'account-circle'}
+            size={34}
+            color={userInfo?.logged ? 'green' : currentTheme.placeholderColor}
+          />
+          <View style={{ marginLeft: 12, flex: 1 }}>
+            <Text style={{ color: currentTheme.textColor, fontSize: 15, fontWeight: '600' }}>
+              {checkingUser ? '检查登录状态…' : userInfo?.logged ? `已登录：${userInfo.username}` : '未登录'}
+            </Text>
+            <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 2 }}>
+              {userInfo?.logged ? '点击进入账号中心' : '点击登录 / 注册（ECH 官方登录）'}
+            </Text>
+          </View>
+          <Icon name="chevron-right" size={24} color={currentTheme.placeholderColor} />
+        </TouchableOpacity>
+
         <View style={styles.menuContainer}>
           {menuItems.map((item, index) => (
             <Animated.View
@@ -357,6 +415,15 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 16,
     marginBottom: 24,
+  },
+  userCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 16,
+    marginHorizontal: -16,
   },
   menuContainer: {
     borderRadius: 12,
