@@ -66,6 +66,29 @@ class CoCookieModule(reactContext: ReactApplicationContext) : ReactContextBaseJa
         } catch (e: Exception) { promise.resolve(false) }
     }
 
+    /**
+     * 登录验证：CookieManager 里有没有 user_credentials（AO3 登录成功才会下发该 cookie）。
+     * 比网络请求校验 HTML 可靠得多——WebView 登录成功后真实 cookie 就在这。
+     */
+    @ReactMethod
+    fun hasUserCredentials(promise: Promise) {
+        try {
+            val cm = CookieManager.getInstance()
+            var found = false
+            var frag = ""
+            for (u in listOf("https://archiveofourown.org/", "https://www.archiveofourown.org/")) {
+                val c = cm.getCookie(u) ?: ""
+                if (c.contains("user_credentials")) {
+                    found = true
+                    frag = c.take(120)
+                    break
+                }
+            }
+            try { Diagnostics.event("cookie_user_creds", mapOf("found" to found.toString(), "preview" to frag)) } catch(_:Exception){}
+            promise.resolve(found)
+        } catch (e: Exception) { promise.resolve(false) }
+    }
+
     // 远程诊断日志开关（关于页连点 7 次版本号切换）
     @ReactMethod
     fun setDiagnosticsEnabled(enabled: Boolean) {

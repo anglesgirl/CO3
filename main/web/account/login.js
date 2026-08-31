@@ -1,5 +1,6 @@
 import { fetchLoginAuthenticityToken } from './fetchAuthenticityToken';
 import { syncSessionFromNative } from '../syncSession';
+import { NativeModules } from 'react-native';
 import Toast from 'react-native-toast-message';
 import {
   deleteCredsPasswd,
@@ -123,17 +124,23 @@ export default async function login(username, password) {
 //But if the token is invalid the website will strip some cookies
 //We detect that to guess if the cookie is valid or not.
 //And guess is a very important word in this sentence lmao.
+/**
+ * 登录状态验证：直接读 CookieManager 的 user_credentials（AO3 登录成功才下发该 cookie）。
+ * WebView 登录成功后真实 cookie 就在本地，无需网络请求校验 HTML。
+ */
 export async function validateCookie(sessionToken) {
   try {
-    // 15s 超时：ECH 失败/网络问题时不至于一直转圈
+    const mod = NativeModules.CoCookieModule;
+    if (mod && mod.hasUserCredentials) {
+      const ok = await mod.hasUserCredentials();
+      return !!ok;
+    }
+    // 兜底：原生模块不可用时退回旧逻辑
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 15000);
-    // 请求首页（AO3 无 /users/dashboard 路径，404！）：
-    // 真登录 → 200 + HTML 含 Log Out/用户名（右上角）
-    // 未登录 → 200 + 登录表单（user[password]）
     const response = await fetch('https://archiveofourown.org/', {
       method: 'GET',
-      credentials: 'include', // Include cookies in the request
+      credentials: 'include',
       signal: ctrl.signal,
       redirect: 'follow',
       headers: {
@@ -141,33 +148,21 @@ export async function validateCookie(sessionToken) {
         'Accept-Language': 'en-US,en;q=0.5',
         'Accept-Encoding': 'gzip, deflate',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Cookie': `user_credentials=1; _otwarchive_session=${sessionToken}` // Attach both cookies
+        'Cookie': `user_credentials=1; _otwarchive_session=${sessionToken}`
       }
     });
     clearTimeout(timer);
-
     const html = await response.text();
-    const finalUrl = response.url || '';
-
-    // 1. 被重定向到登录页 → 未登录/过期
-    if (finalUrl.includes('/users/login')) {
-      return false;
-    }
-    // 2. 返回的是登录表单（password 输入框）→ 未登录
-    if (html.includes('user[password]') || html.includes('user_password')) {
-      return false;
-    }
-    // 3. 首页成功（200 且含 Log Out/用户名菜单）→ 真登录
+    if (response.url && response.url.includes('/users/login')) return false;
+    if (html.includes('user[password]') || html.includes('user_password')) return false;
     if (response.status === 200 &&
-        (html.includes('Log Out') || html.includes('log_out') || html.includes('logout') ||
-         html.includes('Dashboard') || html.includes('My Dashboard') || html.includes('my dashboard'))) {
+        (html.includes('Log Out') || html.includes('log_out') || html.includes('logout'))) {
       return true;
     }
-    // 4. 兜底：无法确认
     return false;
   } catch (error) {
     console.error('Error validating cookie:', error);
-    throw error;
+    return false;
   }
 }
 
