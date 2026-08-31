@@ -97,7 +97,7 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
         }
         @JavascriptInterface fun postLogin(url: String, body: String) {
             android.util.Log.i("CO-ECH", "postLogin "+url+" bodyLen="+body.length)
-            try { com.co3.Diagnostics.event("webview_postLogin", mapOf("url" to url.take(80), "len" to body.length.toString())) } catch(_:Exception){}
+            try { com.co3.Diagnostics.event("webview_postLogin", mapOf("url" to url.take(80), "len" to body.length.toString(), "hasToken" to body.contains("authenticity_token").toString(), "hasLogin" to body.contains("user%5Blogin%5D").toString())) } catch(_:Exception){}
             Thread {
                 try {
                     val dohUrl = "https://82sew1c85i.cloudflare-gateway.com/dns-query"
@@ -156,7 +156,19 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                         cm.flush()
                     }
                     // 诊断：POST 响应 HTML 片段（脱敏）用于定位 Session Expired 等
-                    try { com.co3.Diagnostics.event("webview_postLogin_html", mapOf("status" to statusCode.toString(), "snippet" to htmlText.take(600).replace("\n"," ").take(600), "hasCred" to hasUserCredentials.toString())) } catch(_:Exception){}
+                    // 取 body 中的错误提示而非 head
+                    val snippet = try {
+                        val errIdx = htmlText.indexOf("class=\"error\"")
+                        val msgIdx = htmlText.indexOf("doesn't match")
+                        val idx = when {
+                            errIdx >= 0 -> maxOf(0, errIdx - 100)
+                            msgIdx >= 0 -> maxOf(0, msgIdx - 100)
+                            htmlText.contains("Session expired") -> maxOf(0, htmlText.indexOf("Session expired") - 100)
+                            else -> 0
+                        }
+                        htmlText.substring(idx, minOf(htmlText.length, idx + 600)).replace("\n"," ").take(600)
+                    } catch(_:Exception){ htmlText.take(600).replace("\n"," ").take(600) }
+                    try { com.co3.Diagnostics.event("webview_postLogin_html", mapOf("status" to statusCode.toString(), "snippet" to snippet, "hasCred" to hasUserCredentials.toString(), "hasSessionHeader" to isSession.toString())) } catch(_:Exception){}
                     // 登录成功判定：POST 后直接读 CookieManager 的 user_credentials（AO3 登录成功才下发）。
                     // 信任本地真实 cookie，不再解析 HTML/发额外验证请求。
                     val loginSuccess = hasUserCredentials

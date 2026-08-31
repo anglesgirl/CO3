@@ -49,27 +49,35 @@ export const handleLogin = async (username, password) => {
 
 export default async function login(username, password) {
   try {
-    // Prepare the form data
-    const formData = new FormData();
-    formData.append('authenticity_token', await fetchLoginAuthenticityToken());
-    formData.append('user[login]', username);
-    formData.append('user[password]', password);
-    formData.append('user[remember_me]', '1');
-    formData.append('commit', 'Log in');
+    // 必须用 urlencoded，不是 multipart（AO3 只认 application/x-www-form-urlencoded）
+    const token = await fetchLoginAuthenticityToken();
+    const params = new URLSearchParams();
+    params.append('authenticity_token', token);
+    params.append('user[login]', username);
+    params.append('user[password]', password);
+    params.append('user[remember_me]', '1');
+    params.append('commit', 'Log in');
 
     // Send the login request
-    const response = await fetch('https://archiveofourown.org/users/login', {
+    const response = await fetch('https://archiveofourown.org/users/login?return_to=%2F', {
       method: 'POST',
-      body: formData,
+      body: params.toString(),
       credentials: 'include', // Important for cookies
       headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
         Accept:
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate',
-        Referer: 'https://archiveofourown.org/users/login',
+        Referer: 'https://archiveofourown.org/users/login?return_to=%2F',
+        Origin: 'https://archiveofourown.org',
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'same-origin',
+        'Sec-Fetch-User': '?1',
+        Priority: 'u=0, i',
       }, //Yea cloudflare was hard on this one, so i'm officially a web browser YaY
       //Like fr i'm a win 10 machine on chrome wdym
       //We just need to pray cloudflare will leave me alone
@@ -186,24 +194,24 @@ export async function submitLogin(username, password) {
       return { status: 'challenge', message: '登录页需要人机验证' };
     }
 
-    // 2. POST 登录
-    const formData = new FormData();
-    formData.append('authenticity_token', token);
-    formData.append('user[login]', username);
-    formData.append('user[password]', password);
-    formData.append('user[remember_me]', '1');
-    formData.append('commit', 'Log in');
+    // 2. POST 登录（必须 urlencoded，AO3 不认 multipart）
+    const params = new URLSearchParams();
+    params.append('authenticity_token', token);
+    params.append('user[login]', username);
+    params.append('user[password]', password);
+    params.append('user[remember_me]', '1');
+    params.append('commit', 'Log in');
 
-    const response = await fetch('https://archiveofourown.org/users/login', {
+    const response = await fetch('https://archiveofourown.org/users/login?return_to=%2F', {
       method: 'POST',
-      body: formData,
+      body: params.toString(),
       credentials: 'include',
       signal: ctrl.signal,
       redirect: 'follow',
       headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en-US;q=0.6,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate',
         'Referer': 'https://archiveofourown.org/users/login?return_to=%2F',
         'Origin': 'https://archiveofourown.org',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
