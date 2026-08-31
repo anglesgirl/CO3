@@ -202,10 +202,17 @@ export async function submitLogin(username, password) {
       redirect: 'follow',
       headers: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Language': 'zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en-US;q=0.6,en;q=0.5',
         'Accept-Encoding': 'gzip, deflate',
-        'Referer': 'https://archiveofourown.org/users/login',
+        'Referer': 'https://archiveofourown.org/users/login?return_to=%2F',
+        'Origin': 'https://archiveofourown.org',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'same-origin',
+        'Sec-Fetch-User': '?1',
+        'Priority': 'u=0, i',
       },
     });
     clearTimeout(timer);
@@ -221,12 +228,12 @@ export async function submitLogin(username, password) {
 
     // 4. 核心：旧版 URL 判断
     //    密码错误 → URL 仍停在 /users/login
-    //    登录成功 → URL 跳离 login（dashboard 等）
+    //    登录成功 → URL 跳离 login（成功 HAR 是 302 → https://archiveofourown.org/）
     const finalUrl = response.url || '';
-    const stillOnLogin = finalUrl.includes('/users/login') || finalUrl === 'https://archiveofourown.org/';
+    const stillOnLogin = finalUrl.includes('/users/login');
     if (stillOnLogin) {
-      // 停在登录页：密码错误 或 未正确跳转
-      if (html.includes('Wrong username or password') || html.includes('Invalid')) {
+      // 停在登录页：密码错误 或 未正确跳转（HAR 失败页是 "doesn't match"）
+      if (html.includes('Wrong username or password') || html.includes("doesn't match") || html.includes('does not match') || html.includes('Invalid')) {
         return { status: 'wrong_password', message: '用户名或密码错误' };
       }
       return { status: 'error', message: '登录未跳转，请重试或使用官方登录' };
