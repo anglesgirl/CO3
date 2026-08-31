@@ -128,11 +128,14 @@ export async function validateCookie(sessionToken) {
     // 15s 超时：ECH 失败/网络问题时不至于一直转圈
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 15000);
-    // Send a request to the website with the provided cookies
-    const response = await fetch('https://archiveofourown.org/', {
+    // 请求必须登录的页面 /users/dashboard：
+    // 真登录 → 200 + 页面含用户名/退出链接（无登录表单）
+    // 未登录/过期 → 302 到 /users/login 或返回登录页（含 user[password] 表单）
+    const response = await fetch('https://archiveofourown.org/users/dashboard', {
       method: 'GET',
       credentials: 'include', // Include cookies in the request
       signal: ctrl.signal,
+      redirect: 'follow',
       headers: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
@@ -143,25 +146,25 @@ export async function validateCookie(sessionToken) {
     });
     clearTimeout(timer);
 
-    // Check the response headers for the "set-cookie" header
-    const setCookieHeader = response.headers.get('set-cookie');
-    if (setCookieHeader) {
-      // Look for the "user_credentials" cookie being cleared
-      const cookies = setCookieHeader.split(',');
-      for (let cookie of cookies) {
-        const trimmedCookie = cookie.trim();
-        if (trimmedCookie.startsWith('user_credentials=') && trimmedCookie.includes('max-age=0')) {
-          console.log("Cookie invalid !")
-          return false;
-        }
-      }
+    const html = await response.text();
+    const finalUrl = response.url || '';
+
+    // 1. 被重定向到登录页 → 未登录/过期
+    if (finalUrl.includes('/users/login') || finalUrl.includes('/login')) {
+      return false;
     }
-
-    console.log("Cookie verified !")
-
-    // If the "user_credentials" cookie is not cleared, the token is valid
-    return true;
-
+    // 2. 返回的是登录表单（password 输入框）→ 未登录
+    if (html.includes('user[password]') || html.includes('user_password') || html.includes('new_user')) {
+      return false;
+    }
+    // 3. dashboard 页成功（200 且含 logout/用户菜单）→ 真登录
+    if (response.status === 200 &&
+        (html.includes('Log Out') || html.includes('log_out') || html.includes('logout') ||
+         html.includes('Dashboard') || html.includes('dashboard'))) {
+      return true;
+    }
+    // 4. 兜底：无法确认
+    return false;
   } catch (error) {
     console.error('Error validating cookie:', error);
     throw error;

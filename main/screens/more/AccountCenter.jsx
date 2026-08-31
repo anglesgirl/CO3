@@ -32,6 +32,7 @@ export default function AccountCenter() {
         setLogged(ok);
       } else setLogged(false);
     } catch { setLogged(false); } finally { setValidating(false); }
+    fetchQueue();
   };
 
   useEffect(() => { refresh(); }, []);
@@ -70,11 +71,15 @@ export default function AccountCenter() {
       const res = await fetch('https://archiveofourown.org/invite_requests', { headers: { 'Accept': 'text/html' }, signal: ctrl.signal });
       clearTimeout(timer);
       const html = await res.text();
+      // 解析排队人数：AO3 文案 "There are currently 339973 people on the waiting list"
       let total = null;
-      const m1 = html.match(/There are\s+(\d[\d,]*)\s+people\s+in\s+the\s+queue/i);
-      if (m1) total = m1[1];
+      const m1 = html.match(/There are currently\s+([\d,]+)\s+people\s+on\s+the\s+waiting\s+list/i);
+      if (!m1) {
+        const m1b = html.match(/There are\s+([\d,]+)\s+people\s+in\s+the\s+queue/i);
+        if (m1b) total = m1b[1];
+      } else total = m1[1];
       let myPos = null;
-      const m3 = html.match(/you\s+are\s+number\s*(\d+)/i);
+      const m3 = html.match(/you\s+are\s+number\s*([\d,]+)/i);
       if (m3) myPos = m3[1];
       setQueue({ total, myPos, loading: false });
     } catch (e) {
