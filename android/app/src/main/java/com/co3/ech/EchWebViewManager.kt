@@ -128,9 +128,9 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                     // - user_credentials cookie（真登录标志）
                     // - 或 302 跳转
                     // - 或 200 + 收到新 session cookie + 返回页面不含登录表单（AO3 登录成功返回 200 渲染 dashboard，set-cookie 里可能只有 _otwarchive_session）
+                    // 注意：不能检查 "new_user" 字样——dashboard 页面也包含该字符串，会误判
                     val isLoginFormPage = htmlText.contains("user[password]", true) ||
                         htmlText.contains("user_password", true) ||
-                        htmlText.contains("new_user", true) ||
                         htmlText.contains("Wrong username or password", true)
                     val loginSuccess = hasUserCredentials ||
                         (statusCode in 300..399 && location != null) ||

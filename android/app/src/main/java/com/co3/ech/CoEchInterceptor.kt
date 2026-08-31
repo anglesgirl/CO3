@@ -71,7 +71,13 @@ class CoEchInterceptor : Interceptor {
                 val echStatus = json.optString("echStatus", "")
                 val headersJson = json.optJSONArray("headers")
 
-                if (echStatus.contains("REJECTED", true) || echStatus.contains("ECH", true) && statusCode >= 400) {
+                // 只有明确 REJECTED/ECH 握手失败才按 ECH 失败处理。
+                // "ECH accepted with target configuration" 表示 ECH 成功，即使 HTTP 4xx/5xx 也是业务状态，不是 ECH 失败。
+                val echFailed = echStatus.contains("REJECTED", true) ||
+                    echStatus.contains("ECH was not offered", true) ||
+                    echStatus.contains("ech was disabled", true) ||
+                    echStatus.contains("failed", true) && echStatus.contains("ech", true)
+                if (echFailed) {
                     throw java.io.IOException("ECH_REJECTED: $echStatus")
                 }
 
