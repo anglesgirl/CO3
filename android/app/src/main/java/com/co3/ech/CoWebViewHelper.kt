@@ -30,7 +30,7 @@ object CoWebViewHelper {
             Diagnostics.event("webview_login_post_intercept", mapOf("url" to url.take(80)))
             return WebResourceResponse(
                 "text/html", "utf-8", 502,
-                "Use JS Hijack",
+                "Bad Gateway",
                 mapOf("X-Co3-Use-Hijack" to "1"),
                 ByteArrayInputStream("".toByteArray())
             )
@@ -146,10 +146,10 @@ object CoWebViewHelper {
                 // 重试仍失败：返回错误响应（fail-closed，不暴露 SNI）
                 Diagnostics.event("ech_fail_webview", mapOf("host" to host, "err" to (e.message ?: "unknown")))
                 return WebResourceResponse(
-                    "text/html", "utf-8", 502,
-                    "ECH Connection Failed",
-                    mapOf("Cache-Control" to "no-store"),
-                    ByteArrayInputStream("<!DOCTYPE html><html><body><h3>ECH 连接失败 (fail-closed)</h3><p>${e.message?.let { it.replace("<","&lt;") } ?: "unknown"}</p></body></html>".toByteArray())
+                                    "text/html", "utf-8", 502,
+                                    "Bad Gateway",
+                                    mapOf("Cache-Control" to "no-store"),
+                                    ByteArrayInputStream("<!DOCTYPE html><html><body><h3>ECH 连接失败 (fail-closed)</h3><p>${e.message?.let { it.replace("<","<") } ?: "unknown"}</p></body></html>".toByteArray())
                 )
             }
         }
