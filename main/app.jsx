@@ -78,6 +78,7 @@ import StatsScreen from './screens/more/StatsScreen';
 import ReadLaterScreen from './screens/more/ReadLaterScreen';
 import PreferencesScreen from './screens/more/Preferences';
 import LoginScreen from './screens/more/LoginScreen';
+import AccountCenter from './screens/more/AccountCenter';
 import KudoHistoryScreen from './screens/more/KudoHistory';
 import HelpScreen from './screens/more/HelpScreen';
 import DebugScreen from './screens/more/DebugScreen';
@@ -296,7 +297,8 @@ const AppWrapper = () => {
                     name={'Preferences'}
                     component={PreferencesScreen}
                   />
-                  <Stack.Screen name={'Account'} component={LoginScreen} />
+                  <Stack.Screen name={'Account'} component={AccountCenter} />
+                  <Stack.Screen name={'AccountCenter'} component={AccountCenter} />
                   <Stack.Screen
                     name={'KudosHistory'}
                     component={KudoHistoryScreen}
