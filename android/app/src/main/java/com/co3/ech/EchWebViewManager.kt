@@ -67,8 +67,8 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
         try {
             view.evaluateJavascript("""
                 (function(){
-                  // MutationObserver 持久化劫持：页面跳转/刷新/动态插入表单都能捕获
-                  new MutationObserver(function(){
+                  // 先扫描已存在的表单，再监听动态插入，避免页面已完成加载时漏绑 submit。
+                  function scan(){
                     var f=document.getElementById('new_user');
                     if(f && !f._coHijacked){
                       f._coHijacked=true;
@@ -88,7 +88,9 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                         }
                       }, true);
                     }
-                  }).observe(document, {childList: true, subtree: true});
+                  }
+                  scan();
+                  new MutationObserver(scan).observe(document, {childList: true, subtree: true});
                 })();
             """.trimIndent(), null)
         } catch(_:Exception){}
