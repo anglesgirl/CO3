@@ -8,7 +8,7 @@
 import ky from 'ky';
 import { NativeModules, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { trackEvent } from '../utils/analytics';
+const trackEvent = () => {};
 
 const AO3_HOSTS = new Set(['archiveofourown.org', 'www.archiveofourown.org']);
 
