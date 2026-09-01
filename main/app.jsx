@@ -83,6 +83,7 @@ import UserWorkScreen from './screens/more/UserWorkScreen';
 import StatsScreen from './screens/more/StatsScreen';
 import ReadLaterScreen from './screens/more/ReadLaterScreen';
 import PreferencesScreen from './screens/more/Preferences';
+import AccountCenter from './screens/more/AccountCenter';
 import LoginScreen from './screens/more/LoginScreen';
 import KudoHistoryScreen from './screens/more/KudoHistory';
 import DebugScreen from './screens/more/DebugScreen';
@@ -271,7 +272,8 @@ const AppWrapper = () => {
                   <Stack.Screen name={'Statistics'} component={StatsScreen} />
                   <Stack.Screen name={'ReadLater'} component={ReadLaterScreen} />
                   <Stack.Screen name={'Preferences'} component={PreferencesScreen} />
-                  <Stack.Screen name={'Account'} component={LoginScreen} />
+                  <Stack.Screen name={'Account'} component={AccountCenter} />
+                  <Stack.Screen name={'AccountCenter'} component={AccountCenter} />
                   <Stack.Screen name={'KudosHistory'} component={KudoHistoryScreen} />
                   <Stack.Screen name={'Debug'} component={DebugScreen} />
                   <Stack.Screen name={'Categories'} component={CategoryScreen} />
