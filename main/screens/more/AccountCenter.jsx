@@ -64,11 +64,8 @@ export default function AccountCenter() {
   const fetchQueue = async () => {
     setQueue(s => ({ ...s, loading: true }));
     try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 15000);
-      const res = await fetch('https://archiveofourown.org/invite_requests', { headers: { 'Accept': 'text/html' }, signal: ctrl.signal });
-      clearTimeout(timer);
-      const html = await res.text();
+      const { echFetch } = await import('../../web/echKy');
+      const html = await echFetch('https://archiveofourown.org/invite_requests', { headers: { 'Accept': 'text/html' } }).then(r => r.text());
       let total = null;
       const m1 = html.match(/There are\s+(\d[\d,]*)\s+people\s+in\s+the\s+queue/i);
       if (m1) total = m1[1];
