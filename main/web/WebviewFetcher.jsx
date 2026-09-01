@@ -414,6 +414,7 @@ export default function WebviewFetcher() {
   const [source, setSource] = useState(null);
   const [visible, setVisible] = useState(false);
   const [showCFWarning, setShowCFWarning] = useState(false);
+  const [wvLoading, setWvLoading] = useState(true);
   const webViewRef = useRef(null);
   const currentRef = useRef(null);
   const httpErrorRef = useRef(null);
@@ -435,6 +436,7 @@ export default function WebviewFetcher() {
 
   const loadCurrent = () => {
     setVisible(false);
+    setWvLoading(true);
     setWebViewKey((k) => k + 1); // 强制重建 WebView 实例,清 cookie 残留
     const wvStart = Date.now();
     // 记录起始路径: 官方表单页(密码重置/注册/激活)提交成功后 Rails 会
@@ -634,6 +636,7 @@ export default function WebviewFetcher() {
   };
 
   const onLoadEnd = () => {
+    setWvLoading(false);
     const err = httpErrorRef.current;
     httpErrorRef.current = null;
 
@@ -649,6 +652,7 @@ export default function WebviewFetcher() {
     // 交互式登录(interactiveLogin)始终显示——用户要在窗口里完成
     // 整个登录,不能依赖任何检测 JS,也绝不自动 settle。
     if (currentRef.current?.requireLoginForm || currentRef.current?.interactiveLogin) {
+      setWvLoading(true);
       setVisible(true);
     }
     // 交互式登录不注入 CF_CHALLENGE_DETECTION：窗口由用户操作驱动
@@ -925,6 +929,17 @@ export default function WebviewFetcher() {
 
       {source && (
         <View style={[styles.webviewBase, visible ? styles.visible : styles.hidden]}>
+          {visible && wvLoading && (
+            <View style={styles.loadingOverlay}>
+              <View style={styles.loadingCard}>
+                <Text style={styles.loadingTitle}>正在加载官方页面…</Text>
+                <View style={styles.progressTrack}>
+                  <View style={styles.progressBar} />
+                </View>
+                <Text style={styles.loadingHint}>首次加载需通过 ECH 握手，请稍候</Text>
+              </View>
+            </View>
+          )}
           <WebView
             key={webViewKey}
             ref={webViewRef}
@@ -995,6 +1010,44 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     lineHeight: 18,
+  },
+  loadingOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    zIndex: 10002,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  loadingCard: {
+    width: '100%',
+    maxWidth: 320,
+    alignItems: 'center',
+  },
+  loadingTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 12,
+  },
+  progressTrack: {
+    width: '100%',
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#e5e7eb',
+    overflow: 'hidden',
+  },
+  progressBar: {
+    width: '70%',
+    height: '100%',
+    backgroundColor: '#8b5cf6',
+    borderRadius: 3,
+  },
+  loadingHint: {
+    marginTop: 10,
+    fontSize: 12,
+    color: '#6b7280',
   },
 
   // Modal

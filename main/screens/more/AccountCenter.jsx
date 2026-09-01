@@ -14,8 +14,6 @@ export default function AccountCenter() {
   const [user, setUser] = useState('');
   const [logged, setLogged] = useState(false);
   const [validating, setValidating] = useState(true);
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [queue, setQueue] = useState({ total: null, myPos: null, loading: false });
   const [email, setEmail] = useState('');
@@ -109,33 +107,15 @@ export default function AccountCenter() {
 
       {!logged && (
         <View style={[styles.queueBox, { backgroundColor: currentTheme.cardBackground, borderColor: currentTheme.borderColor, marginBottom: 10 }]}>
-          <Text style={{ color: currentTheme.textColor, fontWeight: '600' }}>登录</Text>
-          <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>使用 AO3 账号登录（被要求人机验证时自动转官方页）</Text>
-          <TextInput
-            placeholder="用户名"
-            placeholderTextColor={currentTheme.placeholderColor}
-            value={username}
-            onChangeText={setUsername}
-            style={[styles.input, { borderColor: currentTheme.borderColor, color: currentTheme.textColor, marginTop: 10 }]}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          <TextInput
-            placeholder="密码"
-            placeholderTextColor={currentTheme.placeholderColor}
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            style={[styles.input, { borderColor: currentTheme.borderColor, color: currentTheme.textColor, marginTop: 8 }]}
-            autoCapitalize="none"
-            autoCorrect={false}
-            onSubmitEditing={doLogin}
-          />
-          <TouchableOpacity onPress={doLogin} disabled={submitting} style={[styles.btn, { backgroundColor: currentTheme.primaryColor }]}>
-            {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>登录</Text>}
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => open('https://archiveofourown.org/users/login', '官方登录')} style={{ marginTop: 8, alignItems: 'center' }}>
-            <Text style={{ color: currentTheme.primaryColor, fontSize: 13 }}>官方页面登录（过人机验证）</Text>
+          <Text style={{ color: currentTheme.textColor, fontWeight: '600' }}>登录 AO3</Text>
+          <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>直接打开官方登录页（自动处理人机验证），登录成功自动同步</Text>
+          <TouchableOpacity onPress={doLogin} disabled={submitting} style={[styles.btn, { backgroundColor: currentTheme.primaryColor, opacity: submitting ? 0.7 : 1 }]}>
+            {submitting ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <ActivityIndicator color="#fff" size="small" />
+                <Text style={[styles.btnText, { marginLeft: 8 }]}>正在打开…</Text>
+              </View>
+            ) : <Text style={styles.btnText}>去登录</Text>}
           </TouchableOpacity>
         </View>
       )}
