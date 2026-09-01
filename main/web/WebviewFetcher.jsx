@@ -208,12 +208,12 @@ function buildPageTranslator(targetLang) {
       if (ph) add(null, inputs[j], true, ph);
     }
     if (!items.length) return;
-    // 单条文本翻译（gtx 端点，走本地代理）。
+    // 单条文本翻译（gtx 端点，直连，不走ECH代理——已切阿里云国内不被墙，直连更快）
     async function translateOne(text) {
-      var url = '/translate_a/single?client=gtx&sl=auto&tl=' + encodeURIComponent(tl) + '&dt=t&q=' + encodeURIComponent(text);
+      var url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=' + encodeURIComponent(tl) + '&dt=t&q=' + encodeURIComponent(text);
       var ctrl = new AbortController(); var to = setTimeout(function(){ try{ctrl.abort();}catch(e){} }, 8000);
       try {
-        var res = await fetch(url, { headers: { 'X-Ech-Target': 'translate.googleapis.com' }, signal: ctrl.signal });
+        var res = await fetch(url, { signal: ctrl.signal });
         clearTimeout(to);
         if (!res.ok) { console.log('[TR] translateOne HTTP '+res.status); return null; }
         var data = await res.json();
@@ -225,11 +225,11 @@ function buildPageTranslator(targetLang) {
     // 返回数组）。2026-08-15 优化：原来逐条串行（页面几百个文本节点 =
     // 几百次往返，用户实测很慢），批量后请求数降 20 倍。
     async function translateBatch(texts) {
-      var url = '/translate_a/single?client=gtx&sl=auto&tl=' + encodeURIComponent(tl) + '&dt=t' +
+      var url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=' + encodeURIComponent(tl) + '&dt=t' +
         texts.map(function(t){ return '&q=' + encodeURIComponent(t); }).join('');
       var ctrl = new AbortController(); var to = setTimeout(function(){ try{ctrl.abort();}catch(e){} }, 10000);
       try {
-        var res = await fetch(url, { headers: { 'X-Ech-Target': 'translate.googleapis.com' }, signal: ctrl.signal });
+        var res = await fetch(url, { signal: ctrl.signal });
         clearTimeout(to);
         if (!res.ok) { console.log('[TR] translateBatch HTTP '+res.status); return null; }
         var data = await res.json();
