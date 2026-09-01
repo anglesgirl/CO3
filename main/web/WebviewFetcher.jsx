@@ -211,11 +211,15 @@ function buildPageTranslator(targetLang) {
     // 单条文本翻译（gtx 端点，走本地代理）。
     async function translateOne(text) {
       var url = '/translate_a/single?client=gtx&sl=auto&tl=' + encodeURIComponent(tl) + '&dt=t&q=' + encodeURIComponent(text);
-      var res = await fetch(url, { headers: { 'X-Ech-Target': 'translate.googleapis.com' } });
-      if (!res.ok) return null;
-      var data = await res.json();
-      if (!Array.isArray(data) || !Array.isArray(data[0])) return null;
-      return data[0].map(function(x){ return Array.isArray(x) ? x[0] : ''; }).join('');
+      var ctrl = new AbortController(); var to = setTimeout(function(){ try{ctrl.abort();}catch(e){} }, 8000);
+      try {
+        var res = await fetch(url, { headers: { 'X-Ech-Target': 'translate.googleapis.com' }, signal: ctrl.signal });
+        clearTimeout(to);
+        if (!res.ok) { console.log('[TR] translateOne HTTP '+res.status); return null; }
+        var data = await res.json();
+        if (!Array.isArray(data) || !Array.isArray(data[0])) return null;
+        return data[0].map(function(x){ return Array.isArray(x) ? x[0] : ''; }).join('');
+      } catch(e) { clearTimeout(to); console.log('[TR] translateOne failed: '+(e&&e.message||e)); return null; }
     }
     // 批量翻译：一次请求翻译多条（gtx 支持多个 q 参数，响应按 q 顺序
     // 返回数组）。2026-08-15 优化：原来逐条串行（页面几百个文本节点 =
@@ -223,14 +227,18 @@ function buildPageTranslator(targetLang) {
     async function translateBatch(texts) {
       var url = '/translate_a/single?client=gtx&sl=auto&tl=' + encodeURIComponent(tl) + '&dt=t' +
         texts.map(function(t){ return '&q=' + encodeURIComponent(t); }).join('');
-      var res = await fetch(url, { headers: { 'X-Ech-Target': 'translate.googleapis.com' } });
-      if (!res.ok) return null;
-      var data = await res.json();
-      if (!Array.isArray(data)) return null;
-      return data.map(function(seg){
-        if (!Array.isArray(seg) || !Array.isArray(seg[0])) return null;
-        return seg[0].map(function(x){ return Array.isArray(x) ? x[0] : ''; }).join('');
-      });
+      var ctrl = new AbortController(); var to = setTimeout(function(){ try{ctrl.abort();}catch(e){} }, 10000);
+      try {
+        var res = await fetch(url, { headers: { 'X-Ech-Target': 'translate.googleapis.com' }, signal: ctrl.signal });
+        clearTimeout(to);
+        if (!res.ok) { console.log('[TR] translateBatch HTTP '+res.status); return null; }
+        var data = await res.json();
+        if (!Array.isArray(data)) return null;
+        return data.map(function(seg){
+          if (!Array.isArray(seg) || !Array.isArray(seg[0])) return null;
+          return seg[0].map(function(x){ return Array.isArray(x) ? x[0] : ''; }).join('');
+        });
+      } catch(e) { clearTimeout(to); console.log('[TR] translateBatch failed: '+(e&&e.message||e)); return null; }
     }
     // 超长文本分段翻译（2026-08-15 用户实测：summary 概要长文本被截断，
     // gtx 单次 q 参数有长度上限，超长直接截断/400）。按 ~1800 字符切块，
