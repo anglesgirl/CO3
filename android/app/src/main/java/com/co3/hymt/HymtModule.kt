@@ -102,4 +102,4 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
             }
         }
     }
-}[truncated]
+}
