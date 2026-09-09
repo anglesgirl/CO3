@@ -72,7 +72,7 @@ export async function fetchChapter(workId, chapterId, noWebview = false) {
   return [getElementHtml(chapterDiv), cssStyles ];
 }
 
-export async function fetchChapterWithTheme(workId, chapterId, currentTheme = null, settingsDAO) {
+export async function fetchChapterWithTheme(workId, chapterId, currentTheme = null, settingsDAO, onProgress = null) {
 
   const isDL = await isDownloaded(workId, chapterId);
 
@@ -86,13 +86,13 @@ export async function fetchChapterWithTheme(workId, chapterId, currentTheme = nu
 
   let [chapterHtml, cssStyles] = await dataSource(workId, chapterId);
 
-  // 双语对照翻译（在线免费引擎；本机 AI 二期接入）
+  // 双语对照翻译（三档引擎：本机AI/在线AI/机翻，逐段进度回调）
   try {
     const { getTranslateMode } = require('../translate/settings');
     const { buildBilingualHtml } = require('../translate/bilingual');
     const mode = await getTranslateMode();
     if ((mode === 'bilingual' || mode === 'translated') && chapterHtml) {
-      chapterHtml = await buildBilingualHtml(chapterHtml, mode);
+      chapterHtml = await buildBilingualHtml(chapterHtml, mode, 'en', 'zh-CN', onProgress);
     }
   } catch (e) {
     console.log(`翻译失败，显示原文：${e.message}`);

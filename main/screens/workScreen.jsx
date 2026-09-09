@@ -34,7 +34,7 @@ import CategorySelectionModal from '../components/WorkScreen/CategorySelectionMo
 import { markForLater } from '../web/other/markedLater';
 import Toast from 'react-native-toast-message';
 import { getTranslateMode } from '../web/translate/settings';
-import { translateTexts } from '../web/translate/freeTranslation';
+import { translateTextsSmart } from '../web/translate/bilingual';
 import { bookmark } from '../web/other/bookmarks';
 import { normalizeWorkData } from '../storage/dao/WorkDAO';
 import { getJsonSettings } from '../storage/jsonSettings';
@@ -564,7 +564,8 @@ const ChapterInfoScreen = ({ route }) => {
       (workData.chapters || []).forEach(c => push('chapter', String(c.id), c.name));
       if (items.length === 0) return;
       setTranslatingMeta(true);
-      const out = await translateTexts(items);
+      const results = await translateTextsSmart(items);
+      const out = results.map(r => r.text);
       const meta = { chapterNames: {} };
       map.forEach((m, i) => {
         if (m.kind === 'title') meta.title = out[i];
@@ -729,6 +730,16 @@ const ChapterInfoScreen = ({ route }) => {
               chapterToLoad.id,
               currentTheme,
               settingsDAO,
+              (done, total) => {
+                Toast.show({
+                  type: 'info',
+                  text1: t('screen_work_loading_chapter'),
+                  text2: `${t('screen_work_loading_chapter_translating')}（${done}/${total}）`,
+                  position: 'bottom',
+                  bottomOffset: 80,
+                  autoHide: false,
+                });
+              },
             );
           } finally {
             Toast.hide();
@@ -918,6 +929,16 @@ const ChapterInfoScreen = ({ route }) => {
             chapter.id,
             currentTheme,
             settingsDAO,
+            (done, total) => {
+              Toast.show({
+                type: 'info',
+                text1: t('screen_work_loading_chapter'),
+                text2: `${t('screen_work_loading_chapter_translating')}（${done}/${total}）`,
+                position: 'bottom',
+                bottomOffset: 80,
+                autoHide: false,
+              });
+            },
           );
         } finally {
           Toast.hide();

@@ -6,6 +6,7 @@ import {
   StyleSheet,
   Switch,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -35,6 +36,12 @@ import {
   setTranslateMode,
   getTranslateEngine,
   setTranslateEngine,
+  getAiEndpoint,
+  setAiEndpoint,
+  getAiApiKey,
+  setAiApiKey,
+  getAiModel,
+  setAiModel,
 } from '../../web/translate/settings';
 import {
   DEVICE_MODELS,
@@ -77,7 +84,10 @@ const PreferencesScreen = ({ route }) => {
   const [showChapterDate, setShowChapterDate] = useState(false);
   const [compactNotifications, setCompactNotifications] = useState(false);
   const [translateMode, setTranslateModeState] = useState('off');
-  const [translateEngine, setTranslateEngineState] = useState('auto');
+  const [translateEngine, setTranslateEngineState] = useState('free');
+  const [aiEndpointState, setAiEndpointState] = useState('');
+  const [aiApiKeyState, setAiApiKeyState] = useState('');
+  const [aiModelState, setAiModelState] = useState('deepseek-chat');
   const [deviceModel, setDeviceModelState] = useState(DEFAULT_DEVICE_MODEL);
   const [hasDeviceModel, setHasDeviceModel] = useState(false);
   const [dlProgress, setDlProgress] = useState(-1);
@@ -98,6 +108,9 @@ const PreferencesScreen = ({ route }) => {
     try {
       setTranslateModeState(await getTranslateMode());
       setTranslateEngineState(await getTranslateEngine());
+      setAiEndpointState(await getAiEndpoint());
+      setAiApiKeyState(await getAiApiKey());
+      setAiModelState(await getAiModel());
       setHasDeviceModel(await modelExists(NativeModules));
       // Load Database Settings (Appearance)
       const dbSettings = await settingsDAO.getSettings();
@@ -305,6 +318,21 @@ const PreferencesScreen = ({ route }) => {
   const handleTranslateEngineChange = async value => {
     setTranslateEngineState(value);
     await setTranslateEngine(value);
+  };
+
+  const handleAiEndpointChange = async value => {
+    setAiEndpointState(value);
+    await setAiEndpoint(value);
+  };
+
+  const handleAiApiKeyChange = async value => {
+    setAiApiKeyState(value);
+    await setAiApiKey(value);
+  };
+
+  const handleAiModelChange = async value => {
+    setAiModelState(value);
+    await setAiModel(value);
   };
 
   const handleDeviceModelDownload = async () => {
@@ -580,14 +608,87 @@ const PreferencesScreen = ({ route }) => {
               style={{ marginTop: 8 }}
             >
               <CustomDropdown.Item
-                label={t('screen_preferences_translate_engine_auto')}
-                value="auto"
+                label={t('screen_preferences_translate_engine_free')}
+                value="free"
+              />
+              <CustomDropdown.Item
+                label={t('screen_preferences_translate_engine_ai')}
+                value="ai"
               />
               <CustomDropdown.Item
                 label={t('screen_preferences_translate_engine_device')}
                 value="device"
               />
             </CustomDropdown>
+            {translateEngine === 'ai' && (
+              <View style={{ marginTop: 12 }}>
+                <Text style={[{ color: activeTheme.textSecondary }, styles.settingHint]}>
+                  {t('screen_preferences_translate_ai_hint')}
+                </Text>
+                <Text style={[{ color: activeTheme.textColor }, styles.settingText, { marginTop: 8 }]}>
+                  {t('screen_preferences_translate_ai_endpoint')}
+                </Text>
+                <TextInput
+                  style={[
+                    styles.aiInput,
+                    {
+                      backgroundColor: activeTheme.cardBackground,
+                      color: activeTheme.textColor,
+                      borderColor: activeTheme.borderColor,
+                    },
+                  ]}
+                  value={aiEndpointState}
+                  onChangeText={handleAiEndpointChange}
+                  placeholder="https://api.deepseek.com/v1/chat/completions"
+                  placeholderTextColor={activeTheme.textSecondary}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <Text style={[{ color: activeTheme.textColor }, styles.settingText, { marginTop: 8 }]}>
+                  {t('screen_preferences_translate_ai_model')}
+                </Text>
+                <TextInput
+                  style={[
+                    styles.aiInput,
+                    {
+                      backgroundColor: activeTheme.cardBackground,
+                      color: activeTheme.textColor,
+                      borderColor: activeTheme.borderColor,
+                    },
+                  ]}
+                  value={aiModelState}
+                  onChangeText={handleAiModelChange}
+                  placeholder="deepseek-chat"
+                  placeholderTextColor={activeTheme.textSecondary}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <Text style={[{ color: activeTheme.textColor }, styles.settingText, { marginTop: 8 }]}>
+                  {t('screen_preferences_translate_ai_key')}
+                </Text>
+                <TextInput
+                  style={[
+                    styles.aiInput,
+                    {
+                      backgroundColor: activeTheme.cardBackground,
+                      color: activeTheme.textColor,
+                      borderColor: activeTheme.borderColor,
+                    },
+                  ]}
+                  value={aiApiKeyState}
+                  onChangeText={handleAiApiKeyChange}
+                  placeholder="sk-..."
+                  placeholderTextColor={activeTheme.textSecondary}
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <Text style={[{ color: activeTheme.textSecondary }, styles.settingHint, { marginTop: 8 }]}>
+                  {t('screen_preferences_translate_ai_key_hint')}
+                </Text>
+              </View>
+            )}
+
             {translateEngine === 'device' && (
               <View style={{ marginTop: 12 }}>
                 <CustomDropdown
@@ -1289,6 +1390,14 @@ const styles = StyleSheet.create({
   settingHint: {
     fontSize: 13,
     marginTop: 8,
+  },
+  aiInput: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    fontSize: 14,
+    marginTop: 4,
   },
   downloadButton: {
     paddingVertical: 10,
