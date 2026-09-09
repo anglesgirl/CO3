@@ -266,6 +266,8 @@
   "screen_storage_button_import_backup_err_2": "导入失败：{{error}}",
   "screen_storage_msg_backup_1": "备份可能包含敏感数据，包括：完整阅读历史、文库、设置、已下载章节等。",
   "screen_storage_msg_backup_2": "备份不包含你的用户名或密码。",
+  "screen_storage_export_database_success_sub": "数据库已导出到下载文件夹。",
+  "screen_storage_export_database_error_generic": "数据库导出失败",
 
   "screen_word_replacer_title": "词汇替换",
   "screen_word_replacer_new_rule": "新建规则",
