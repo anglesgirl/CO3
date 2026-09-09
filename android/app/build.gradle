@@ -24,6 +24,16 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace "com.co3"
+    // HyMT 端侧翻译原生库：llama.cpp 由 CI 克隆到 src/main/cpp/llama.cpp，
+    // 缺失时跳过（不断正常构建，App 内自动降级走在线引擎）。
+    if (file("src/main/cpp/llama.cpp/CMakeLists.txt").exists()) {
+        externalNativeBuild {
+            cmake {
+                path "src/main/cpp/CMakeLists.txt"
+                version "3.22.1"
+            }
+        }
+    }
     defaultConfig {
         applicationId "com.co3"
         minSdkVersion rootProject.ext.minSdkVersion
