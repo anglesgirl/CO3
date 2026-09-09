@@ -20,6 +20,7 @@ class MainApplication : Application(), ReactApplication {
             PackageList(this).packages.apply {
                 add(LibrarySchedulerPackage())
                 add(com.co3.ech.EchWebViewPackage())
+                add(com.co3.hymt.HymtPackage())
                 add(object : com.facebook.react.ReactPackage {
                     override fun createNativeModules(reactContext: com.facebook.react.bridge.ReactApplicationContext) = listOf<com.facebook.react.bridge.NativeModule>(CoCookieModule(reactContext))
                     override fun createViewManagers(reactContext: com.facebook.react.bridge.ReactApplicationContext) = emptyList<com.facebook.react.uimanager.ViewManager<*,*>>()

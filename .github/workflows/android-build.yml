@@ -43,6 +43,19 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Install Android NDK and CMake
+        run: |
+          sdkmanager "ndk;27.1.12297006" "cmake;3.22.1"
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+
+      - name: Clone llama.cpp (Q2_0c PR branch for HyMT 2bit)
+        run: |
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git android/app/src/main/cpp/llama.cpp
+          cd android/app/src/main/cpp/llama.cpp
+          git fetch origin pull/19357/head:pr-q2 && git checkout pr-q2
+          git log --oneline -n 1
+
       - name: Generate codegen artifacts
         run: |
           cd android

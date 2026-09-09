@@ -3,6 +3,8 @@
  * 原文一段 + 译文一段跟在下面；本机只处理章节正文 HTML）。
  */
 import { translateTexts } from './freeTranslation';
+import { getTranslateEngine } from './settings';
+import { translateDevice } from './deviceTranslate';
 
 function stripTags(html) {
   return html
@@ -58,11 +60,22 @@ export async function buildBilingualHtml(
 ) {
   const paras = splitParagraphs(chapterHtml);
   if (paras.length === 0) return chapterHtml;
-  const translations = await translateTexts(
-    paras.map(p => p.text),
-    fromLang,
-    toLang,
-  );
+  // 本机 AI 优先（失败自动降级在线）；默认直接在线。
+  let translations = null;
+  try {
+    if ((await getTranslateEngine()) === 'device') {
+      translations = await translateDevice(paras.map(p => p.text));
+    }
+  } catch (e) {
+    console.log(`本机翻译失败，切在线：${e.message}`);
+  }
+  if (!translations) {
+    translations = await translateTexts(
+      paras.map(p => p.text),
+      fromLang,
+      toLang,
+    );
+  }
   if (onProgress) onProgress(paras.length, paras.length);
   return paras
     .map((p, i) => {
