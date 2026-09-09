@@ -8,8 +8,16 @@
  */
 import { translateTexts } from './freeTranslation';
 import { getTranslateEngine } from './settings';
-import { translateDevice } from './deviceTranslate';
-import { translateAiBatch } from './aiProvider';
+
+// deviceTranslate / aiProvider 用惰性 require，避免在 bundle 顶层加载
+// (它们 import NativeModules / RNFS，若走顶层会把 TurboModule 引用带上启动链，
+//  在 New Architecture 下可能导致 [runtime not ready] 崩溃)。
+function getDeviceTranslate() {
+  return require('./deviceTranslate').translateDevice;
+}
+function getAiBatch() {
+  return require('./aiProvider').translateAiBatch;
+}
 
 function stripTags(html) {
   return html
@@ -66,7 +74,7 @@ async function translateByEngine(paras, fromLang, toLang, onProgress) {
           out.push('');
           continue;
         }
-        const zh = await translateDevice(texts[i]);
+        const zh = await getDeviceTranslate()(texts[i]);
         out.push(zh || '');
       }
       if (onProgress) onProgress(texts.length, texts.length);
@@ -78,7 +86,7 @@ async function translateByEngine(paras, fromLang, toLang, onProgress) {
   // 在线大模型：质量高，仅当配了 key 才走
   if (engine === 'ai') {
     try {
-      const out = await translateAiBatch(texts, fromLang, toLang);
+      const out = await getAiBatch()(texts, fromLang, toLang);
       if (onProgress) onProgress(texts.length, texts.length);
       return out.map(t => ({ text: t || '', failed: t == null }));
     } catch (e) {
@@ -104,7 +112,7 @@ export async function translateTextsSmart(texts, fromLang = 'en', toLang = 'zh-C
       for (let i = 0; i < texts.length; i++) {
         if (onProgress) onProgress(i + 1, texts.length);
         if (!texts[i].trim()) { out.push(''); continue; }
-        const zh = await translateDevice(texts[i]);
+        const zh = await getDeviceTranslate()(texts[i]);
         out.push(zh || '');
       }
       if (onProgress) onProgress(texts.length, texts.length);
@@ -116,7 +124,7 @@ export async function translateTextsSmart(texts, fromLang = 'en', toLang = 'zh-C
   // 在线大模型
   if (engine === 'ai') {
     try {
-      const out = await translateAiBatch(texts, fromLang, toLang);
+      const out = await getAiBatch()(texts, fromLang, toLang);
       if (onProgress) onProgress(texts.length, texts.length);
       return out.map(t => ({ text: t || '', failed: t == null }));
     } catch (e) {
