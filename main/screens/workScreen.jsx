@@ -718,7 +718,7 @@ const ChapterInfoScreen = ({ route }) => {
             type: 'info',
             text1: t('screen_work_loading_chapter'),
             text2: t('screen_work_loading_chapter_translating'),
-            position: 'bottom',
+            position: 'center',
             bottomOffset: 80,
             autoHide: false,
           });
@@ -908,7 +908,7 @@ const ChapterInfoScreen = ({ route }) => {
           type: 'info',
           text1: t('screen_work_loading_chapter'),
           text2: t('screen_work_loading_chapter_translating'),
-          position: 'bottom',
+          position: 'center',
           bottomOffset: 80,
           autoHide: false,
         });
