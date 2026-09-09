@@ -33,6 +33,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import CategorySelectionModal from '../components/WorkScreen/CategorySelectionModal';
 import { markForLater } from '../web/other/markedLater';
 import Toast from 'react-native-toast-message';
+import { getTranslateMode } from '../web/translate/settings';
+import { translateTexts } from '../web/translate/freeTranslation';
 import { bookmark } from '../web/other/bookmarks';
 import { normalizeWorkData } from '../storage/dao/WorkDAO';
 import { getJsonSettings } from '../storage/jsonSettings';
@@ -55,7 +57,7 @@ const ITEM_HEIGHT_COMPACT = 56;
 const ITEM_HEIGHT_EXPANDED = 72;
 
 const ChapterItem = React.memo(
-  ({ chapter, index, currentTheme, onPress, showDate }) => {
+  ({ chapter, index, currentTheme, onPress, showDate, nameZh }) => {
     const { t } = useTranslation();
     const [isInQueue, setIsInQueue] = useState(false);
     const [hasFailed, setHasFailed] = useState(false);
@@ -256,7 +258,7 @@ const ChapterItem = React.memo(
               },
             ]}
           >
-            {chapter.name || `Chapter ${index + 1}`}
+            {nameZh || chapter.name || `Chapter ${index + 1}`}
           </Text>
           {showDate && (
             <Text
@@ -502,6 +504,8 @@ const ChapterInfoScreen = ({ route }) => {
   const { t } = useTranslation();
   const [work, setWork] = useState(null);
   const [chapters, setChapters] = useState([]);
+  const [metaZh, setMetaZh] = useState(null);
+  const [translatingMeta, setTranslatingMeta] = useState(false);
   const [chapterProgress, setChapterProgress] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -533,6 +537,48 @@ const ChapterInfoScreen = ({ route }) => {
       position: 'bottom',
       bottomOffset: 80,
     });
+  };
+
+  /** 简介/标题/章节名翻纯中文（后台跑，不挡页面） */
+  const translateWorkMeta = async workData => {
+    try {
+      const mode = await getTranslateMode();
+      if (mode === 'off' || !workData) return;
+      const strip = s =>
+        String(s || '')
+          .replace(/<br\s*\/?>/gi, '\n')
+          .replace(/<[^>]+>/g, '')
+          .replace(/&nbsp;/g, ' ')
+          .trim();
+      const items = [];
+      const map = [];
+      const push = (kind, key, text) => {
+        const t = strip(text);
+        if (t) {
+          map.push({ kind, key });
+          items.push(t);
+        }
+      };
+      push('title', 'title', workData.title);
+      push('desc', 'desc', workData.description);
+      (workData.chapters || []).forEach(c => push('chapter', String(c.id), c.name));
+      if (items.length === 0) return;
+      setTranslatingMeta(true);
+      const out = await translateTexts(items);
+      const meta = { chapterNames: {} };
+      map.forEach((m, i) => {
+        if (m.kind === 'title') meta.title = out[i];
+        else if (m.kind === 'desc') {
+          meta.description = out[i];
+          meta.descriptionHTML = `<p>${out[i].replace(/\n/g, '</p><p>')}</p>`;
+        } else meta.chapterNames[m.key] = out[i];
+      });
+      setMetaZh(meta);
+    } catch (e) {
+      console.log(`简介翻译失败，显示原文：${e.message}`);
+    } finally {
+      setTranslatingMeta(false);
+    }
   };
   useEffect(() => {
     loadCategories();
@@ -626,6 +672,8 @@ const ChapterInfoScreen = ({ route }) => {
 
       setWork(workData);
       setChapters(workData.chapters);
+      setMetaZh(null);
+      translateWorkMeta(workData);
 
       const progressMap = progressData.reduce((acc, item) => {
         acc[item.chapterID] = item.progress;
@@ -666,12 +714,25 @@ const ChapterInfoScreen = ({ route }) => {
         }
 
         if (chapterToLoad && actualIndex !== -1 && actualIndex !== 0) {
-          const chapterContent = await fetchChapterWithTheme(
-            workId,
-            chapterToLoad.id,
-            currentTheme,
-            settingsDAO,
-          );
+          Toast.show({
+            type: 'info',
+            text1: t('screen_work_loading_chapter'),
+            text2: t('screen_work_loading_chapter_translating'),
+            position: 'bottom',
+            bottomOffset: 80,
+            autoHide: false,
+          });
+          let chapterContent = null;
+          try {
+            chapterContent = await fetchChapterWithTheme(
+              workId,
+              chapterToLoad.id,
+              currentTheme,
+              settingsDAO,
+            );
+          } finally {
+            Toast.hide();
+          }
 
           if (chapterContent) {
             const initialChapterData = {
@@ -843,12 +904,24 @@ const ChapterInfoScreen = ({ route }) => {
         }
 
         let chapterContent;
-        chapterContent = await fetchChapterWithTheme(
-          workId,
-          chapter.id,
-          currentTheme,
-          settingsDAO,
-        );
+        Toast.show({
+          type: 'info',
+          text1: t('screen_work_loading_chapter'),
+          text2: t('screen_work_loading_chapter_translating'),
+          position: 'bottom',
+          bottomOffset: 80,
+          autoHide: false,
+        });
+        try {
+          chapterContent = await fetchChapterWithTheme(
+            workId,
+            chapter.id,
+            currentTheme,
+            settingsDAO,
+          );
+        } finally {
+          Toast.hide();
+        }
 
         if (!chapterContent) {
           showToast(t('screen_work_toast_failed_to_load_chapter'), 'error');
@@ -857,9 +930,10 @@ const ChapterInfoScreen = ({ route }) => {
 
         const initialChapterData = {
           workId: workId,
-          workTitle: work.title,
+          workTitle: metaZh?.title || work.title,
           chapterId: chapter.id,
-          chapterTitle: chapter.name,
+          chapterTitle:
+            metaZh?.chapterNames?.[chapter.id] || chapter.name,
           htmlContent: chapterContent,
           chapterIndex: originalIndex,
           hasNextChapter: originalIndex < chapters.length - 1,
@@ -868,7 +942,7 @@ const ChapterInfoScreen = ({ route }) => {
 
         const chapterListForNav = chapters.map(c => ({
           id: c.id,
-          title: c.name,
+          title: metaZh?.chapterNames?.[c.id] || c.name,
         }));
 
         navigation.push('Reader', {
@@ -1296,9 +1370,10 @@ const ChapterInfoScreen = ({ route }) => {
         currentTheme={currentTheme}
         onPress={() => handleChapterPress(item, item.originalIndex)}
         showDate={showDate}
+        nameZh={metaZh?.chapterNames?.[item.id]}
       />
     ),
-    [currentTheme, handleChapterPress, chapterProgress, showDate, workId],
+    [currentTheme, handleChapterPress, chapterProgress, showDate, workId, metaZh],
   );
 
   const getItemLayout = useCallback(
@@ -1313,8 +1388,15 @@ const ChapterInfoScreen = ({ route }) => {
     () => (
       <View style={styles.workInfo}>
         <Text style={[styles.workTitle, { color: currentTheme.textColor }]}>
-          {work?.title}
+          {metaZh?.title || work?.title}
         </Text>
+        {translatingMeta && (
+          <Text
+            style={{ color: currentTheme.secondaryTextColor, fontSize: 12 }}
+          >
+            {t('screen_work_translating_meta')}
+          </Text>
+        )}
         <TouchableOpacity
           onPress={() => {
             navigation.push('User', {
@@ -1344,7 +1426,16 @@ const ChapterInfoScreen = ({ route }) => {
 
         {renderActionButtons()}
         <WorkDescription
-          work={work}
+          work={
+            metaZh
+              ? {
+                  ...work,
+                  description: metaZh.description || work.description,
+                  descriptionHTML:
+                    metaZh.descriptionHTML || work.descriptionHTML,
+                }
+              : work
+          }
           currentTheme={currentTheme}
           jsonSettings={jsonSettings}
         />
@@ -1373,6 +1464,8 @@ const ChapterInfoScreen = ({ route }) => {
     ),
     [
       work,
+      metaZh,
+      translatingMeta,
       currentTheme,
       chapters,
       jsonSettings,
@@ -1656,7 +1749,7 @@ const ChapterInfoScreen = ({ route }) => {
           style={[styles.headerTitle, { color: currentTheme.textColor }]}
           numberOfLines={1}
         >
-          {work.title}
+          {metaZh?.title || work.title}
         </Text>
         <TouchableOpacity
           onPress={() => setDownloadMenuVisible(true)}
