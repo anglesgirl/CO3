@@ -2,6 +2,16 @@
 // 调用方（Kotlin）在后台线程调用，JNI 内不碰 UI；异常一律转成返回值。
 #include <jni.h>
 
+#ifdef HYMT_STUB
+// 32 位空壳：直接返回失败，App 层降级走在线引擎。
+extern "C" {
+JNIEXPORT jboolean JNICALL Java_com_co3_hymt_HymtBridge_nativeInit(JNIEnv* e, jclass, jstring, jint) { return JNI_FALSE; }
+JNIEXPORT jstring JNICALL Java_com_co3_hymt_HymtBridge_nativeTranslate(JNIEnv* e, jclass, jstring, jint) { return e->NewStringUTF(""); }
+JNIEXPORT void JNICALL Java_com_co3_hymt_HymtBridge_nativeFree(JNIEnv*, jclass) {}
+JNIEXPORT jboolean JNICALL Java_com_co3_hymt_HymtBridge_nativeIsReady(JNIEnv*, jclass) { return JNI_FALSE; }
+}  // extern "C"
+#else
+
 #include <string>
 #include <vector>
 
@@ -150,3 +160,5 @@ JNIEXPORT jboolean JNICALL Java_com_co3_hymt_HymtBridge_nativeIsReady(JNIEnv*, j
 }
 
 }  // extern "C"
+
+#endif  // HYMT_STUB
