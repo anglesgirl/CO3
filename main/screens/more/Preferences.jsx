@@ -29,6 +29,10 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  getTranslateMode,
+  setTranslateMode,
+} from '../../web/translate/settings';
 
 const PreferencesScreen = ({ route }) => {
   const {
@@ -63,6 +67,7 @@ const PreferencesScreen = ({ route }) => {
     useState('default');
   const [showChapterDate, setShowChapterDate] = useState(false);
   const [compactNotifications, setCompactNotifications] = useState(false);
+  const [translateMode, setTranslateModeState] = useState('off');
   const [updateTime, setUpdateTime] = useState(1440);
   const [updateRestriction, setUpdateRestriction] = useState(3);
   const [categories, setCategories] = useState();
@@ -78,6 +83,7 @@ const PreferencesScreen = ({ route }) => {
 
   const loadSettings = async () => {
     try {
+      setTranslateModeState(await getTranslateMode());
       // Load Database Settings (Appearance)
       const dbSettings = await settingsDAO.getSettings();
       if (dbSettings) {
@@ -276,6 +282,11 @@ const PreferencesScreen = ({ route }) => {
     await changeLanguage(lng);
   };
 
+  const handleTranslateModeChange = async value => {
+    setTranslateModeState(value);
+    await setTranslateMode(value);
+  };
+
   const handleRestartOnboarding = () => {
     Alert.alert(
       t('screen_preferences_onboarding_title'),
@@ -472,6 +483,58 @@ const PreferencesScreen = ({ route }) => {
                 />
               ))}
             </CustomDropdown>
+          </View>
+        </View>
+
+        {/* TRANSLATE SETTINGS */}
+        <View
+          style={[
+            styles.section,
+            { borderBottomColor: activeTheme.borderColor },
+          ]}
+        >
+          <View style={styles.sectionHeader}>
+            <Icon name="translate" size={20} color={activeTheme.iconColor} />
+            <Text
+              style={[{ color: activeTheme.textColor }, styles.sectionTitle]}
+            >
+              {t('screen_preferences_title_translate')}
+            </Text>
+          </View>
+
+          <View style={[styles.settingItem, { borderBottomWidth: 0 }]}>
+            <Text
+              style={[{ color: activeTheme.textColor }, styles.settingText]}
+            >
+              {t('screen_preferences_translate_mode')}
+            </Text>
+            <CustomDropdown
+              selectedValue={translateMode}
+              onValueChange={handleTranslateModeChange}
+              theme={activeTheme}
+              style={{ marginTop: 8 }}
+            >
+              <CustomDropdown.Item
+                label={t('screen_preferences_translate_mode_off')}
+                value="off"
+              />
+              <CustomDropdown.Item
+                label={t('screen_preferences_translate_mode_bilingual')}
+                value="bilingual"
+              />
+              <CustomDropdown.Item
+                label={t('screen_preferences_translate_mode_translated')}
+                value="translated"
+              />
+            </CustomDropdown>
+            <Text
+              style={[
+                { color: activeTheme.secondaryTextColor },
+                styles.settingHint,
+              ]}
+            >
+              {t('screen_preferences_translate_hint')}
+            </Text>
           </View>
         </View>
 
@@ -1136,6 +1199,10 @@ const styles = StyleSheet.create({
   settingText: {
     fontSize: 16,
     marginBottom: 12,
+  },
+  settingHint: {
+    fontSize: 13,
+    marginTop: 8,
   },
   switchContainer: {
     flexDirection: 'row',

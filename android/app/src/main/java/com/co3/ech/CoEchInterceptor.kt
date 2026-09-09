@@ -20,8 +20,10 @@ class CoEchInterceptor : Interceptor {
 
     private fun shouldIntercept(host: String): Boolean {
         if (!EchHttpClient.isLoaded) return false
-        // 所有请求都进 ECH 保护，不再限定 archiveofourown.org
-        return true
+        // 只拦截 ECH 目标域名（fail-closed）；其他域名（如在线翻译接口）
+        // 直接放行 chain.proceed，否则非 ECH 站点会被误判失败抛异常。
+        val h = host.lowercase()
+        return h == "archiveofourown.org" || h.endsWith(".archiveofourown.org")
     }
 
     override fun intercept(chain: Interceptor.Chain): Response {

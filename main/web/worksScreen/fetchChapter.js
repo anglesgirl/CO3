@@ -84,7 +84,19 @@ export async function fetchChapterWithTheme(workId, chapterId, currentTheme = nu
     ? getDownloaded
     : fetchChapter;
 
-  const [chapterHtml, cssStyles] = await dataSource(workId, chapterId);
+  let [chapterHtml, cssStyles] = await dataSource(workId, chapterId);
+
+  // 双语对照翻译（在线免费引擎；本机 AI 二期接入）
+  try {
+    const { getTranslateMode } = require('../translate/settings');
+    const { buildBilingualHtml } = require('../translate/bilingual');
+    const mode = await getTranslateMode();
+    if ((mode === 'bilingual' || mode === 'translated') && chapterHtml) {
+      chapterHtml = await buildBilingualHtml(chapterHtml, mode);
+    }
+  } catch (e) {
+    console.log(`翻译失败，显示原文：${e.message}`);
+  }
 
   const completeHtml = await createCompleteHtml(chapterHtml, cssStyles, currentTheme, settingsDAO);
 
@@ -120,6 +132,13 @@ async function createCompleteHtml(chapterHtml, cssStyles, currentTheme, settings
   <style>
     /* Theme variables */
     ${themeCSS}
+    /* 双语对照译文段样式 */
+    .co3-trans {
+        opacity: 0.72;
+        border-left: 2px solid #888;
+        padding-left: 8px;
+        margin-top: 2px;
+    }
     ${settings.useCustomFont ? `@font-face {font-family: '${settings.fontFamily}'; src: url('${settings.font}')}` : ""}
     
     .landmark {
