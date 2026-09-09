@@ -19,6 +19,11 @@ class MainApplication : Application(), ReactApplication {
         override fun getPackages(): List<ReactPackage> =
             PackageList(this).packages.apply {
                 add(LibrarySchedulerPackage())
+                add(com.co3.ech.EchWebViewPackage())
+                add(object : com.facebook.react.ReactPackage {
+                    override fun createNativeModules(reactContext: com.facebook.react.bridge.ReactApplicationContext) = listOf<com.facebook.react.bridge.NativeModule>(CoCookieModule(reactContext))
+                    override fun createViewManagers(reactContext: com.facebook.react.bridge.ReactApplicationContext) = emptyList<com.facebook.react.uimanager.ViewManager<*,*>>()
+                })
             }
 
         override fun getJSMainModuleName(): String = "index"
@@ -34,6 +39,23 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    try {
+        com.liar.han1meplus.EchHttpClient.init(this)
+        android.util.Log.i("CO-ECH", "EchHttpClient init ok, isLoaded=" + com.liar.han1meplus.EchHttpClient.isLoaded)
+        // Hook React Native OkHttp
+        try {
+            val provider = Class.forName("com.facebook.react.modules.network.OkHttpClientProvider")
+            val method = provider.getMethod("setOkHttpClientFactory", Class.forName("com.facebook.react.modules.network.OkHttpClientFactory"))
+            val factory = com.co3.ech.ReactNativeEchFactory()
+            method.invoke(null, factory)
+            android.util.Log.i("CO-ECH", "OkHttpClientProvider patched")
+        } catch (e: Exception) {
+            android.util.Log.w("CO-ECH", "OkHttp hook failed (will use NativeModule only): " + e.message)
+        }
+    } catch (e: Exception) {
+        android.util.Log.e("CO-ECH", "ECH init failed: " + e.message)
+    }
+    com.co3.Diagnostics.initialize(this)
     ProcessLifecycleOwner.get().lifecycle.addObserver(AppForegroundTracker)
     loadReactNative(this)
   }
