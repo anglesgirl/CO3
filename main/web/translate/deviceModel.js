@@ -1,25 +1,35 @@
 /**
- * 本机 AI 模型下载管理：直连官方 HF 地址（不自建封装）。
- * 2bit 574MB / 1.25bit 440MB 二选一，默认 2bit。
+ * 本机 AI 模型下载管理：魔搭（国内快）优先，HuggingFace 兜底。
+ * 2bit 572MB / 1.25bit 440MB 二选一，默认 2bit。
+ * 魔搭支持 range 请求（断点续传），实测国内速度良好。
  */
 import RNFS from 'react-native-fs';
 
-const HF_BASE = 'https://huggingface.co';
+const MODELSCOPE = 'https://modelscope.cn';
+const HF = 'https://huggingface.co';
 
 export const DEVICE_MODELS = {
   '2bit': {
-    label: 'HyMT 2bit（574MB，质量优先）',
-    url:
-      HF_BASE +
-      '/AngelSlim/Hy-MT1.5-1.8B-2bit-GGUF/resolve/main/Hy-MT1.5-1.8B-2bit.gguf',
+    label: 'HyMT 2bit（572MB，质量优先）',
     file: 'Hy-MT1.5-1.8B-2bit.gguf',
+    urls: [
+      // 魔搭（国内）：master 分支
+      MODELSCOPE +
+        '/models/AngelSlim/Hy-MT1.5-1.8B-2bit-GGUF/resolve/master/Hy-MT1.5-1.8B-2bit.gguf',
+      // HuggingFace（海外）兜底
+      HF +
+        '/AngelSlim/Hy-MT1.5-1.8B-2bit-GGUF/resolve/main/Hy-MT1.5-1.8B-2bit.gguf',
+    ],
   },
   '1.25bit': {
     label: 'HyMT 1.25bit（440MB，省空间）',
-    url:
-      HF_BASE +
-      '/AngelSlim/Hy-MT1.5-1.8B-1.25bit-GGUF/resolve/main/Hy-MT1.5-1.8B-1.25bit.gguf',
     file: 'Hy-MT1.5-1.8B-1.25bit.gguf',
+    urls: [
+      MODELSCOPE +
+        '/models/AngelSlim/Hy-MT1.5-1.8B-1.25bit-GGUF/resolve/master/Hy-MT1.5-1.8B-1.25bit.gguf',
+      HF +
+        '/AngelSlim/Hy-MT1.5-1.8B-1.25bit-GGUF/resolve/main/Hy-MT1.5-1.8B-1.25bit.gguf',
+    ],
   },
 };
 
@@ -35,30 +45,51 @@ export async function modelExists(NativeModules) {
   }
 }
 
-/** 官方直链下载模型到 filesDir/hymt/，onProgress(0~1) 回调进度。 */
-export function downloadModel(NativeModules, which = DEFAULT_DEVICE_MODEL, onProgress) {
-  const { Hymt } = NativeModules;
-  if (!Hymt) return Promise.reject(new Error('本机模块不可用'));
-  const spec = DEVICE_MODELS[which] || DEVICE_MODELS[DEFAULT_DEVICE_MODEL];
-  return Hymt.modelPath().then(basePath => {
-    const dest = basePath.replace(/[^/]+$/, spec.file);
-    const job = RNFS.downloadFile({
-      fromUrl: spec.url,
-      toFile: dest,
-      background: true,
-      discretionary: true,
-      progressInterval: 500,
-      progress: res => {
-        if (onProgress && res.contentLength > 0) {
-          onProgress(res.bytesWritten / res.contentLength);
-        }
-      },
-    });
-    return job.promise.then(res => {
-      if (res.statusCode !== 200) {
-        throw new Error(`下载失败（${res.statusCode}）`);
+function downloadFrom(url, dest, onProgress) {
+  const job = RNFS.downloadFile({
+    fromUrl: url,
+    toFile: dest,
+    background: true,
+    discretionary: true,
+    progressInterval: 500,
+    progress: res => {
+      if (onProgress && res.contentLength > 0) {
+        onProgress(res.bytesWritten / res.contentLength);
       }
-      return dest;
-    });
+    },
   });
+  return job.promise.then(res => {
+    if (res.statusCode !== 200 && res.statusCode !== 206) {
+      throw new Error(`下载失败（HTTP ${res.statusCode}）`);
+    }
+    return dest;
+  });
+}
+
+/**
+ * 下载模型到 filesDir/hymt/，onProgress(0~1) 回调进度。
+ * 依次尝试 urls（魔搭优先），前一个失败自动切下一个。
+ */
+export async function downloadModel(
+  NativeModules,
+  which = DEFAULT_DEVICE_MODEL,
+  onProgress,
+) {
+  const { Hymt } = NativeModules;
+  if (!Hymt) throw new Error('本机模块不可用');
+  const spec = DEVICE_MODELS[which] || DEVICE_MODELS[DEFAULT_DEVICE_MODEL];
+  const basePath = await Hymt.modelPath();
+  const dest = basePath.replace(/[^/]+$/, spec.file);
+
+  let lastError = null;
+  for (let i = 0; i < spec.urls.length; i += 1) {
+    try {
+      return await downloadFrom(spec.urls[i], dest, onProgress);
+    } catch (e) {
+      lastError = e;
+      console.log(`模型下载源 ${i + 1} 失败，换下一个：${e.message}`);
+      if (onProgress) onProgress(0);
+    }
+  }
+  throw lastError || new Error('全部下载源失败');
 }
