@@ -45,8 +45,14 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun modelExists(promise: Promise) {
-        promise.resolve(modelFile().exists())
+    fun modelExists(fileName: String?, promise: Promise) {
+        try {
+            val dir = File(reactContext.filesDir, "hymt")
+            val f = if (fileName.isNullOrEmpty()) modelFile() else File(dir, fileName)
+            promise.resolve(f.exists())
+        } catch (e: Throwable) {
+            promise.resolve(false)
+        }
     }
 
     @ReactMethod
@@ -77,7 +83,19 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                 )
                 val ok = HymtBridge.nativeInit(f.absolutePath, threads)
                 val ms = System.currentTimeMillis() - t0
-                com.co3.Diagnostics.event("hymt_init", mapOf("ok" to ok.toString(), "ms" to ms))
+                if (ok) {
+                    com.co3.Diagnostics.event("hymt_init", mapOf("ok" to "true", "ms" to ms))
+                } else {
+                    val llog = try {
+                        HymtBridge.nativeLastLog() ?: ""
+                    } catch (e: Throwable) {
+                        ""
+                    }
+                    com.co3.Diagnostics.event(
+                        "hymt_init",
+                        mapOf("ok" to "false", "ms" to ms, "llog" to llog),
+                    )
+                }
                 promise.resolve(ok)
             } catch (e: Throwable) {
                 com.co3.Diagnostics.event("hymt_init", mapOf("ok" to "false", "why" to (e.message ?: "exception")))

@@ -99,7 +99,7 @@ const PreferencesScreen = ({ route }) => {
     try {
       setTranslateModeState(await getTranslateMode());
       setTranslateEngineState(await getTranslateEngine());
-      setHasDeviceModel(await modelExists(NativeModules));
+      setHasDeviceModel(await modelExists(NativeModules, DEFAULT_DEVICE_MODEL));
       // Load Database Settings (Appearance)
       const dbSettings = await settingsDAO.getSettings();
       if (dbSettings) {
@@ -306,6 +306,12 @@ const PreferencesScreen = ({ route }) => {
   const handleTranslateEngineChange = async value => {
     setTranslateEngineState(value);
     await setTranslateEngine(value);
+  };
+
+  /** 切换模型：重新判断「当前这个模型」是否已下载（修「两个都显示就绪」）。 */
+  const handleDeviceModelChange = async which => {
+    setDeviceModelState(which);
+    setHasDeviceModel(await modelExists(NativeModules, which));
   };
 
   const handleDeviceModelDownload = async () => {
@@ -618,7 +624,7 @@ const PreferencesScreen = ({ route }) => {
               <View style={{ marginTop: 12 }}>
                 <CustomDropdown
                   selectedValue={deviceModel}
-                  onValueChange={setDeviceModelState}
+                  onValueChange={handleDeviceModelChange}
                   theme={activeTheme}
                   style={{ marginTop: 8 }}
                 >

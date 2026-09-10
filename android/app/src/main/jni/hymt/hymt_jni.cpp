@@ -9,6 +9,7 @@ JNIEXPORT jboolean JNICALL Java_com_co3_hymt_HymtBridge_nativeInit(JNIEnv* e, jc
 JNIEXPORT jstring JNICALL Java_com_co3_hymt_HymtBridge_nativeTranslate(JNIEnv* e, jclass, jstring, jint) { return e->NewStringUTF(""); }
 JNIEXPORT void JNICALL Java_com_co3_hymt_HymtBridge_nativeFree(JNIEnv*, jclass) {}
 JNIEXPORT jboolean JNICALL Java_com_co3_hymt_HymtBridge_nativeIsReady(JNIEnv*, jclass) { return JNI_FALSE; }
+JNIEXPORT jstring JNICALL Java_com_co3_hymt_HymtBridge_nativeLastLog(JNIEnv* e, jclass) { return e->NewStringUTF("stub-32bit"); }
 }  // extern "C"
 #else
 
@@ -18,6 +19,20 @@ JNIEXPORT jboolean JNICALL Java_com_co3_hymt_HymtBridge_nativeIsReady(JNIEnv*, j
 #include "llama.h"
 
 namespace {
+
+// 捕获 llama/ggml 的告警与错误文本，供上层上报诊断
+std::string g_last_log;
+bool g_log_hooked = false;
+
+void hymt_log_cb(ggml_log_level level, const char* text, void* /*user_data*/) {
+  if (!text) return;
+  if (level == GGML_LOG_LEVEL_ERROR || level == GGML_LOG_LEVEL_WARN) {
+    g_last_log.append(text);
+    if (g_last_log.size() > 3000) {
+      g_last_log.erase(0, g_last_log.size() - 3000);
+    }
+  }
+}
 
 struct HymtState {
   llama_model* model = nullptr;
@@ -92,9 +107,16 @@ JNIEXPORT jboolean JNICALL Java_com_co3_hymt_HymtBridge_nativeInit(JNIEnv* env, 
                                                                        jint n_threads) {
   try {
     free_state();
+    g_last_log.clear();
+    if (!g_log_hooked) {
+      llama_log_set(hymt_log_cb, nullptr);
+      g_log_hooked = true;
+    }
     std::string path = jstring_to_utf8(env, model_path);
 
     llama_model_params mparams = llama_model_default_params();
+    mparams.use_mmap = true;
+    mparams.use_mlock = false;
     g_state.model = llama_model_load_from_file(path.c_str(), mparams);
     if (!g_state.model) return JNI_FALSE;
 
@@ -157,6 +179,12 @@ JNIEXPORT void JNICALL Java_com_co3_hymt_HymtBridge_nativeFree(JNIEnv*, jclass) 
 
 JNIEXPORT jboolean JNICALL Java_com_co3_hymt_HymtBridge_nativeIsReady(JNIEnv*, jclass) {
   return g_state.ctx ? JNI_TRUE : JNI_FALSE;
+}
+
+// 最近一次 llama/ggml 的告警+错误文本（供上层上报诊断）
+JNIEXPORT jstring JNICALL Java_com_co3_hymt_HymtBridge_nativeLastLog(JNIEnv* env, jclass) {
+  if (g_last_log.empty()) return env->NewStringUTF("");
+  return env->NewStringUTF(g_last_log.c_str());
 }
 
 }  // extern "C"

@@ -20,4 +20,7 @@ internal object HymtBridge {
     external fun nativeTranslate(text: String, maxTokens: Int): String?
     external fun nativeFree()
     external fun nativeIsReady(): Boolean
+
+    /** 最近一次 llama/ggml 的告警+错误文本（诊断用）。 */
+    external fun nativeLastLog(): String?
 }

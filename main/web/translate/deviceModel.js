@@ -40,11 +40,12 @@ export const DEVICE_MODELS = {
 
 export const DEFAULT_DEVICE_MODEL = '2bit';
 
-export async function modelExists(NativeModules) {
+export async function modelExists(NativeModules, which = DEFAULT_DEVICE_MODEL) {
   try {
     const { Hymt } = NativeModules;
     if (!Hymt) return false;
-    return await Hymt.modelExists();
+    const spec = DEVICE_MODELS[which] || DEVICE_MODELS[DEFAULT_DEVICE_MODEL];
+    return await Hymt.modelExists(spec.file);
   } catch {
     return false;
   }
