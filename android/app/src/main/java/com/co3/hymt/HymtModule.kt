@@ -174,9 +174,9 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                     return@execute
                 }
                 val t0 = System.currentTimeMillis()
-                // 用官方 demo 的 prompt 模板（dex 实测）：
-                //   "Please translate to {lang}:\n\n{text}"，语言用代码（zh/en/...）
-                val prompt = "Please translate to $TARGET_LANG:\n\n$text"
+                // 官方 README 的 ZH<=>XX 权威模板（注意 target_language 要用完整语言名，
+                // 如"中文"，不能填语言代码 zh，否则模型行为漂移、输出拒答文本）。
+                val prompt = "将以下文本翻译为$TARGET_LANG_NAME，注意只需要输出翻译后的结果，不要额外解释： $text"
                 val mt = if (maxTokens > 0) maxTokens else 1024
                 val rc = e.sendUserPrompt(prompt, mt)
                 if (rc != 0) {
@@ -198,18 +198,23 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                     sb.append(tok)
                 }
                 val out = sb.toString().trim()
+                // 模型拒答/异常输出（prompt 不当或内容触发安全）→ 作为失败上报，
+                // 让 JS 侧保留原文（fail-closed：宁可不翻，也不要显示错误内容）。
+                val refusal = REFUSAL_MARKS.firstOrNull { out.contains(it) }
                 com.co3.Diagnostics.event(
                     "hymt_translate",
                     mapOf(
-                        "ok" to (out.isNotEmpty()).toString(),
+                        "ok" to (out.isNotEmpty() && refusal == null).toString(),
                         "ms" to (System.currentTimeMillis() - t0),
                         "in_len" to text.length,
                         "out_len" to out.length,
                         "tokens" to guard,
+                        "refusal" to (refusal ?: "-"),
+                        "head" to out.take(40),
                     ),
                 )
-                if (out.isEmpty()) {
-                    promise.reject("HYMT_EMPTY", "empty translation")
+                if (out.isEmpty() || refusal != null) {
+                    promise.reject("HYMT_REFUSAL", "empty=${out.isEmpty()} refusal=${refusal ?: "-"}")
                 } else {
                     promise.resolve(out)
                 }
@@ -318,7 +323,19 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
     }
 
     companion object {
-        /** 目标语言代码（官方 prompt 模板用语言代码：zh / en / ja ...）。 */
-        private const val TARGET_LANG = "zh"
+        /** 目标语言**完整名**（官方 README 要求用完整语言名，不能用 zh 这种代码）。 */
+        private const val TARGET_LANG_NAME = "中文"
+
+        /** 模型拒答/跑偏的典型特征串（命中即视为翻译失败，调用方保留原文）。 */
+        private val REFUSAL_MARKS = listOf(
+            "很抱歉",
+            "无法提供",
+            "抱歉，我",
+            "对不起，我",
+            "I'm sorry",
+            "I cannot",
+            "I can't provide",
+            "As an AI",
+        )
     }
 }
