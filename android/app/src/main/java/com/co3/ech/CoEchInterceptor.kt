@@ -106,6 +106,19 @@ class CoEchInterceptor : Interceptor {
                     "url" to request.url.toString().take(70),
                 ),
             )
+            // 400 Bad Request 多为 multipart 成形问题/请求头缺失。
+            // 记下实际发出去的头列表 + body 开头，才能判断边界符、Origin、Content-Length 等。
+            Diagnostics.event(
+                "ech_req_headers",
+                mapOf(
+                    "host" to host,
+                    "hdrs" to headers.joinToString(" | ").take(400),
+                    "body_head" to (bodyBytes?.let { b ->
+                        String(b.copyOfRange(0, minOf(b.size, 160)), Charsets.ISO_8859_1)
+                            .replace("\r", "\\r").replace("\n", "\\n")
+                    } ?: "-"),
+                ),
+            )
         }
 
         var lastError: Exception? = null
@@ -191,6 +204,22 @@ class CoEchInterceptor : Interceptor {
                     }
                     if (setCookies.isNotEmpty()) { cm.flush(); Diagnostics.event("cookie_recv", mapOf("host" to host, "count" to setCookies.size.toString(), "hasSession" to setCookies.any{it.contains("_otwarchive_session")}.toString())) }
                 } catch (e: Exception) { Diagnostics.event("cookie_recv_err", mapOf("host" to host, "err" to (e.message?:"")))}
+                // 把 4xx/5xx 的响应正文捞出来 —— 服务端的报错文本就是最直接的线索
+                if (statusCode >= 400) {
+                    try {
+                        val head = String(bodyBytesDecoded.copyOfRange(0, minOf(bodyBytesDecoded.size, 220)), Charsets.UTF_8)
+                            .replace("\n", " ").replace("\r", " ")
+                        Diagnostics.event(
+                            "ech_err_body",
+                            mapOf(
+                                "host" to host,
+                                "code" to statusCode,
+                                "len" to bodyBytesDecoded.size,
+                                "head" to head,
+                            ),
+                        )
+                    } catch (_: Throwable) { }
+                }
                 com.co3.Diagnostics.event(
                     "ech_ok",
                     mapOf(
