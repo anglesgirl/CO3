@@ -49,15 +49,18 @@ jobs:
         env:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
 
-      - name: Fetch official HyMT prebuilt llama libs (from official Demo APK)
+      - name: Fetch official HyMT prebuilt libs (from official Demo APK)
         run: |
-          # 官方 Demo 的 libllama.so/libggml*.so 与官方 GGUF 的 ggml 类型编号严格配套
-          # （Q2_0C=41 / STQ_0=40）；自编 llama.cpp 会因编号错位加载失败。
+          # 官方 Demo 的 libai-chat.so + libllama.so + libggml*.so 是配套的成品：
+          # libai-chat.so 是 ARM 的 JNI 封装（Java_com_arm_aichat_internal_*），
+          # 其 ggml 类型编号与官方 GGUF 严格配套（2bit=Q2_0C / 1.25bit=STQ_0）。
+          # 自编 llama.cpp 会因编号错位加载失败，故直接复用官方成品。
           curl -sL --retry 3 --max-time 300 -A "Mozilla/5.0" -o /tmp/hymt-demo.apk \
             "https://modelscope.cn/models/AngelSlim/Hy-MT1.5-1.8B-1.25bit-GGUF/resolve/master/Hy-MT-demo.apk"
           ls -la /tmp/hymt-demo.apk
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           cd /tmp && unzip -o -j hymt-demo.apk \
+            "lib/arm64-v8a/libai-chat.so" \
             "lib/arm64-v8a/libllama.so" \
             "lib/arm64-v8a/libggml.so" \
             "lib/arm64-v8a/libggml-base.so" \
@@ -65,16 +68,6 @@ jobs:
             "lib/arm64-v8a/libomp.so" \
             -d "$GITHUB_WORKSPACE/android/app/src/main/jniLibs/arm64-v8a"
           ls -la "$GITHUB_WORKSPACE/android/app/src/main/jniLibs/arm64-v8a"
-
-      - name: Fetch arm/ai-chat headers (same source as the official prebuilt libs)
-        run: |
-          # 头文件必须与官方预编译 so 同源（arm/ai-chat），否则结构体 ABI 可能错位。
-          # 同时它也含 STQ_0/Q2_0C 家族的量化类型定义。
-          git clone --depth 1 https://github.com/arm/ai-chat.git /tmp/arm-ai-chat
-          mkdir -p android/app/src/main/jni/llama-include
-          cp -f /tmp/arm-ai-chat/include/*.h android/app/src/main/jni/llama-include/ 2>/dev/null || true
-          cp -f /tmp/arm-ai-chat/ggml/include/*.h android/app/src/main/jni/llama-include/ 2>/dev/null || true
-          ls android/app/src/main/jni/llama-include
 
       - name: Generate codegen artifacts
         run: |

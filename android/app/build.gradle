@@ -24,15 +24,11 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace "com.co3"
-    // HyMT 端侧翻译原生库。路径必须是 src/main/jni（RN 官方约定）：
-    // 自定义 CMakeLists 必须自己 include ReactNative-application.cmake，
-    // 否则 RN 的 appmodules(TurboModule 聚合库) 不会构建，运行时崩。
-    externalNativeBuild {
-        cmake {
-            path "src/main/jni/CMakeLists.txt"
-            version "3.22.1"
-        }
-    }
+    // 说明：本 app 不再声明 externalNativeBuild。
+    // 端侧 AI 的 native 库直接用官方 Hy-MT Demo 的预编译 so（CI 提取到 jniLibs），
+    // 由 Kotlin 侧 com.arm.aichat.internal.InferenceEngineImpl 调用。
+    // 不声明 externalNativeBuild 时，RN 会注入它自己的默认 CMakeLists，
+    // appmodules（含 AsyncStorage 等 autolinked TurboModule）正常构建 → 不崩。
     defaultConfig {
         applicationId "com.co3"
         minSdkVersion rootProject.ext.minSdkVersion

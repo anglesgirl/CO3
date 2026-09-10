@@ -1,20 +1,23 @@
 package com.co3.hymt
 
 import androidx.annotation.Keep
+import com.arm.aichat.internal.InferenceEngineImpl
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * 本机 AI 翻译模块（混元 HyMT GGUF + llama.cpp）。
- * .so 缺失时自动降级：isReady=false，上层走在线引擎。
+ * 本机 AI 翻译模块。
+ *
+ * 推理走「官方 ARM ai-chat 引擎」的预编译库（libai-chat.so + libllama.so +
+ * libggml*.so，从官方 Hy-MT Demo APK 提取，见 CI）——官方 so 的 ggml 类型编号
+ * 与官方 GGUF 模型严格配套（2bit=Q2_0C / 1.25bit=STQ_0），自编 llama.cpp
+ * 会因编号错位导致加载失败。故此处不自己调 llama API。
  */
 @Keep
 class HymtModule(private val reactContext: ReactApplicationContext) :
@@ -22,25 +25,35 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
 
     private val io = Executors.newSingleThreadExecutor()
 
+    @Volatile
+    private var engine: InferenceEngineImpl? = null
+
+    @Volatile
+    private var ready = false
+
     override fun getName() = "Hymt"
 
     private fun modelFile(): File {
         val dir = File(reactContext.filesDir, "hymt")
-        // 优先 2bit（质量优先），其次 1.25bit。两者都是官方 GGUF，
-        // 与官方预编译 libllama.so 的编号配套（2bit=Q2_0C(41)、1.25bit=STQ_0(40)）。
         val twoBit = File(dir, "Hy-MT1.5-1.8B-2bit.gguf")
         if (twoBit.exists()) return twoBit
         return File(dir, "Hy-MT1.5-1.8B-1.25bit.gguf")
     }
 
-    @ReactMethod
-    fun isReady(promise: Promise) {
-        io.execute {
-            try {
-                promise.resolve(HymtBridge.isLoaded && File(modelFile().absolutePath).exists() && HymtBridge.nativeIsReady())
-            } catch (e: Throwable) {
-                promise.resolve(false)
-            }
+    private fun ensureEngine(): InferenceEngineImpl? {
+        engine?.let { return it }
+        return try {
+            val e = InferenceEngineImpl(reactContext.applicationInfo.nativeLibraryDir)
+            e.initialize()
+            engine = e
+            e
+        } catch (t: Throwable) {
+            // 官方 so 只提供 arm64-v8a：32 位设备会到这里 → 降级走在线翻译
+            com.co3.Diagnostics.event(
+                "hymt_engine_load",
+                mapOf("ok" to "false", "err" to (t.message ?: t.javaClass.simpleName)),
+            )
+            null
         }
     }
 
@@ -61,45 +74,73 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
+    fun isReady(promise: Promise) {
+        promise.resolve(ready)
+    }
+
+    @ReactMethod
     fun init(promise: Promise) {
         io.execute {
+            val t0 = System.currentTimeMillis()
             try {
-                if (!HymtBridge.isLoaded) {
-                    com.co3.Diagnostics.event("hymt_init", mapOf("ok" to "false", "why" to "no_lib"))
-                    promise.reject("HYMT_NO_LIB", "native library missing")
+                if (ready) {
+                    promise.resolve(true)
                     return@execute
                 }
                 val f = modelFile()
                 if (!f.exists()) {
-                    com.co3.Diagnostics.event("hymt_init", mapOf("ok" to "false", "why" to "no_model", "path" to f.absolutePath))
+                    com.co3.Diagnostics.event(
+                        "hymt_init",
+                        mapOf("ok" to "false", "why" to "no_model", "path" to f.absolutePath),
+                    )
                     promise.reject("HYMT_NO_MODEL", "model file missing")
                     return@execute
                 }
-                val threads = Runtime.getRuntime().availableProcessors().coerceAtMost(6)
-                val t0 = System.currentTimeMillis()
+                val e = ensureEngine()
                 com.co3.Diagnostics.event(
-                    "hymt_init_start",
-                    mapOf("path" to f.name, "mb" to (f.length() / 1048576), "threads" to threads),
+                    "hymt_engine_info",
+                    mapOf("info" to (e.info() ?: "").take(300)),
                 )
-                val ok = HymtBridge.nativeInit(f.absolutePath, threads)
-                val ms = System.currentTimeMillis() - t0
-                if (ok) {
-                    com.co3.Diagnostics.event("hymt_init", mapOf("ok" to "true", "ms" to ms))
-                } else {
-                    val llog = try {
-                        HymtBridge.nativeLastLog() ?: ""
-                    } catch (e: Throwable) {
-                        ""
-                    }
+                val rc = e.loadModel(f.absolutePath)
+                if (rc != 0) {
                     com.co3.Diagnostics.event(
                         "hymt_init",
-                        mapOf("ok" to "false", "ms" to ms, "llog" to llog),
+                        mapOf("ok" to "false", "why" to "load", "rc" to rc, "ms" to (System.currentTimeMillis() - t0)),
                     )
+                    promise.reject("HYMT_LOAD_FAILED", "load rc=$rc")
+                    return@execute
                 }
-                promise.resolve(ok)
-            } catch (e: Throwable) {
-                com.co3.Diagnostics.event("hymt_init", mapOf("ok" to "false", "why" to (e.message ?: "exception")))
-                promise.reject("HYMT_INIT_FAILED", e.message, e)
+                val prc = e.prepareEngine()
+                if (prc != 0) {
+                    com.co3.Diagnostics.event(
+                        "hymt_init",
+                        mapOf("ok" to "false", "why" to "prepare", "rc" to prc),
+                    )
+                    promise.reject("HYMT_PREPARE_FAILED", "prepare rc=$prc")
+                    return@execute
+                }
+                // system prompt 必须在 load+prepare 之后立刻设置
+                val src = e.setSystemPrompt(SYSTEM_PROMPT)
+                if (src != 0) {
+                    com.co3.Diagnostics.event(
+                        "hymt_init",
+                        mapOf("ok" to "false", "why" to "sys_prompt", "rc" to src),
+                    )
+                    promise.reject("HYMT_SYS_FAILED", "system prompt rc=$src")
+                    return@execute
+                }
+                ready = true
+                com.co3.Diagnostics.event(
+                    "hymt_init",
+                    mapOf("ok" to "true", "ms" to (System.currentTimeMillis() - t0)),
+                )
+                promise.resolve(true)
+            } catch (t: Throwable) {
+                com.co3.Diagnostics.event(
+                    "hymt_init",
+                    mapOf("ok" to "false", "why" to (t.message ?: t.javaClass.simpleName)),
+                )
+                promise.reject("HYMT_INIT_FAILED", t.message, t)
             }
         }
     }
@@ -108,30 +149,53 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
     fun translate(text: String, maxTokens: Int, promise: Promise) {
         io.execute {
             try {
-                if (!HymtBridge.isLoaded) {
-                    promise.reject("HYMT_NO_LIB", "native library missing")
+                val e = engine
+                if (e == null || !ready) {
+                    promise.reject("HYMT_NOT_READY", "engine not ready")
                     return@execute
                 }
                 val t0 = System.currentTimeMillis()
-                val out = HymtBridge.nativeTranslate(text, maxTokens)
-                val ms = System.currentTimeMillis() - t0
-                if (out.isNullOrEmpty()) {
+                val rc = e.sendUserPrompt(text, maxTokens)
+                if (rc != 0) {
                     com.co3.Diagnostics.event(
                         "hymt_translate",
-                        mapOf("ok" to "false", "why" to "empty", "ms" to ms, "in_len" to text.length),
+                        mapOf("ok" to "false", "why" to "prompt", "rc" to rc),
                     )
+                    promise.reject("HYMT_PROMPT_FAILED", "user prompt rc=$rc")
+                    return@execute
+                }
+                val sb = StringBuilder()
+                // 逐 token 取，直到返回 null/空串（软件上限兜底防死循环）
+                var guard = 0
+                val limit = if (maxTokens > 0) maxTokens * 2 + 16 else 1024
+                while (guard < limit) {
+                    guard++
+                    val tok = e.nextToken()
+                    if (tok.isNullOrEmpty()) break
+                    sb.append(tok)
+                }
+                val out = sb.toString().trim()
+                com.co3.Diagnostics.event(
+                    "hymt_translate",
+                    mapOf(
+                        "ok" to (out.isNotEmpty()).toString(),
+                        "ms" to (System.currentTimeMillis() - t0),
+                        "in_len" to text.length,
+                        "out_len" to out.length,
+                        "tokens" to guard,
+                    ),
+                )
+                if (out.isEmpty()) {
                     promise.reject("HYMT_EMPTY", "empty translation")
                 } else {
-                    // 只记前几段耗时，避免日志过量
-                    com.co3.Diagnostics.event(
-                        "hymt_translate",
-                        mapOf("ok" to "true", "ms" to ms, "in_len" to text.length, "out_len" to out.length),
-                    )
                     promise.resolve(out)
                 }
-            } catch (e: Throwable) {
-                com.co3.Diagnostics.event("hymt_translate", mapOf("ok" to "false", "why" to (e.message ?: "exception")))
-                promise.reject("HYMT_FAILED", e.message, e)
+            } catch (t: Throwable) {
+                com.co3.Diagnostics.event(
+                    "hymt_translate",
+                    mapOf("ok" to "false", "why" to (t.message ?: t.javaClass.simpleName)),
+                )
+                promise.reject("HYMT_FAILED", t.message, t)
             }
         }
     }
@@ -140,7 +204,12 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
     fun release(promise: Promise) {
         io.execute {
             try {
-                if (HymtBridge.isLoaded) HymtBridge.nativeFree()
+                engine?.let {
+                    it.unloadModel()
+                    it.shutdownEngine()
+                }
+                engine = null
+                ready = false
                 promise.resolve(true)
             } catch (e: Throwable) {
                 promise.reject("HYMT_FREE_FAILED", e.message, e)
@@ -150,7 +219,7 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
 
     /**
      * 用 OkHttp 下载模型文件（流式写盘）到 destPath，先写 .part 再改名。
-     * 进度由 JS 侧轮询 [downloadedBytes] 获取（不依赖 bridge 事件，新架构更稳）。
+     * 进度由 JS 侧轮询 [downloadedBytes] 获取。
      * 不走 RNFS：RNFS 的 DownloadManager 写不了 app 私有目录，
      * 前台模式对魔搭（阿里云 WAF）会 Connection reset。
      */
@@ -158,11 +227,11 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
     fun downloadModel(url: String, destPath: String, promise: Promise) {
         io.execute {
             try {
-                val client = OkHttpClient.Builder()
+                val client = okhttp3.OkHttpClient.Builder()
                     .connectTimeout(30, TimeUnit.SECONDS)
                     .readTimeout(60, TimeUnit.SECONDS)
                     .build()
-                val request = Request.Builder()
+                val request = okhttp3.Request.Builder()
                     .url(url)
                     .header(
                         "User-Agent",
@@ -197,7 +266,6 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                             output.flush()
                         }
                     }
-                    // 下载完成才改名，避免半截文件被当成完整模型
                     if (target.exists()) target.delete()
                     if (!tmp.renameTo(target)) {
                         tmp.copyTo(target, overwrite = true)
@@ -211,7 +279,6 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
-    /** 已下载字节数（.part 优先，其次正式文件），供 JS 轮询进度。 */
     @ReactMethod
     fun downloadedBytes(destPath: String, promise: Promise) {
         try {
@@ -225,5 +292,10 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
         } catch (e: Throwable) {
             promise.resolve(0.0)
         }
+    }
+
+    companion object {
+        private const val SYSTEM_PROMPT =
+            "Translate the following segment into Chinese, without additional explanation."
     }
 }
