@@ -24,18 +24,25 @@ export async function deviceReady() {
   }
 }
 
-/** 本机批量翻译（段落数组→译文数组），失败抛错由上层降级。 */
-export async function translateDevice(texts) {
+/**
+ * 本机批量翻译（段落数组→译文数组），失败抛错由上层降级。
+ * onProgress(done,total) 每段完成后回调，供 UI 显示进度（推理慢，必须有反馈）。
+ */
+export async function translateDevice(texts, onProgress) {
   await ensureInit();
   const { Hymt } = NativeModules;
   const out = [];
-  for (const t of texts) {
-    if (!t.trim()) {
+  const total = texts.length;
+  for (let i = 0; i < total; i += 1) {
+    const t = texts[i];
+    if (!t || !t.trim()) {
       out.push('');
+      if (onProgress) onProgress(i + 1, total);
       continue;
     }
     const zh = await Hymt.translate(t, 512);
     out.push(String(zh || '').trim());
+    if (onProgress) onProgress(i + 1, total);
   }
   return out;
 }

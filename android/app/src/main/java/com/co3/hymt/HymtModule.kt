@@ -59,17 +59,28 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
         io.execute {
             try {
                 if (!HymtBridge.isLoaded) {
+                    com.co3.Diagnostics.event("hymt_init", mapOf("ok" to "false", "why" to "no_lib"))
                     promise.reject("HYMT_NO_LIB", "native library missing")
                     return@execute
                 }
                 val f = modelFile()
                 if (!f.exists()) {
+                    com.co3.Diagnostics.event("hymt_init", mapOf("ok" to "false", "why" to "no_model", "path" to f.absolutePath))
                     promise.reject("HYMT_NO_MODEL", "model file missing")
                     return@execute
                 }
                 val threads = Runtime.getRuntime().availableProcessors().coerceAtMost(6)
-                promise.resolve(HymtBridge.nativeInit(f.absolutePath, threads))
+                val t0 = System.currentTimeMillis()
+                com.co3.Diagnostics.event(
+                    "hymt_init_start",
+                    mapOf("path" to f.name, "mb" to (f.length() / 1048576), "threads" to threads),
+                )
+                val ok = HymtBridge.nativeInit(f.absolutePath, threads)
+                val ms = System.currentTimeMillis() - t0
+                com.co3.Diagnostics.event("hymt_init", mapOf("ok" to ok.toString(), "ms" to ms))
+                promise.resolve(ok)
             } catch (e: Throwable) {
+                com.co3.Diagnostics.event("hymt_init", mapOf("ok" to "false", "why" to (e.message ?: "exception")))
                 promise.reject("HYMT_INIT_FAILED", e.message, e)
             }
         }
@@ -83,13 +94,25 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                     promise.reject("HYMT_NO_LIB", "native library missing")
                     return@execute
                 }
+                val t0 = System.currentTimeMillis()
                 val out = HymtBridge.nativeTranslate(text, maxTokens)
+                val ms = System.currentTimeMillis() - t0
                 if (out.isNullOrEmpty()) {
+                    com.co3.Diagnostics.event(
+                        "hymt_translate",
+                        mapOf("ok" to "false", "why" to "empty", "ms" to ms, "in_len" to text.length),
+                    )
                     promise.reject("HYMT_EMPTY", "empty translation")
                 } else {
+                    // 只记前几段耗时，避免日志过量
+                    com.co3.Diagnostics.event(
+                        "hymt_translate",
+                        mapOf("ok" to "true", "ms" to ms, "in_len" to text.length, "out_len" to out.length),
+                    )
                     promise.resolve(out)
                 }
             } catch (e: Throwable) {
+                com.co3.Diagnostics.event("hymt_translate", mapOf("ok" to "false", "why" to (e.message ?: "exception")))
                 promise.reject("HYMT_FAILED", e.message, e)
             }
         }

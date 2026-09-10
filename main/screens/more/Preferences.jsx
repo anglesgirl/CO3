@@ -81,6 +81,7 @@ const PreferencesScreen = ({ route }) => {
   const [deviceModel, setDeviceModelState] = useState(DEFAULT_DEVICE_MODEL);
   const [hasDeviceModel, setHasDeviceModel] = useState(false);
   const [dlProgress, setDlProgress] = useState(-1);
+  const [testingDevice, setTestingDevice] = useState(false);
   const [updateTime, setUpdateTime] = useState(1440);
   const [updateRestriction, setUpdateRestriction] = useState(3);
   const [categories, setCategories] = useState();
@@ -316,6 +317,27 @@ const PreferencesScreen = ({ route }) => {
     } catch (e) {
       setDlProgress(-1);
       Alert.alert(t('general_error'), e.message);
+    }
+  };
+
+  /** 快速自检：翻译一句话，返回耗时与译文（诊断端侧推理是否工作）。 */
+  const handleDeviceTest = async () => {
+    setTestingDevice(true);
+    try {
+      const { translateDevice } = require('../../web/translate/deviceTranslate');
+      const t0 = Date.now();
+      const out = await translateDevice([
+        'Hello, nice to meet you. This is a test of on-device translation.',
+      ]);
+      const secs = ((Date.now() - t0) / 1000).toFixed(1);
+      Alert.alert(
+        t('screen_preferences_translate_test_ok'),
+        `${t('screen_preferences_translate_test_cost')}${secs}s\n\n${out[0] || '(空)'}`,
+      );
+    } catch (e) {
+      Alert.alert(t('screen_preferences_translate_test_fail'), e.message);
+    } finally {
+      setTestingDevice(false);
     }
   };
 
@@ -623,6 +645,26 @@ const PreferencesScreen = ({ route }) => {
                         : t('screen_preferences_translate_download')}
                   </Text>
                 </TouchableOpacity>
+                {hasDeviceModel && (
+                  <TouchableOpacity
+                    onPress={handleDeviceTest}
+                    disabled={testingDevice}
+                    style={[
+                      styles.downloadButton,
+                      {
+                        backgroundColor: activeTheme.borderColor,
+                        marginTop: 8,
+                        opacity: testingDevice ? 0.6 : 1,
+                      },
+                    ]}
+                  >
+                    <Text style={{ color: activeTheme.textColor }}>
+                      {testingDevice
+                        ? t('screen_preferences_translate_testing')
+                        : t('screen_preferences_translate_test')}
+                    </Text>
+                  </TouchableOpacity>
+                )}
               </View>
             )}
           </View>

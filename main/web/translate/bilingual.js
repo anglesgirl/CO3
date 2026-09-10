@@ -5,6 +5,19 @@
 import { translateTexts } from './freeTranslation';
 import { getTranslateEngine } from './settings';
 
+// 本机推理超时兜底（仅防真死锁；正常慢不误杀）。超时即降级在线机翻。
+const DEVICE_TIMEOUT_MS = 120000;
+
+function withTimeout(promise, ms, message) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message || 'timeout')), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 // deviceTranslate 依赖 NativeModules，用惰性 require 避免启动链加载 native 依赖
 function getDeviceTranslate() {
   return require('./deviceTranslate').translateDevice;
@@ -81,23 +94,28 @@ export async function buildBilingualHtml(
 ) {
   const paras = splitParagraphs(chapterHtml);
   if (paras.length === 0) return chapterHtml;
-  // 引擎路由：device(本机AI) 优先 → 失败自动降级在线免费机翻
+  const texts = paras.map(p => p.text);
+  // 引擎路由：device(本机AI) 优先 → 失败/超时自动降级在线免费机翻
   let translations = null;
-  try {
-    if ((await getTranslateEngine()) === 'device') {
-      translations = await getDeviceTranslate()(paras.map(p => p.text));
+  if ((await getTranslateEngine()) === 'device') {
+    try {
+      // 先报 0/n：模型首次加载可能几十秒，让 UI 立即有反馈
+      if (onProgress) onProgress(0, paras.length);
+      // 本机推理慢，把 onProgress 透传下去让 UI 显示"第 x/n 段"
+      translations = await withTimeout(
+        getDeviceTranslate()(texts, onProgress),
+        DEVICE_TIMEOUT_MS,
+        '本机翻译超时',
+      );
+    } catch (e) {
+      console.log(`本机翻译失败，切在线：${e.message}`);
+      if (onProgress) onProgress(0, paras.length);
     }
-  } catch (e) {
-    console.log(`本机翻译失败，切在线：${e.message}`);
   }
   if (!translations) {
-    translations = await translateTexts(
-      paras.map(p => p.text),
-      fromLang,
-      toLang,
-    );
+    translations = await translateTexts(texts, fromLang, toLang);
+    if (onProgress) onProgress(paras.length, paras.length);
   }
-  if (onProgress) onProgress(paras.length, paras.length);
   return paras
     .map((p, i) => {
       const trans = `<p class="co3-trans">${escapeHtml(translations[i] || '')}</p>`;
