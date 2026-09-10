@@ -3,6 +3,8 @@ import {
   Animated,
   Linking,
   Modal,
+  NativeEventEmitter,
+  NativeModules,
   Platform,
   StatusBar,
   StyleSheet,
@@ -45,22 +47,41 @@ const EXTRACT_SEGS_JS = `
 })();
 true;`;
 
-// 把第 i 段译文插到该段下方（重复调用先删旧的，避免翻两次出现两份）
-const appendTransJs = (i, zh) => `
+// 翻译前：给每段在**下方留出空位**（占位符），用户立刻能看到"这里会出译文"，
+// 而不是盯着没有变化的原文干等。
+const placeholdersJs = (n) => `
+(function(){
+  for (var i = 0; i < ${n}; i++) {
+    var el = document.querySelector('[data-co3seg="' + i + '"]');
+    if (!el || !el.parentNode) continue;
+    var old = el.parentNode.querySelector('.co3-trans[data-for="' + i + '"]');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    var d = document.createElement('p');
+    d.className = 'co3-trans co3-pending';
+    d.setAttribute('data-for', String(i));
+    d.textContent = '…';
+    el.parentNode.insertBefore(d, el.nextSibling);
+  }
+})();`;
+
+/**
+ * 把第 i 段的译文**就地更新**（流式：每批 token 到达都覆盖同一个节点，
+ * 表现为"边翻边写"）。pending=true 保留未完成样式。
+ */
+const updateTransJs = (i, text, pending) => `
 (function(){
   var el = document.querySelector('[data-co3seg="${i}"]');
   if (!el || !el.parentNode) return;
-  var old = el.parentNode.querySelector('.co3-trans[data-for="${i}"]');
-  if (old && old.parentNode) old.parentNode.removeChild(old);
-  var d = document.createElement('p');
-  d.className = 'co3-trans';
-  d.setAttribute('data-for', '${i}');
-  d.textContent = ${JSON.stringify(String(zh || ''))};
-  el.parentNode.insertBefore(d, el.nextSibling);
+  var t = el.parentNode.querySelector('.co3-trans[data-for="${i}"]');
+  if (!t) {
+    t = document.createElement('p');
+    t.className = 'co3-trans';
+    t.setAttribute('data-for', '${i}');
+    el.parentNode.insertBefore(t, el.nextSibling);
+  }
+  t.className = 'co3-trans${pending ? ' co3-pending' : ''}';
+  t.textContent = ${JSON.stringify(String(text == null ? '' : text))};
 })();`;
-
-/** 每批段数（与原生 translateBatch 的批大小一致）。 */
-const TRANSLATE_BATCH = 6;
 
 const PullIndicator = ({ progress, theme }) => {
   const size = 60;
@@ -336,34 +357,81 @@ const ChapterReader = ({
         return;
       }
 
-      // 2) 分批翻译，每批翻完立刻把这批译文插到对应段落下方
-      const { translateTextsSmart } = require('../web/translate/bilingual');
+      // 2) 先给每段在下方**留出空位**，用户立刻能看到"译文将出现在这里"
+      webViewRef.current.injectJavaScript(`${placeholdersJs(segs.length)}\ntrue;`);
+
+      // 3) 按当前所选引擎走不同路径：
+      //    device(本机 AI) → 逐段**流式**，token 事件实时写入（边翻边看）
+      //    其它(在线/机翻) → 原有的批量路径
+      const { getTranslateEngine } = require('../web/translate/settings');
+      const engine = await getTranslateEngine();
+      const { Hymt } = NativeModules;
+
       let doneN = 0;
       let failed = 0;
-      for (let i = 0; i < segs.length; i += TRANSLATE_BATCH) {
-        const chunk = segs.slice(i, i + TRANSLATE_BATCH);
-        let zh = null;
+
+      if (engine === 'device' && Hymt) {
+        let initOk = false;
         try {
-          zh = await translateTextsSmart(chunk);
+          initOk = await Hymt.isReady();
+          if (!initOk) initOk = await Hymt.init();
         } catch (e) {
-          zh = null;
+          initOk = false;
         }
-        if (zh && zh.length === chunk.length) {
-          const js = chunk
-            .map((_, k) => (String(zh[k] || '').trim() ? appendTransJs(i + k, zh[k]) : ''))
-            .join('\n');
-          webViewRef.current.injectJavaScript(`${js}\ntrue;`);
-        } else {
-          failed += chunk.length;
+        if (!initOk) throw new Error(t('reader_translate_failed'));
+
+        for (let i = 0; i < segs.length; i += 1) {
+          const src = String(segs[i] || '').trim();
+          if (!src) {
+            doneN += 1;
+            continue;
+          }
+          try {
+            await Hymt.translateStream(src, i, 512);
+          } catch (e) {
+            failed += 1;
+            // 该段失败：清掉占位，不留下误导性的"…"
+            webViewRef.current.injectJavaScript(`${updateTransJs(i, '', false)}\ntrue;`);
+          }
+          doneN += 1;
+          Toast.show({
+            type: 'success',
+            text2: `${t('reader_translate_progress')} ${doneN}/${segs.length}`,
+            position: 'bottom',
+            bottomOffset: 80,
+            autoHide: false,
+          });
         }
-        doneN += chunk.length;
-        Toast.show({
-          type: 'success',
-          text2: `${t('reader_translate_progress')} ${doneN}/${segs.length}`,
-          position: 'bottom',
-          bottomOffset: 80,
-          autoHide: false,
-        });
+      } else {
+        const { translateTextsSmart } = require('../web/translate/bilingual');
+        const BATCH = 6;
+        for (let i = 0; i < segs.length; i += BATCH) {
+          const chunk = segs.slice(i, i + BATCH);
+          let zh = null;
+          try {
+            zh = await translateTextsSmart(chunk);
+          } catch (e) {
+            zh = null;
+          }
+          if (zh && zh.length === chunk.length) {
+            const js = chunk
+              .map((_, k) =>
+                String(zh[k] || '').trim() ? updateTransJs(i + k, zh[k], false) : '',
+              )
+              .join('\n');
+            webViewRef.current.injectJavaScript(`${js}\ntrue;`);
+          } else {
+            failed += chunk.length;
+          }
+          doneN += chunk.length;
+          Toast.show({
+            type: 'success',
+            text2: `${t('reader_translate_progress')} ${doneN}/${segs.length}`,
+            position: 'bottom',
+            bottomOffset: 80,
+            autoHide: false,
+          });
+        }
       }
       Toast.hide();
       setTranslated(true);
@@ -390,6 +458,34 @@ const ChapterReader = ({
       setTranslating(false);
     }
   }, [t]);
+
+  // 订阅本机流式翻译的 token 事件：每批 token 到达就把对应段落的译文**就地覆盖**，
+  // 界面表现为"原文下面边翻边写"。节流已在原生侧做（80ms 一次）。
+  useEffect(() => {
+    const { Hymt } = NativeModules;
+    if (!Hymt) return undefined;
+    let emitter = null;
+    try {
+      emitter = new NativeEventEmitter(Hymt);
+    } catch (e) {
+      return undefined;
+    }
+    const sub = emitter.addListener('hymt_token', (evt) => {
+      if (!evt || !webViewRef.current) return;
+      const idx = typeof evt.index === 'number' ? evt.index : -1;
+      if (idx < 0) return;
+      webViewRef.current.injectJavaScript(
+        `${updateTransJs(idx, evt.full, true)}\ntrue;`,
+      );
+    });
+    return () => {
+      try {
+        sub.remove();
+      } catch (e) {
+        // 组件卸载时移除失败可忽略
+      }
+    };
+  }, []);
 
   // Reset state when chapter changes
   useEffect(() => {

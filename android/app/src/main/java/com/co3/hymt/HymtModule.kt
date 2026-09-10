@@ -8,6 +8,8 @@ import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.WritableMap
+import com.facebook.react.modules.core.DeviceEventManagerModule
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
@@ -299,6 +301,109 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                 com.co3.Diagnostics.event(
                     "hymt_batch",
                     mapOf("ok" to "false", "why" to (t.message ?: t.javaClass.simpleName)),
+                )
+                promise.reject("HYMT_FAILED", t.message, t)
+            }
+        }
+    }
+
+    /** 把事件推给 JS（RN 全局事件总线）。 */
+    private fun emit(event: String, params: WritableMap) {
+        try {
+            reactContext
+                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                .emit(event, params)
+        } catch (_: Throwable) {
+            // 没有 JS 上下文时（如 Activity 已销毁）静默忽略
+        }
+    }
+
+    /**
+     * **流式翻译单段**：逐 token 把"当前已译出的全文"通过 `hymt_token` 事件推给 JS，
+     * 让界面能在原文下方**边翻边写**，而不是等整批翻完才一起冒出来。
+     *
+     * 事件 `hymt_token` 负载：`{ index: 段序号, full: 该段目前累计译文 }`
+     * 事件 `hymt_token_done` 负载：`{ index, full }`（该段收尾）
+     *
+     * 说明：这里刻意**按段**调用（不批量）—— 批量虽然省固定开销，但必须整批
+     * 才能切分，用户会干等；流式的体验优先。
+     */
+    @ReactMethod
+    fun translateStream(text: String, index: Int, maxTokens: Int, promise: Promise) {
+        io.execute {
+            try {
+                val e = engine
+                if (e == null || !ready) {
+                    promise.reject("HYMT_NOT_READY", "model not ready")
+                    return@execute
+                }
+                if (text.isBlank()) {
+                    promise.resolve("")
+                    return@execute
+                }
+                val t0 = System.currentTimeMillis()
+                val prompt =
+                    "将以下文本翻译为$TARGET_LANG_NAME，注意只需要输出翻译后的结果，不要额外解释： $text"
+                val mt = if (maxTokens > 0) maxTokens else 512
+                val rc = e.sendUserPrompt(prompt, mt)
+                if (rc != 0) {
+                    com.co3.Diagnostics.event(
+                        "hymt_stream",
+                        mapOf("ok" to "false", "why" to "prompt", "rc" to rc, "idx" to index),
+                    )
+                    promise.reject("HYMT_PROMPT_FAILED", "user prompt rc=$rc")
+                    return@execute
+                }
+                val sb = StringBuilder()
+                var guard = 0
+                val limit = mt * 2 + 16
+                var lastEmit = 0L
+                // 节流 80ms：注入太频繁会拖慢 JS/WebView，这个间隔已足够顺滑
+                while (guard < limit) {
+                    guard++
+                    val tok = e.nextToken()
+                    if (tok.isNullOrEmpty()) break
+                    sb.append(tok)
+                    val now = System.currentTimeMillis()
+                    if (now - lastEmit >= 80L) {
+                        lastEmit = now
+                        val m = Arguments.createMap()
+                        m.putInt("index", index)
+                        m.putString("full", sb.toString())
+                        emit("hymt_token", m)
+                    }
+                }
+                val out = sb.toString().trim()
+                val refusal = REFUSAL_MARKS.firstOrNull { out.contains(it) }
+                com.co3.Diagnostics.event(
+                    "hymt_stream",
+                    mapOf(
+                        "ok" to (out.isNotEmpty() && refusal == null).toString(),
+                        "idx" to index,
+                        "ms" to (System.currentTimeMillis() - t0),
+                        "in_len" to text.length,
+                        "out_len" to out.length,
+                        "tokens" to guard,
+                        "refusal" to (refusal ?: "-"),
+                    ),
+                )
+                if (out.isEmpty() || refusal != null) {
+                    promise.reject("HYMT_REFUSAL", "empty=${out.isEmpty()} refusal=${refusal ?: "-"}")
+                    return@execute
+                }
+                val done = Arguments.createMap()
+                done.putInt("index", index)
+                done.putString("full", out)
+                emit("hymt_token_done", done)
+                promise.resolve(out)
+            } catch (t: Throwable) {
+                com.co3.Diagnostics.event(
+                    "hymt_stream",
+                    mapOf(
+                        "ok" to "false",
+                        "idx" to index,
+                        "why" to (t.message ?: t.javaClass.simpleName),
+                    ),
                 )
                 promise.reject("HYMT_FAILED", t.message, t)
             }

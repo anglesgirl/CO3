@@ -138,6 +138,11 @@ async function createCompleteHtml(chapterHtml, cssStyles, currentTheme, settings
         padding-left: 8px;
         margin-top: 2px;
     }
+    /* 翻译中（占位/尚未完成）：弱化并斜体，避免被误认成最终译文 */
+    .co3-pending {
+        opacity: 0.45;
+        font-style: italic;
+    }
     ${settings.useCustomFont ? `@font-face {font-family: '${settings.fontFamily}'; src: url('${settings.font}')}` : ""}
     
     .landmark {
