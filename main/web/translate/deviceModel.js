@@ -1,9 +1,12 @@
 /**
  * 本机 AI 模型下载管理：魔搭（国内快）优先，HuggingFace 兜底。
- * 2bit 572MB / 1.25bit 440MB 二选一，默认 2bit。
- * 魔搭支持 range 请求（断点续传），实测国内速度良好。
+ *
+ * 下载走 Kotlin 侧 OkHttp（Hymt.downloadModel），不走 RNFS：
+ * RNFS 的 DownloadManager（background:true）写不了 app 私有目录，
+ * 前台模式对魔搭（阿里云 WAF）也会 Connection reset；原生 OkHttp 稳定。
+ * 进度用 DeviceEventEmitter "HymtDownloadProgress" 事件回传。
  */
-import RNFS from 'react-native-fs';
+import { DeviceEventEmitter } from 'react-native';
 
 const MODELSCOPE = 'https://modelscope.cn';
 const HF = 'https://huggingface.co';
@@ -45,39 +48,9 @@ export async function modelExists(NativeModules) {
   }
 }
 
-function downloadFrom(url, dest, onProgress) {
-  const job = RNFS.downloadFile({
-    fromUrl: url,
-    toFile: dest,
-    // 关键：不能用 background:true（走 Android DownloadManager，
-    // 它写不了 app 私有目录 filesDir/，且对魔搭的 cookie/keep-alive 处理会 RST）。
-    // background:false 用 RNFS 自身流式下载，可写私有目录，UA 可控。
-    background: false,
-    connectionTimeout: 30000,
-    readTimeout: 60000,
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-      Accept: '*/*',
-    },
-    progressInterval: 500,
-    progress: res => {
-      if (onProgress && res.contentLength > 0) {
-        onProgress(res.bytesWritten / res.contentLength);
-      }
-    },
-  });
-  return job.promise.then(res => {
-    if (res.statusCode !== 200 && res.statusCode !== 206) {
-      throw new Error(`下载失败（HTTP ${res.statusCode}）`);
-    }
-    return dest;
-  });
-}
-
 /**
  * 下载模型到 filesDir/hymt/，onProgress(0~1) 回调进度。
- * 依次尝试 urls（魔搭优先），前一个失败自动切下一个。
+ * 依次尝试 urls（魔搭优先），每个源重试 2 次。
  */
 export async function downloadModel(
   NativeModules,
@@ -85,25 +58,38 @@ export async function downloadModel(
   onProgress,
 ) {
   const { Hymt } = NativeModules;
-  if (!Hymt) throw new Error('本机模块不可用');
+  if (!Hymt || typeof Hymt.downloadModel !== 'function') {
+    throw new Error('本机模块不可用（需新版 App）');
+  }
   const spec = DEVICE_MODELS[which] || DEVICE_MODELS[DEFAULT_DEVICE_MODEL];
   const basePath = await Hymt.modelPath();
   const dest = basePath.replace(/[^/]+$/, spec.file);
 
-  let lastError = null;
-  for (let i = 0; i < spec.urls.length; i += 1) {
-    // 每个源重试 2 次（大文件网络抖动难免）
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      try {
-        return await downloadFrom(spec.urls[i], dest, onProgress);
-      } catch (e) {
-        lastError = e;
-        console.log(
-          `模型下载源 ${i + 1} 第 ${attempt} 次失败：${e.message}`,
-        );
-        if (onProgress) onProgress(0);
+  const sub = DeviceEventEmitter.addListener('HymtDownloadProgress', e => {
+    if (onProgress && e && typeof e.progress === 'number') {
+      onProgress(e.progress);
+    }
+  });
+
+  try {
+    let lastError = null;
+    for (let i = 0; i < spec.urls.length; i += 1) {
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+          const saved = await Hymt.downloadModel(spec.urls[i], dest);
+          if (onProgress) onProgress(1);
+          return saved;
+        } catch (e) {
+          lastError = e;
+          console.log(
+            `模型下载源 ${i + 1} 第 ${attempt} 次失败：${e.message}`,
+          );
+          if (onProgress) onProgress(0);
+        }
       }
     }
+    throw lastError || new Error('全部下载源失败');
+  } finally {
+    sub.remove();
   }
-  throw lastError || new Error('全部下载源失败');
 }
