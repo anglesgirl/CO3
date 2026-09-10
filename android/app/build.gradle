@@ -24,11 +24,12 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace "com.co3"
-    // HyMT 端侧翻译原生库。无条件启用 externalNativeBuild：
-    // 有 llama.cpp 编真实库，没有则编 stub 空壳（HYMT_STUB，降级走在线）。
+    // HyMT 端侧翻译原生库。路径必须是 src/main/jni（RN 官方约定）：
+    // 自定义 CMakeLists 必须自己 include ReactNative-application.cmake，
+    // 否则 RN 的 appmodules(TurboModule 聚合库) 不会构建，运行时崩。
     externalNativeBuild {
         cmake {
-            path "src/main/cpp/CMakeLists.txt"
+            path "src/main/jni/CMakeLists.txt"
             version "3.22.1"
         }
     }
