@@ -130,16 +130,7 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                     promise.reject("HYMT_PREPARE_FAILED", "prepare rc=$prc")
                     return@execute
                 }
-                // system prompt 必须在 load+prepare 之后立刻设置
-                val src = e.setSystemPrompt(SYSTEM_PROMPT)
-                if (src != 0) {
-                    com.co3.Diagnostics.event(
-                        "hymt_init",
-                        mapOf("ok" to "false", "why" to "sys_prompt", "rc" to src),
-                    )
-                    promise.reject("HYMT_SYS_FAILED", "system prompt rc=$src")
-                    return@execute
-                }
+                // 官方 demo 不设 system prompt（只用 user prompt 模板），此处保持一致。
                 ready = true
                 com.co3.Diagnostics.event(
                     "hymt_init",
@@ -166,7 +157,11 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                     return@execute
                 }
                 val t0 = System.currentTimeMillis()
-                val rc = e.sendUserPrompt(text, maxTokens)
+                // 用官方 demo 的 prompt 模板（dex 实测）：
+                //   "Please translate to {lang}:\n\n{text}"，语言用代码（zh/en/...）
+                val prompt = "Please translate to $TARGET_LANG:\n\n$text"
+                val mt = if (maxTokens > 0) maxTokens else 1024
+                val rc = e.sendUserPrompt(prompt, mt)
                 if (rc != 0) {
                     com.co3.Diagnostics.event(
                         "hymt_translate",
@@ -178,7 +173,7 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                 val sb = StringBuilder()
                 // 逐 token 取，直到返回 null/空串（软件上限兜底防死循环）
                 var guard = 0
-                val limit = if (maxTokens > 0) maxTokens * 2 + 16 else 1024
+                val limit = mt * 2 + 16
                 while (guard < limit) {
                     guard++
                     val tok = e.nextToken()
@@ -306,7 +301,7 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
     }
 
     companion object {
-        private const val SYSTEM_PROMPT =
-            "Translate the following segment into Chinese, without additional explanation."
+        /** 目标语言代码（官方 prompt 模板用语言代码：zh / en / ja ...）。 */
+        private const val TARGET_LANG = "zh"
     }
 }
