@@ -1,4 +1,5 @@
 import { fetchLoginAuthenticityToken } from './fetchAuthenticityToken';
+import { diagEvent } from '../../utils/diag';
 import Toast from 'react-native-toast-message';
 import {
   deleteCredsPasswd,
@@ -73,6 +74,13 @@ export default async function login(username, password) {
       //We just need to pray cloudflare will leave me alone
     });
 
+    // 登录链路第 5 步：POST 结果（302 跳出登录页=成功；仍停在登录页=被拒）
+    diagEvent('login_step', {
+      step: 'post_login',
+      status: response.status,
+      finalUrl: String(response.url || '-').slice(0, 80),
+      setCookie: response.headers && response.headers.get && response.headers.get('set-cookie') ? 'yes' : 'no',
+    });
     if (response.url === 'https://archiveofourown.org/users/login') {
       throw new Error('Wrong username or password');
     }

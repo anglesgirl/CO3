@@ -1,5 +1,6 @@
 import ky from 'ky';
 import getUrl from '../requestManager';
+import { diagEvent } from '../../utils/diag';
 
 let DomParser = require('react-native-html-parser').DOMParser;
 
@@ -24,7 +25,16 @@ function pickTokenFromForm(form) {
 
 export async function fetchLoginAuthenticityToken() {
   try {
+    // 登录链路第 1 步：取登录页（走 ECH 拦截器）
+    diagEvent('login_step', { step: 'get_login_page' });
     let html = await ky.get("https://archiveofourown.org/users/login").text();
+    diagEvent('login_step', {
+      step: 'login_page_html',
+      len: html.length,
+      already: html.includes('You are already logged in to an account') ? 'yes' : 'no',
+      cf: html.includes('_cf_chl_opt') || html.includes('challenge-platform') ? 'yes' : 'no',
+      form: html.includes('new_user') ? 'yes' : 'no',
+    });
     html = html.replace("<br \\>", ''); //Before you ask, no. I don't know. I don't need them anyway. /shrug
     if (html.includes("You are already logged in to an account. Please log out and try again.")) {
       throw "already logged in.";
@@ -33,6 +43,7 @@ export async function fetchLoginAuthenticityToken() {
     const form = doc.getElementById("new_user"); // 登录表单
     if (!form) {
       // 页面里没有登录表单：通常意味着拿到的是 CF 挑战页/错误页，而不是登录页
+      diagEvent('login_step', { step: 'form_missing', len: html.length, cf: html.includes('_cf_chl_opt') ? 'yes' : 'no' });
       throw new Error(
         `登录表单 #new_user 未找到（HTML ${html.length} 字符，疑似 CF 挑战页或未登录态异常）`,
       );
@@ -42,8 +53,10 @@ export async function fetchLoginAuthenticityToken() {
     const node = pickTokenFromForm(form);
     const token = node && typeof node.getAttribute === 'function' ? node.getAttribute('value') : null;
     if (!token) {
+      diagEvent('login_step', { step: 'csrf_missing' });
       throw new Error('authenticity_token 提取失败（表单存在但取不到隐藏字段的值）');
     }
+    diagEvent('login_step', { step: 'csrf_ok', len: token.length });
     return token;
   } catch (e) {
     console.error("An error occurred while running fetchLoginAuthenticityToken", e);
