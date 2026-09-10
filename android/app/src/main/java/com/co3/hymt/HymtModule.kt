@@ -43,6 +43,23 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
     private fun ensureEngine(): InferenceEngineImpl? {
         engine?.let { return it }
         return try {
+            // 诊断：确认 ggml 的 CPU 后端 so 是否真的解压到文件系统
+            // （ggml 是靠扫描该目录加载后端的，只有 extractNativeLibs=true 才有）
+            try {
+                val libDir = File(reactContext.applicationInfo.nativeLibraryDir)
+                val names = libDir.listFiles()
+                    ?.map { it.name }
+                    ?.filter { it.contains("ggml") || it.contains("ai-chat") || it.contains("llama") || it.contains("omp") }
+                    ?.sorted()
+                    ?.joinToString(",")
+                    ?: "unreadable"
+                com.co3.Diagnostics.event(
+                    "hymt_libdir",
+                    mapOf("dir" to libDir.absolutePath, "shorts" to names),
+                )
+            } catch (t: Throwable) {
+                com.co3.Diagnostics.event("hymt_libdir", mapOf("err" to (t.message ?: "?")))
+            }
             val e = InferenceEngineImpl(reactContext.applicationInfo.nativeLibraryDir)
             e.initialize()
             engine = e

@@ -24,6 +24,16 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace "com.co3"
+
+    // 关键：ggml 的 CPU 后端(libggml-cpu-android_*.so)是靠"扫描文件系统目录"加载的，
+    // 官方 demo 能跑就是因为 extractNativeLibs=true（so 解压到 nativeLibraryDir）。
+    // 默认 false 时 so 只存在于 APK 内，扫描不到 -> "no backends are loaded"
+    // -> libai-chat load() 返回 1 (UnsupportedArchitecture)，模型 1ms 加载失败。
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
     // 说明：本 app 不再声明 externalNativeBuild。
     // 端侧 AI 的 native 库直接用官方 Hy-MT Demo 的预编译 so（CI 提取到 jniLibs），
     // 由 Kotlin 侧 com.arm.aichat.internal.InferenceEngineImpl 调用。
