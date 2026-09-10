@@ -10,6 +10,7 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
 import org.json.JSONObject
+import java.io.IOException
 
 class CoEchInterceptor : Interceptor {
     companion object {
@@ -18,10 +19,15 @@ class CoEchInterceptor : Interceptor {
         private const val DOH_RESOLVE = "82sew1c85i.cloudflare-gateway.com:443:162.159.36.20,162.159.36.5"
     }
 
-    private fun shouldIntercept(host: String): Boolean {
-        if (!EchHttpClient.isLoaded) return false
-        // 只拦截 ECH 目标域名（fail-closed）；其他域名（如在线翻译接口）
-        // 直接放行 chain.proceed，否则非 ECH 站点会被误判失败抛异常。
+    /**
+     * 是否属于 **ECH 保护域名**。
+     *
+     * 注意：这里**只判断域名归属**，不再把「Go 库是否已加载」混进来 ——
+     * 之前那句 `if (!EchHttpClient.isLoaded) return false` 会让 ECH 未就绪时
+     * 直接走下面的 chain.proceed(request)，也就是**明文直连**（SNI 暴露）。
+     * 现在改为：保护域名一律进拦截器，由拦截器决定「能不能走 ECH」。
+     */
+    private fun isEchProtectedHost(host: String): Boolean {
         val h = host.lowercase()
         return h == "archiveofourown.org" || h.endsWith(".archiveofourown.org")
     }
@@ -29,7 +35,25 @@ class CoEchInterceptor : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
         val host = request.url.host
-        if (!shouldIntercept(host)) return chain.proceed(request)
+        // 非保护域名（在线翻译接口、DoH 自身等）直接放行：
+        // 它们不受 ECH 保护，若一并拦截会被误判为失败。
+        if (!isEchProtectedHost(host)) return chain.proceed(request)
+
+        // 【fail-closed / 核心】保护域名 + ECH 未就绪 => **绝不发起任何网络连接**。
+        // 用户要求：ECH 未成功时不要连网。既避免明文 SNI 被 GFW 看到，
+        // 也避免把注定失败的请求真的发出去（无谓等待 + 徒增暴露面）。
+        if (!EchHttpClient.isLoaded) {
+            try {
+                Diagnostics.event(
+                    "ech_blocked_not_ready",
+                    mapOf("host" to host, "why" to "go_lib_not_loaded"),
+                )
+            } catch (t: Throwable) {
+                // 诊断失败不影响拦截决策
+            }
+            Log.w(TAG, "blocked $host: ECH not ready -> refuse to connect at all")
+            throw IOException("ECH 未就绪（fail-closed）：拒绝以明文访问 $host，避免 SNI 暴露")
+        }
 
         val headers = mutableListOf<String>()
         // 注入 WebView 的 Cookie 到 OkHttp（双向同步核心）
