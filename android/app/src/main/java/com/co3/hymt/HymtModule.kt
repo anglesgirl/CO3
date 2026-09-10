@@ -26,8 +26,10 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
 
     private fun modelFile(): File {
         val dir = File(reactContext.filesDir, "hymt")
-        // 只支持 1.25bit：它的张量是 ggml type 40（Q2_0C），与项目编译的
-        // llama.cpp(PR19357, Q2_0C=40) 编号一致；2bit 的 type 41 编号错位会加载失败。
+        // 优先 2bit（质量优先），其次 1.25bit。两者都是官方 GGUF，
+        // 与官方预编译 libllama.so 的编号配套（2bit=Q2_0C(41)、1.25bit=STQ_0(40)）。
+        val twoBit = File(dir, "Hy-MT1.5-1.8B-2bit.gguf")
+        if (twoBit.exists()) return twoBit
         return File(dir, "Hy-MT1.5-1.8B-1.25bit.gguf")
     }
 
@@ -182,13 +184,6 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                     if (!tmp.renameTo(target)) {
                         tmp.copyTo(target, overwrite = true)
                         tmp.delete()
-                    }
-                    // 清理不兼容的旧 2bit 模型（其 ggml type 41 与本库编号不符，加载必失败）
-                    try {
-                        File(target.parentFile, "Hy-MT1.5-1.8B-2bit.gguf")
-                            .takeIf { it.exists() && it.name != target.name }
-                            ?.delete()
-                    } catch (_: Throwable) {
                     }
                     promise.resolve(target.absolutePath)
                 }

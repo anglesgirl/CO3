@@ -6,18 +6,27 @@
  * 前台模式对魔搭（阿里云 WAF）也会 Connection reset；原生 OkHttp 稳定。
  * 进度由 JS 轮询 Hymt.downloadedBytes 计算（不依赖 bridge 事件）。
  *
- * ⚠️ 模型与 llama.cpp 版本的量化编号必须匹配（否则加载失败，几十ms即返回）：
- *   - 1.25bit 用 ggml type 40（Q2_0C），与本项目编译的 llama.cpp（PR19357 分支
- *     Q2_0C=40）一致 → 可加载。
- *   - 2bit 用 ggml type 41（另一版本的 Q2_0C 编号），与当前库错位 → 加载失败。
- *     故此处只保留 1.25bit。
+ * ⚠️ 使用官方 Demo APK 的预编译 libllama.so（CI 提取），其 ggml 类型编号与官方
+ * GGUF 严格配套：2bit=Q2_0C(41)、1.25bit=STQ_0(40)。自编 llama.cpp 会因编号错位
+ * 导致加载失败（几十毫秒即返回 false），故必须用官方预编译库。
  */
 const MODELSCOPE = 'https://modelscope.cn';
 const HF = 'https://huggingface.co';
 
 export const DEVICE_MODELS = {
+  '2bit': {
+    label: 'HyMT 2bit（572MB，质量优先）',
+    file: 'Hy-MT1.5-1.8B-2bit.gguf',
+    bytes: 600535360,
+    urls: [
+      MODELSCOPE +
+        '/models/AngelSlim/Hy-MT1.5-1.8B-2bit-GGUF/resolve/master/Hy-MT1.5-1.8B-2bit.gguf',
+      HF +
+        '/AngelSlim/Hy-MT1.5-1.8B-2bit-GGUF/resolve/main/Hy-MT1.5-1.8B-2bit.gguf',
+    ],
+  },
   '1.25bit': {
-    label: 'HyMT 1.25bit（440MB，推荐）',
+    label: 'HyMT 1.25bit（440MB，省空间/更快）',
     file: 'Hy-MT1.5-1.8B-1.25bit.gguf',
     bytes: 461860704,
     urls: [
@@ -29,7 +38,7 @@ export const DEVICE_MODELS = {
   },
 };
 
-export const DEFAULT_DEVICE_MODEL = '1.25bit';
+export const DEFAULT_DEVICE_MODEL = '2bit';
 
 export async function modelExists(NativeModules) {
   try {
