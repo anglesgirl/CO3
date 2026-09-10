@@ -1,6 +1,6 @@
 import ky, { TimeoutError } from 'ky';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { fetchViaWebView } from './WebviewFetcher';
+import { fetchViaWebView, isEchProtectedUrl } from './WebviewFetcher';
 import { Platform } from 'react-native';
 import {
   deleteCredsPasswd,
@@ -24,6 +24,10 @@ async function getCFMap() {
 }
 
 async function isCFMode(domain) {
+  // fail-closed：ECH 保护域名一律不认 CF(WebView) 模式 —— 即使 AsyncStorage
+  // 里已经存有历史记录（早前版本写入的），也按"未启用"处理，
+  // 避免设备上残留的标记导致后续请求持续走 WebView 泄漏 SNI。
+  if (isEchProtectedUrl(`https://${domain}`)) return false;
   const map = await getCFMap();
   if (!map[domain]) return false;
   if (Date.now() > map[domain]) {
@@ -35,6 +39,13 @@ async function isCFMode(domain) {
 }
 
 async function enableCFMode(domain) {
+  // fail-closed：ECH 保护域名**绝不**切到 WebView(CF) 模式。
+  // 该模式会让 WebView 明文直连（SNI 暴露给 GFW），而且会被持久化到
+  // AsyncStorage —— 一旦写入，后续所有请求都会持续走 WebView 泄漏 SNI。
+  if (isEchProtectedUrl(`https://${domain}`)) {
+    console.warn(`[CO3-ECH] fail-closed: 拒绝对 ${domain} 启用 CF/WebView 模式`);
+    return;
+  }
   const map = await getCFMap();
   map[domain] = Date.now() + CF_MODE_DURATION;
   await AsyncStorage.setItem(CF_STORAGE_KEY, JSON.stringify(map));

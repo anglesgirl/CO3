@@ -13,7 +13,35 @@ function enqueue(item) {
   triggerNext?.();
 }
 
+/**
+ * ECH 保护域名：**禁止**用 WebView 直连取页面。
+ *
+ * 原因（2026-09-10 真机实测）：WebView 的请求无法被 OkHttp 的 ECH 拦截器接管
+ * （RN 未暴露 shouldInterceptRequest），本项目也没有设置系统代理，因此
+ * WebView 加载远程 URL 等价于**明文 SNI 直连** —— 会被 GFW 直接 RST
+ * （表现为 net::ERR_CONNECTION_RESET），而且把本该隐藏的域名暴露给中间人。
+ * 这违反项目铁律：宁可功能失败，绝不暴露 SNI。
+ */
+const ECH_PROTECTED_HOSTS = [/(^|\.)archiveofourown\.org$/i];
+
+export function isEchProtectedUrl(u) {
+  try {
+    const h = new URL(u).hostname;
+    return ECH_PROTECTED_HOSTS.some((re) => re.test(h));
+  } catch (e) {
+    return false;
+  }
+}
+
 export function fetchViaWebView(url, { cfWarning = false } = {}) {
+  if (isEchProtectedUrl(url)) {
+    // fail-closed：直接失败，绝不把这个请求发出去
+    console.warn(`[CO3-ECH] fail-closed: 拒绝 WebView 直连 ${url}（避免明文 SNI 暴露）`);
+    const err = new Error('ECH_FAIL_CLOSED');
+    err.name = 'EchFailClosedError';
+    err.url = url;
+    return Promise.reject(err);
+  }
   return new Promise((resolve, reject) => enqueue({ url, resolve, reject, cfWarning }));
 }
 
