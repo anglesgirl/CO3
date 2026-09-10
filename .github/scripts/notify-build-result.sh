@@ -18,18 +18,22 @@ send_msg() {
 }
 
 if [ "$STATUS" = "success" ]; then
-  APK=$(ls -t CO3-Android-arm64-v8a.apk CO3-Android-*.apk 2>/dev/null | head -n 1)
+  # 优先发 arm64-v8a（真机主力架构）；没有再退到任意 APK
+  APK=$(ls -t CO3-Android-arm64-v8a.apk 2>/dev/null | head -n 1)
+  if [ -z "$APK" ]; then
+    APK=$(ls -t CO3-Android-*.apk 2>/dev/null | head -n 1)
+  fi
   if [ -n "$APK" ] && [ -f "$APK" ]; then
     SIZE=$(stat -c%s "$APK")
     MSG="✅ CO3 构建成功 ${SHORT_SHA}%0A运行：${RUN_URL}%0AAPK：${APK}（${SIZE} 字节）"
+    # 先发文字结果（成功摘要），始终可见
+    send_msg "✅ CO3 构建成功 ${SHORT_SHA}%0A运行：${RUN_URL}%0A${APK}（${SIZE} 字节）"
     if [ "$SIZE" -lt 50000000 ]; then
       curl -s --max-time 300 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
         -F "chat_id=${TELEGRAM_CHAT_ID}" \
         -F "document=@${APK}" \
         -F "caption=CO3 ${SHORT_SHA} ${APK}" | head -c 200
       echo
-    else
-      send_msg "✅ CO3 构建成功 ${SHORT_SHA}%0A运行：${RUN_URL}%0A${APK}（${SIZE} 字节，超 50MB 请到 Actions 下载）"
     fi
   else
     send_msg "✅ CO3 构建成功 ${SHORT_SHA}%0A运行：${RUN_URL}%0A（未找到 APK 文件）"
