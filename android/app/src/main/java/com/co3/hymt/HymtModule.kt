@@ -342,6 +342,11 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                     return@execute
                 }
                 val t0 = System.currentTimeMillis()
+                // 起手先记一条：万一某段卡住（长段落要几十秒），能看出卡在哪一段
+                com.co3.Diagnostics.event(
+                    "hymt_stream_start",
+                    mapOf("idx" to index, "in_len" to text.length),
+                )
                 val prompt =
                     "将以下文本翻译为$TARGET_LANG_NAME，注意只需要输出翻译后的结果，不要额外解释： $text"
                 val mt = if (maxTokens > 0) maxTokens else 512

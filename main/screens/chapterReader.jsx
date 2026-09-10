@@ -65,6 +65,37 @@ const removeTransJs = (i) => `
   if (t && t.parentNode) t.parentNode.removeChild(t);
 })();`;
 
+// 长段落切分：端侧吞吐约 15 token/s，一段 800+ 字符要十几秒，期间界面上
+// 几乎看不到动静，用户会以为卡死。按句子边界切成 <=CHUNK 的块，逐块翻译后
+// 拼接，这样每块几秒就能出字，观感连续。
+const TRANS_CHUNK = 320;
+const splitLongText = (text) => {
+  const s0 = String(text || '');
+  if (s0.length <= TRANS_CHUNK) return [s0];
+  const pieces = s0.split(/(?<=[.!?;:。！？；：])\s+/).filter((x) => x && x.trim());
+  const out = [];
+  let cur = '';
+  for (const p of pieces) {
+    if (cur && (cur.length + 1 + p.length) > TRANS_CHUNK) {
+      out.push(cur);
+      cur = p;
+    } else {
+      cur = cur ? `${cur} ${p}` : p;
+    }
+  }
+  if (cur) out.push(cur);
+  // 兜底：万一没有句读符号（超长单句），硬切，避免一块仍然过大
+  const hard = [];
+  for (const c of out) {
+    if (c.length <= TRANS_CHUNK * 2) {
+      hard.push(c);
+    } else {
+      for (let i = 0; i < c.length; i += TRANS_CHUNK) hard.push(c.slice(i, i + TRANS_CHUNK));
+    }
+  }
+  return hard;
+};
+
 // 翻译前：给每段在**下方留出空位**（占位符），用户立刻能看到"这里会出译文"，
 // 而不是盯着没有变化的原文干等。
 // 参数是**真实 DOM 序号数组**（已跳过空段落），避免给空段插空行。
@@ -189,6 +220,8 @@ const ChapterReader = ({
   // 翻译进度 {done,total}；null 表示未在翻译。用于驱动顶部进度提示
   const [translateProgress, setTranslateProgress] = useState(null);
   const translatingRef = useRef(false);
+  // 分块翻译时的前缀累积：{ DOM序号: 已翻完的块 }，使同一段的后续块接在已有译文后面
+  const segmentPrefixRef = useRef({});
   const pendingSegsRef = useRef(null);
   const progressSaveTimeoutRef = useRef(null);
   const lastSavedProgressRef = useRef(0);
@@ -410,13 +443,28 @@ const ChapterReader = ({
 
         for (let k = 0; k < texts.length; k += 1) {
           const domIdx = idxs[k];
-          try {
-            await Hymt.translateStream(texts[k], domIdx, 512);
-          } catch (e) {
-            // 该段失败：**删掉**占位节点，而不是把它清空 —— 否则会留下空行
+          // 长段落切块：每块单独流式翻译，已完成的块作为前缀累积到同一条译文里
+          const chunks = splitLongText(texts[k]);
+          segmentPrefixRef.current[domIdx] = '';
+          let segOk = false;
+          for (const chunk of chunks) {
+            try {
+              // translateStream 的 resolve 值即该块译文；把它累积下来，
+              // 下一块的流式输出就会接在这段已经写好的文字后面。
+              const part = await Hymt.translateStream(chunk, domIdx, 512);
+              segmentPrefixRef.current[domIdx] =
+                String(segmentPrefixRef.current[domIdx] || '') + String(part || '');
+              segOk = true;
+            } catch (e) {
+              segmentPrefixRef.current[domIdx] = '';
+              break;
+            }
+          }
+          if (!segOk) {
             failed += 1;
             webViewRef.current.injectJavaScript(`${removeTransJs(domIdx)}\ntrue;`);
           }
+          delete segmentPrefixRef.current[domIdx];
           doneN += 1;
           setTranslateProgress({ done: doneN, total: texts.length });
         }
@@ -493,8 +541,9 @@ const ChapterReader = ({
       if (!evt || !webViewRef.current) return;
       const idx = typeof evt.index === 'number' ? evt.index : -1;
       if (idx < 0) return;
+      const pfx = segmentPrefixRef.current[idx] || '';
       webViewRef.current.injectJavaScript(
-        `${updateTransJs(idx, evt.full, true)}\ntrue;`,
+        `${updateTransJs(idx, pfx + String(evt.full || ''), true)}\ntrue;`,
       );
     });
     return () => {
