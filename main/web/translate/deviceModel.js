@@ -49,8 +49,17 @@ function downloadFrom(url, dest, onProgress) {
   const job = RNFS.downloadFile({
     fromUrl: url,
     toFile: dest,
-    background: true,
-    discretionary: true,
+    // 关键：不能用 background:true（走 Android DownloadManager，
+    // 它写不了 app 私有目录 filesDir/，且对魔搭的 cookie/keep-alive 处理会 RST）。
+    // background:false 用 RNFS 自身流式下载，可写私有目录，UA 可控。
+    background: false,
+    connectionTimeout: 30000,
+    readTimeout: 60000,
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+      Accept: '*/*',
+    },
     progressInterval: 500,
     progress: res => {
       if (onProgress && res.contentLength > 0) {
@@ -83,12 +92,17 @@ export async function downloadModel(
 
   let lastError = null;
   for (let i = 0; i < spec.urls.length; i += 1) {
-    try {
-      return await downloadFrom(spec.urls[i], dest, onProgress);
-    } catch (e) {
-      lastError = e;
-      console.log(`模型下载源 ${i + 1} 失败，换下一个：${e.message}`);
-      if (onProgress) onProgress(0);
+    // 每个源重试 2 次（大文件网络抖动难免）
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        return await downloadFrom(spec.urls[i], dest, onProgress);
+      } catch (e) {
+        lastError = e;
+        console.log(
+          `模型下载源 ${i + 1} 第 ${attempt} 次失败：${e.message}`,
+        );
+        if (onProgress) onProgress(0);
+      }
     }
   }
   throw lastError || new Error('全部下载源失败');
