@@ -97,6 +97,17 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                     return@execute
                 }
                 val e = ensureEngine()
+                if (e == null) {
+                    com.co3.Diagnostics.event(
+                        "hymt_init",
+                        mapOf("ok" to "false", "why" to "engine_unavailable"),
+                    )
+                    promise.reject(
+                        "HYMT_NO_ENGINE",
+                        "native engine unavailable (arm64 only)",
+                    )
+                    return@execute
+                }
                 com.co3.Diagnostics.event(
                     "hymt_engine_info",
                     mapOf("info" to (e.info() ?: "").take(300)),
