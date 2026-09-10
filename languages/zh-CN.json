@@ -429,6 +429,11 @@
   "reader_release_next": "释放进入下一章",
   "reader_error_fallback": "如果看到此消息, 说明出现了严重问题",
   "reader_error_opening_link": "打开链接时出错",
+  "reader_translate_no_segments": "没有找到可翻译的段落",
+  "reader_translate_progress": "翻译中",
+  "reader_translate_done": "本页翻译完成",
+  "reader_translate_done_with_fail": "翻译完成（部分段落失败）",
+  "reader_translate_failed": "翻译失败",
 
   "global_search_search_in_library": "在文库中搜索",
   "global_search_start_searching": "开始搜索",

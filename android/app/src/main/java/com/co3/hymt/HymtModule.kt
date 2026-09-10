@@ -2,7 +2,9 @@ package com.co3.hymt
 
 import androidx.annotation.Keep
 import com.arm.aichat.internal.InferenceEngineImpl
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
@@ -228,6 +230,81 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    /**
+     * 批量翻译：把多段合并成**一次**推理，省掉每段约 500ms 的固定开销
+     * （实测：单段 in=6 字符也要 550ms，一篇文章 150 段光固定开销就 75 秒）。
+     * 输出按分隔符切回；段数不符则 reject，由 JS 侧降级为逐段翻译。
+     */
+    @ReactMethod
+    fun translateBatch(texts: ReadableArray, maxTokens: Int, promise: Promise) {
+        val n = texts.size()
+        if (n <= 0) {
+            promise.resolve(Arguments.createArray())
+            return
+        }
+        val items = (0 until n).map { texts.getString(it) ?: "" }
+        io.execute {
+            try {
+                val e = engine
+                if (e == null || !ready) {
+                    promise.reject("HYMT_NOT_READY", "model not ready")
+                    return@execute
+                }
+                val t0 = System.currentTimeMillis()
+                val joined = items.joinToString(SEP)
+                val prompt =
+                    "将以下文本翻译为$TARGET_LANG_NAME，注意只需要输出翻译后的结果，不要额外解释： $joined"
+                val mt = if (maxTokens > 0) maxTokens else 1024
+                val rc = e.sendUserPrompt(prompt, mt)
+                if (rc != 0) {
+                    com.co3.Diagnostics.event(
+                        "hymt_batch",
+                        mapOf("ok" to "false", "why" to "prompt", "rc" to rc),
+                    )
+                    promise.reject("HYMT_PROMPT_FAILED", "user prompt rc=$rc")
+                    return@execute
+                }
+                val sb = StringBuilder()
+                var guard = 0
+                val limit = mt * 2 + 16
+                while (guard < limit) {
+                    guard++
+                    val tok = e.nextToken()
+                    if (tok.isNullOrEmpty()) break
+                    sb.append(tok)
+                }
+                val out = sb.toString().trim()
+                val parts = out.split(SEP_RE).map { it.trim() }
+                val ok = parts.size == n && parts.none { it.isEmpty() }
+                com.co3.Diagnostics.event(
+                    "hymt_batch",
+                    mapOf(
+                        "ok" to ok.toString(),
+                        "n" to n,
+                        "got" to parts.size,
+                        "ms" to (System.currentTimeMillis() - t0),
+                        "tokens" to guard,
+                        "in_all" to items.sumOf { it.length },
+                        "out_all" to out.length,
+                    ),
+                )
+                if (!ok) {
+                    promise.reject("HYMT_BATCH_MISMATCH", "expect=$n got=${parts.size}")
+                    return@execute
+                }
+                val arr = Arguments.createArray()
+                parts.forEach { arr.pushString(it) }
+                promise.resolve(arr)
+            } catch (t: Throwable) {
+                com.co3.Diagnostics.event(
+                    "hymt_batch",
+                    mapOf("ok" to "false", "why" to (t.message ?: t.javaClass.simpleName)),
+                )
+                promise.reject("HYMT_FAILED", t.message, t)
+            }
+        }
+    }
+
     @ReactMethod
     fun release(promise: Promise) {
         io.execute {
@@ -325,6 +402,12 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
     companion object {
         /** 目标语言**完整名**（官方 README 要求用完整语言名，不能用 zh 这种代码）。 */
         private const val TARGET_LANG_NAME = "中文"
+
+        /** 批量翻译的段落分隔符（模型极少改动这种非常规符号，便于切回）。 */
+        private const val SEP = "\n§§§\n"
+
+        /** 切分容忍两侧空白/连续符号（模型可能吞掉换行）。 */
+        private val SEP_RE = Regex("\\s*§{3,}\\s*")
 
         /** 模型拒答/跑偏的典型特征串（命中即视为翻译失败，调用方保留原文）。 */
         private val REFUSAL_MARKS = listOf(

@@ -25,6 +25,43 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const PULL_THRESHOLD = 150;
 const PROGRESS_SAVE_DEBOUNCE = 1000;
 
+// ---- 本页翻译用注入脚本 ----
+// 从已渲染的 DOM 提取段落（保证与屏幕上的段一一对应），并打上序号，
+// 后续译文就按这个序号插到对应段落下方。
+const EXTRACT_SEGS_JS = `
+(function(){
+  try {
+    var ps = Array.prototype.slice.call(document.querySelectorAll('p'));
+    var items = [];
+    for (var i = 0; i < ps.length; i++) {
+      var t = (ps[i].textContent || '').trim();
+      ps[i].setAttribute('data-co3seg', String(i));
+      items.push(t);
+    }
+    if (window.ReactNativeWebView) {
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'co3_segments', items: items }));
+    }
+  } catch (e) {}
+})();
+true;`;
+
+// 把第 i 段译文插到该段下方（重复调用先删旧的，避免翻两次出现两份）
+const appendTransJs = (i, zh) => `
+(function(){
+  var el = document.querySelector('[data-co3seg="${i}"]');
+  if (!el || !el.parentNode) return;
+  var old = el.parentNode.querySelector('.co3-trans[data-for="${i}"]');
+  if (old && old.parentNode) old.parentNode.removeChild(old);
+  var d = document.createElement('p');
+  d.className = 'co3-trans';
+  d.setAttribute('data-for', '${i}');
+  d.textContent = ${JSON.stringify(String(zh || ''))};
+  el.parentNode.insertBefore(d, el.nextSibling);
+})();`;
+
+/** 每批段数（与原生 translateBatch 的批大小一致）。 */
+const TRANSLATE_BATCH = 6;
+
 const PullIndicator = ({ progress, theme }) => {
   const size = 60;
   const strokeWidth = 5;
@@ -104,6 +141,11 @@ const ChapterReader = ({
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const webViewRef = useRef(null);
+  // 本页翻译状态：原文保留，译文逐段追加在下方
+  const [translating, setTranslating] = useState(false);
+  const [translated, setTranslated] = useState(false);
+  const translatingRef = useRef(false);
+  const pendingSegsRef = useRef(null);
   const progressSaveTimeoutRef = useRef(null);
   const lastSavedProgressRef = useRef(0);
 
@@ -260,6 +302,95 @@ const ChapterReader = ({
     }
   }, []);
 
+  /**
+   * 本页翻译：**保留原文**，译文在每段下方**逐段追加**。
+   * 端侧推理一篇文章要一两分钟；边翻边追加，用户能立刻开始读原文，
+   * 译文随滚动陆续出现，慢也不至于让人以为卡死。
+   */
+  const handleTranslate = useCallback(async () => {
+    if (!webViewRef.current || translatingRef.current) return;
+    translatingRef.current = true;
+    setTranslating(true);
+    try {
+      // 1) 从已渲染的 DOM 取段落（保证和屏幕上的段一一对应）
+      const segs = await new Promise((resolve) => {
+        let settled = false;
+        const finish = (v) => {
+          if (settled) return;
+          settled = true;
+          pendingSegsRef.current = null;
+          resolve(v);
+        };
+        pendingSegsRef.current = finish;
+        webViewRef.current.injectJavaScript(EXTRACT_SEGS_JS);
+        setTimeout(() => finish(null), 4000);
+      });
+      if (!segs || !segs.length) {
+        Toast.show({
+          type: 'error',
+          text2: t('reader_translate_no_segments'),
+          position: 'bottom',
+          bottomOffset: 80,
+          visibilityTime: 2000,
+        });
+        return;
+      }
+
+      // 2) 分批翻译，每批翻完立刻把这批译文插到对应段落下方
+      const { translateTextsSmart } = require('../web/translate/bilingual');
+      let doneN = 0;
+      let failed = 0;
+      for (let i = 0; i < segs.length; i += TRANSLATE_BATCH) {
+        const chunk = segs.slice(i, i + TRANSLATE_BATCH);
+        let zh = null;
+        try {
+          zh = await translateTextsSmart(chunk);
+        } catch (e) {
+          zh = null;
+        }
+        if (zh && zh.length === chunk.length) {
+          const js = chunk
+            .map((_, k) => (String(zh[k] || '').trim() ? appendTransJs(i + k, zh[k]) : ''))
+            .join('\n');
+          webViewRef.current.injectJavaScript(`${js}\ntrue;`);
+        } else {
+          failed += chunk.length;
+        }
+        doneN += chunk.length;
+        Toast.show({
+          type: 'success',
+          text2: `${t('reader_translate_progress')} ${doneN}/${segs.length}`,
+          position: 'bottom',
+          bottomOffset: 80,
+          autoHide: false,
+        });
+      }
+      Toast.hide();
+      setTranslated(true);
+      Toast.show({
+        type: failed ? 'error' : 'success',
+        text2: failed
+          ? `${t('reader_translate_done_with_fail')} (${failed})`
+          : t('reader_translate_done'),
+        position: 'bottom',
+        bottomOffset: 80,
+        visibilityTime: 2500,
+      });
+    } catch (e) {
+      Toast.hide();
+      Toast.show({
+        type: 'error',
+        text2: `${t('reader_translate_failed')}: ${e.message}`,
+        position: 'bottom',
+        bottomOffset: 80,
+        visibilityTime: 2500,
+      });
+    } finally {
+      translatingRef.current = false;
+      setTranslating(false);
+    }
+  }, [t]);
+
   // Reset state when chapter changes
   useEffect(() => {
     setScrollProgress(0);
@@ -318,6 +449,13 @@ const ChapterReader = ({
             console.log("WebView reported ready.");
             setWebViewReady(true);
             break;
+          case 'co3_segments': {
+            // 段落提取回传（本页翻译第一步）
+            if (pendingSegsRef.current) {
+              pendingSegsRef.current(Array.isArray(data.items) ? data.items : []);
+            }
+            break;
+          }
           case 'scroll': {
             const { progress } = data;
             setScrollProgress(progress);
@@ -637,6 +775,26 @@ const ChapterReader = ({
           <Icon name="chevron-right" size={24} color={currentTheme.iconColor} />
         </TouchableOpacity>
       )}
+
+      {/* 本页翻译：点击后才开始翻，原文保留、译文逐段追加在下方 */}
+      <TouchableOpacity
+        style={[
+          styles.navButton,
+          {
+            backgroundColor: currentTheme.cardBackground,
+            marginLeft: 8,
+            opacity: translating ? 0.5 : 1,
+          },
+        ]}
+        onPress={handleTranslate}
+        disabled={translating}
+      >
+        <Icon
+          name="translate"
+          size={22}
+          color={translated ? currentTheme.primaryColor : currentTheme.iconColor}
+        />
+      </TouchableOpacity>
     </Animated.View>
   );
 

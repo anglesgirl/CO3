@@ -86,23 +86,22 @@ export async function fetchChapterWithTheme(workId, chapterId, currentTheme = nu
 
   let [chapterHtml, cssStyles] = await dataSource(workId, chapterId);
 
-  // 双语对照翻译（在线免费引擎；本机 AI 二期接入）
-  try {
-    const { getTranslateMode } = require('../translate/settings');
-    const { buildBilingualHtml } = require('../translate/bilingual');
-    const mode = await getTranslateMode();
-    if ((mode === 'bilingual' || mode === 'translated') && chapterHtml) {
-      chapterHtml = await buildBilingualHtml(chapterHtml, mode);
-    }
-  } catch (e) {
-    console.log(`翻译失败，显示原文：${e.message}`);
-  }
-
+  // 不再自动翻译：打开章节先给原文（秒开，不让人对着进度条干等）。
+  // 翻译改由阅读器的「翻译」按钮触发 —— 端侧推理一篇文章要一两分钟，
+  // 自动翻会让用户以为卡死。
   const completeHtml = await createCompleteHtml(chapterHtml, cssStyles, currentTheme, settingsDAO);
 
   console.log(`Successfully fetched content for work ${workId}`);
 
-  return completeHtml;
+  return { html: completeHtml, body: chapterHtml, css: cssStyles };
+}
+
+/**
+ * 用（翻译后的）正文片段重建完整 HTML。
+ * 阅读器的「翻译」按钮翻完后调用它换内容，避免把 createCompleteHtml 的实现泄露到界面层。
+ */
+export async function rebuildChapterHtml(bodyHtml, cssStyles, currentTheme, settingsDAO) {
+  return createCompleteHtml(bodyHtml, cssStyles, currentTheme, settingsDAO);
 }
 
 function getElementText(element) {

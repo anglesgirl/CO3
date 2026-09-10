@@ -429,6 +429,11 @@
   "reader_release_next": "Release for next chapter",
   "reader_error_fallback": "Something went horribly wrong if you see this",
   "reader_error_opening_link": "Error opening link",
+  "reader_translate_no_segments": "No translatable paragraphs found",
+  "reader_translate_progress": "Translating",
+  "reader_translate_done": "This page is translated",
+  "reader_translate_done_with_fail": "Translated (some paragraphs failed)",
+  "reader_translate_failed": "Translation failed",
 
   "global_search_search_in_library": "Search in library",
   "global_search_start_searching": "Start searching",
