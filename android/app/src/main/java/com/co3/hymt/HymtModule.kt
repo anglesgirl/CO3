@@ -1,7 +1,6 @@
 package com.co3.hymt
 
 import androidx.annotation.Keep
-import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -109,10 +108,10 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
     }
 
     /**
-     * 用 OkHttp 下载模型文件（流式写盘）到 destPath。
-     * 进度通过 DeviceEventEmitter "HymtDownloadProgress" 事件回传
-     * （{progress:0~1, bytesWritten, total}）。
-     * 不走 RNFS：RNFS 的 DownloadManager/前台下载对魔搭会 Connection reset。
+     * 用 OkHttp 下载模型文件（流式写盘）到 destPath，先写 .part 再改名。
+     * 进度由 JS 侧轮询 [downloadedBytes] 获取（不依赖 bridge 事件，新架构更稳）。
+     * 不走 RNFS：RNFS 的 DownloadManager 写不了 app 私有目录，
+     * 前台模式对魔搭（阿里云 WAF）会 Connection reset。
      */
     @ReactMethod
     fun downloadModel(url: String, destPath: String, promise: Promise) {
@@ -142,13 +141,10 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                         promise.reject("HYMT_DL_FAILED", "empty body")
                         return@execute
                     }
-                    val total = body.contentLength()
                     val target = File(destPath)
                     target.parentFile?.mkdirs()
                     val tmp = File(target.absolutePath + ".part")
 
-                    var written = 0L
-                    var lastEmit = 0L
                     body.byteStream().use { input ->
                         FileOutputStream(tmp).use { output ->
                             val buf = ByteArray(64 * 1024)
@@ -156,21 +152,6 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                                 val n = input.read(buf)
                                 if (n <= 0) break
                                 output.write(buf, 0, n)
-                                written += n
-                                val now = System.currentTimeMillis()
-                                if (now - lastEmit > 300) {
-                                    lastEmit = now
-                                    val progress =
-                                        if (total > 0) written.toDouble() / total.toDouble() else 0.0
-                                    emitDeviceEvent(
-                                        "HymtDownloadProgress",
-                                        Arguments.createMap().apply {
-                                            putDouble("progress", progress)
-                                            putDouble("bytesWritten", written.toDouble())
-                                            putDouble("total", total.toDouble())
-                                        },
-                                    )
-                                }
                             }
                             output.flush()
                         }
@@ -186,6 +167,22 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
             } catch (e: Throwable) {
                 promise.reject("HYMT_DL_FAILED", e.message, e)
             }
+        }
+    }
+
+    /** 已下载字节数（.part 优先，其次正式文件），供 JS 轮询进度。 */
+    @ReactMethod
+    fun downloadedBytes(destPath: String, promise: Promise) {
+        try {
+            val part = File("$destPath.part")
+            if (part.exists()) {
+                promise.resolve(part.length().toDouble())
+                return
+            }
+            val done = File(destPath)
+            promise.resolve(if (done.exists()) done.length().toDouble() else 0.0)
+        } catch (e: Throwable) {
+            promise.resolve(0.0)
         }
     }
 }

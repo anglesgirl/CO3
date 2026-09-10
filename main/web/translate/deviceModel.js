@@ -4,10 +4,8 @@
  * 下载走 Kotlin 侧 OkHttp（Hymt.downloadModel），不走 RNFS：
  * RNFS 的 DownloadManager（background:true）写不了 app 私有目录，
  * 前台模式对魔搭（阿里云 WAF）也会 Connection reset；原生 OkHttp 稳定。
- * 进度用 DeviceEventEmitter "HymtDownloadProgress" 事件回传。
+ * 进度由 JS 轮询 Hymt.downloadedBytes 计算（不依赖 bridge 事件）。
  */
-import { DeviceEventEmitter } from 'react-native';
-
 const MODELSCOPE = 'https://modelscope.cn';
 const HF = 'https://huggingface.co';
 
@@ -15,6 +13,7 @@ export const DEVICE_MODELS = {
   '2bit': {
     label: 'HyMT 2bit（572MB，质量优先）',
     file: 'Hy-MT1.5-1.8B-2bit.gguf',
+    bytes: 600535360,
     urls: [
       // 魔搭（国内）：master 分支
       MODELSCOPE +
@@ -27,6 +26,7 @@ export const DEVICE_MODELS = {
   '1.25bit': {
     label: 'HyMT 1.25bit（440MB，省空间）',
     file: 'Hy-MT1.5-1.8B-1.25bit.gguf',
+    bytes: 461860704,
     urls: [
       MODELSCOPE +
         '/models/AngelSlim/Hy-MT1.5-1.8B-1.25bit-GGUF/resolve/master/Hy-MT1.5-1.8B-1.25bit.gguf',
@@ -65,17 +65,30 @@ export async function downloadModel(
   const basePath = await Hymt.modelPath();
   const dest = basePath.replace(/[^/]+$/, spec.file);
 
-  const sub = DeviceEventEmitter.addListener('HymtDownloadProgress', e => {
-    if (onProgress && e && typeof e.progress === 'number') {
-      onProgress(e.progress);
+  // 轮询已下载字节数算进度（每源开始时重置为 0）
+  let polling = true;
+  const total = spec.bytes || 0;
+  const poll = async () => {
+    while (polling) {
+      try {
+        const done = await Hymt.downloadedBytes(dest);
+        if (onProgress && total > 0 && done > 0) {
+          onProgress(Math.min(done / total, 1));
+        }
+      } catch {
+        // 忽略单次查询失败
+      }
+      await new Promise(r => setTimeout(r, 600));
     }
-  });
+  };
+  poll();
 
+  let lastError = null;
   try {
-    let lastError = null;
     for (let i = 0; i < spec.urls.length; i += 1) {
       for (let attempt = 1; attempt <= 2; attempt += 1) {
         try {
+          if (onProgress) onProgress(0);
           const saved = await Hymt.downloadModel(spec.urls[i], dest);
           if (onProgress) onProgress(1);
           return saved;
@@ -84,12 +97,11 @@ export async function downloadModel(
           console.log(
             `模型下载源 ${i + 1} 第 ${attempt} 次失败：${e.message}`,
           );
-          if (onProgress) onProgress(0);
         }
       }
     }
     throw lastError || new Error('全部下载源失败');
   } finally {
-    sub.remove();
+    polling = false;
   }
 }
