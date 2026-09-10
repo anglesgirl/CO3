@@ -13,17 +13,18 @@ project(appmodules)
 
 set(HYMT_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/hymt)
 
-if(ANDROID_ABI MATCHES "arm64-v8a|x86_64" AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/CMakeLists.txt)
+if(ANDROID_ABI MATCHES "arm64-v8a|x86_64" AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/llama-src/CMakeLists.txt)
   # 真实 llama.cpp 推理（arm64/x86_64），2bit Q2_0c 内核来自 CI 克隆的 PR 分支。
+  # 目录必须叫 llama-src（不能以 .cpp 结尾，否则被上面的 *.cpp glob 误当源文件）。
   set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
   set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
   set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-  add_subdirectory(llama.cpp)
+  add_subdirectory(llama-src)
 
   add_library(hymt SHARED ${HYMT_SRC_DIR}/hymt_jni.cpp)
   target_link_libraries(hymt PRIVATE llama)
-  target_include_directories(hymt PRIVATE llama.cpp/include llama.cpp/common)
+  target_include_directories(hymt PRIVATE llama-src/include llama-src/common)
 elseif(EXISTS ${HYMT_SRC_DIR}/hymt_jni.cpp)
   # 无 llama.cpp 或 32 位架构：只出空壳 libhymt（JNI 直接返回失败，App 降级走在线）。
   add_library(hymt SHARED ${HYMT_SRC_DIR}/hymt_jni.cpp)
