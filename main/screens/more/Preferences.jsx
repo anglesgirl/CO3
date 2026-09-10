@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  NativeModules,
   ScrollView,
   StyleSheet,
   Switch,
@@ -32,7 +33,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   getTranslateMode,
   setTranslateMode,
+  getTranslateEngine,
+  setTranslateEngine,
 } from '../../web/translate/settings';
+import {
+  DEVICE_MODELS,
+  DEFAULT_DEVICE_MODEL,
+  modelExists,
+  downloadModel,
+} from '../../web/translate/deviceModel';
 
 const PreferencesScreen = ({ route }) => {
   const {
@@ -68,6 +77,10 @@ const PreferencesScreen = ({ route }) => {
   const [showChapterDate, setShowChapterDate] = useState(false);
   const [compactNotifications, setCompactNotifications] = useState(false);
   const [translateMode, setTranslateModeState] = useState('off');
+  const [translateEngine, setTranslateEngineState] = useState('auto');
+  const [deviceModel, setDeviceModelState] = useState(DEFAULT_DEVICE_MODEL);
+  const [hasDeviceModel, setHasDeviceModel] = useState(false);
+  const [dlProgress, setDlProgress] = useState(-1);
   const [updateTime, setUpdateTime] = useState(1440);
   const [updateRestriction, setUpdateRestriction] = useState(3);
   const [categories, setCategories] = useState();
@@ -84,6 +97,8 @@ const PreferencesScreen = ({ route }) => {
   const loadSettings = async () => {
     try {
       setTranslateModeState(await getTranslateMode());
+      setTranslateEngineState(await getTranslateEngine());
+      setHasDeviceModel(await modelExists(NativeModules));
       // Load Database Settings (Appearance)
       const dbSettings = await settingsDAO.getSettings();
       if (dbSettings) {
@@ -285,6 +300,23 @@ const PreferencesScreen = ({ route }) => {
   const handleTranslateModeChange = async value => {
     setTranslateModeState(value);
     await setTranslateMode(value);
+  };
+
+  const handleTranslateEngineChange = async value => {
+    setTranslateEngineState(value);
+    await setTranslateEngine(value);
+  };
+
+  const handleDeviceModelDownload = async () => {
+    try {
+      setDlProgress(0);
+      await downloadModel(NativeModules, deviceModel, p => setDlProgress(p));
+      setHasDeviceModel(true);
+      setDlProgress(1);
+    } catch (e) {
+      setDlProgress(-1);
+      Alert.alert(t('general_error'), e.message);
+    }
   };
 
   const handleRestartOnboarding = () => {
@@ -535,6 +567,64 @@ const PreferencesScreen = ({ route }) => {
             >
               {t('screen_preferences_translate_hint')}
             </Text>
+
+            <Text
+              style={[
+                { color: activeTheme.textColor },
+                styles.settingText,
+                { marginTop: 12 },
+              ]}
+            >
+              {t('screen_preferences_translate_engine')}
+            </Text>
+            <CustomDropdown
+              selectedValue={translateEngine}
+              onValueChange={handleTranslateEngineChange}
+              theme={activeTheme}
+              style={{ marginTop: 8 }}
+            >
+              <CustomDropdown.Item
+                label={t('screen_preferences_translate_engine_auto')}
+                value="auto"
+              />
+              <CustomDropdown.Item
+                label={t('screen_preferences_translate_engine_device')}
+                value="device"
+              />
+            </CustomDropdown>
+            {translateEngine === 'device' && (
+              <View style={{ marginTop: 12 }}>
+                <CustomDropdown
+                  selectedValue={deviceModel}
+                  onValueChange={setDeviceModelState}
+                  theme={activeTheme}
+                  style={{ marginTop: 8 }}
+                >
+                  {Object.entries(DEVICE_MODELS).map(([key, spec]) => (
+                    <CustomDropdown.Item
+                      key={key}
+                      label={spec.label}
+                      value={key}
+                    />
+                  ))}
+                </CustomDropdown>
+                <TouchableOpacity
+                  onPress={handleDeviceModelDownload}
+                  style={[
+                    styles.downloadButton,
+                    { backgroundColor: activeTheme.primaryColor, marginTop: 8 },
+                  ]}
+                >
+                  <Text style={{ color: '#fff' }}>
+                    {hasDeviceModel
+                      ? t('screen_preferences_translate_model_ready')
+                      : dlProgress >= 0
+                        ? `${t('screen_preferences_translate_downloading')} ${Math.round(dlProgress * 100)}%`
+                        : t('screen_preferences_translate_download')}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         </View>
 
@@ -1203,6 +1293,12 @@ const styles = StyleSheet.create({
   settingHint: {
     fontSize: 13,
     marginTop: 8,
+  },
+  downloadButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
   },
   switchContainer: {
     flexDirection: 'row',

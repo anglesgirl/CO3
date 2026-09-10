@@ -3,6 +3,12 @@
  * 原文一段 + 译文一段跟在下面；本机只处理章节正文 HTML）。
  */
 import { translateTexts } from './freeTranslation';
+import { getTranslateEngine } from './settings';
+
+// deviceTranslate 依赖 NativeModules，用惰性 require 避免启动链加载 native 依赖
+function getDeviceTranslate() {
+  return require('./deviceTranslate').translateDevice;
+}
 
 function stripTags(html) {
   return html
@@ -46,6 +52,23 @@ export function splitParagraphs(chapterHtml) {
 }
 
 /**
+ * 文本数组翻译（供简介/标题/章节名复用同一引擎路由）。
+ * 返回译文数组，与输入一一对应；本机失败自动降级在线。
+ */
+export async function translateTextsSmart(texts, fromLang = 'en', toLang = 'zh-CN') {
+  if (texts.length === 0) return [];
+  try {
+    if ((await getTranslateEngine()) === 'device') {
+      const out = await getDeviceTranslate()(texts);
+      if (out && out.length === texts.length) return out;
+    }
+  } catch (e) {
+    console.log(`本机翻译失败，切在线：${e.message}`);
+  }
+  return translateTexts(texts, fromLang, toLang);
+}
+
+/**
  * 双语 HTML：mode=bilingual 原文+译文对照；translated 仅译文。
  * 译文段带 class="co3-trans" 供主题 CSS 着色。
  */
@@ -58,11 +81,22 @@ export async function buildBilingualHtml(
 ) {
   const paras = splitParagraphs(chapterHtml);
   if (paras.length === 0) return chapterHtml;
-  const translations = await translateTexts(
-    paras.map(p => p.text),
-    fromLang,
-    toLang,
-  );
+  // 引擎路由：device(本机AI) 优先 → 失败自动降级在线免费机翻
+  let translations = null;
+  try {
+    if ((await getTranslateEngine()) === 'device') {
+      translations = await getDeviceTranslate()(paras.map(p => p.text));
+    }
+  } catch (e) {
+    console.log(`本机翻译失败，切在线：${e.message}`);
+  }
+  if (!translations) {
+    translations = await translateTexts(
+      paras.map(p => p.text),
+      fromLang,
+      toLang,
+    );
+  }
   if (onProgress) onProgress(paras.length, paras.length);
   return paras
     .map((p, i) => {
