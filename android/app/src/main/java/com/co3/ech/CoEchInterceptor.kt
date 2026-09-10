@@ -76,6 +76,17 @@ class CoEchInterceptor : Interceptor {
             headers.add("$name: $value")
         }
 
+        // 【登录失败的真因】RN 的 multipart body（FormData）把 Content-Type
+        // （含 multipart 的 boundary）挂在 **body 对象**上，而不是 headers 里。
+        // 只遍历 request.headers 会漏掉它 —— 于是 curl 发出去的 multipart
+        // 没有 boundary 声明，服务端无法解析 body，AO3 直接把我们弹回登录页。
+        // 实测日志：ech_req_body {method:POST, body_len:766, ctype:"-"} -> 登录失败。
+        if (headers.none { it.startsWith("Content-Type:", ignoreCase = true) }) {
+            val fromBody = try { request.body?.contentType()?.toString() } catch (_: Throwable) { null }
+            val ctype = request.header("Content-Type") ?: fromBody
+            if (!ctype.isNullOrEmpty()) headers.add("Content-Type: $ctype")
+        }
+
         val bodyBytes: ByteArray? = request.body?.let { body ->
             val buffer = Buffer()
             body.writeTo(buffer)
@@ -91,7 +102,7 @@ class CoEchInterceptor : Interceptor {
                     "host" to host,
                     "method" to request.method,
                     "body_len" to (bodyBytes?.size ?: 0),
-                    "ctype" to (request.header("Content-Type") ?: "-").take(60),
+                    "ctype" to (request.header("Content-Type") ?: (try { request.body?.contentType()?.toString() } catch (_: Throwable) { null }) ?: "-").take(60),
                     "url" to request.url.toString().take(70),
                 ),
             )

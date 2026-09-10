@@ -55,7 +55,12 @@ export const navigateToNextChapter = async ({
     chapterId: nextChapter.id,
     chapterTitle: nextChapter.title,
     chapterIndex: nextChapterIndex,
-    htmlContent: nextChapterContent,
+    // fetchChapterWithTheme 返回的是 {html, body, css} 对象 —— 必须取 .html，
+    // 否则整个对象会被当成 HTML 传给 WebView，触发
+    // "Value for html cannot be cast from ReadableNativeMap to String" 崩溃。
+    htmlContent: nextChapterContent && nextChapterContent.html,
+    rawBody: nextChapterContent && nextChapterContent.body,
+    rawCss: nextChapterContent && nextChapterContent.css,
     hasNextChapter: nextChapterIndex < chapterList.length - 1,
     hasPreviousChapter: nextChapterIndex > 0,
   };
@@ -122,7 +127,9 @@ if (currentChapterIndex <= 0) {
       chapterId: previousChapter.id,
       chapterTitle: previousChapter.title,
       chapterIndex: previousChapterIndex,
-      htmlContent: previousChapterContent,
+      htmlContent: previousChapterContent && previousChapterContent.html,
+      rawBody: previousChapterContent && previousChapterContent.body,
+      rawCss: previousChapterContent && previousChapterContent.css,
       hasNextChapter: previousChapterIndex < chapterList.length - 1,
       hasPreviousChapter: previousChapterIndex > 0,
     };

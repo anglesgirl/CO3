@@ -1031,7 +1031,16 @@ const ChapterReader = ({
           ref={webViewRef}
           originWhitelist={['*']}
           allowFileAccess={true}
-          source={{ html: modifiedHtmlContent || `<p>${t('reader_error_fallback')}</p>` }}
+          source={{
+            // 防御：只把字符串交给 WebView。历史上曾因上层传对象进来
+            // 触发 "Value for html cannot be cast from ReadableNativeMap to String"。
+            html:
+              typeof modifiedHtmlContent === 'string' && modifiedHtmlContent
+                ? modifiedHtmlContent
+                : (modifiedHtmlContent && typeof modifiedHtmlContent.html === 'string'
+                    ? modifiedHtmlContent.html
+                    : `<p>${t('reader_error_fallback')}</p>`),
+          }}
           style={styles.webView}
           injectedJavaScript={injectedJavaScript}
           onMessage={handleMessage}
