@@ -30,28 +30,49 @@ const PROGRESS_SAVE_DEBOUNCE = 1000;
 // ---- 本页翻译用注入脚本 ----
 // 从已渲染的 DOM 提取段落（保证与屏幕上的段一一对应），并打上序号，
 // 后续译文就按这个序号插到对应段落下方。
+//
+// 注意：AO3 原文里本来就有**空的 <p>**，必须跳过 —— 否则会给它们也插占位符，
+// 看起来就是凭空多出来的空行。同时返回**真实 DOM 索引**，因为跳过空段后
+// 数组下标不再等于 DOM 序号，用下标会让译文插错位置。
 const EXTRACT_SEGS_JS = `
 (function(){
   try {
     var ps = Array.prototype.slice.call(document.querySelectorAll('p'));
     var items = [];
+    var idxs = [];
     for (var i = 0; i < ps.length; i++) {
       var t = (ps[i].textContent || '').trim();
+      if (!t) continue;               // 跳过空段落，避免凭空多出空行
       ps[i].setAttribute('data-co3seg', String(i));
       items.push(t);
+      idxs.push(i);
     }
     if (window.ReactNativeWebView) {
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'co3_segments', items: items }));
+      window.ReactNativeWebView.postMessage(
+        JSON.stringify({ type: 'co3_segments', items: items, idxs: idxs })
+      );
     }
   } catch (e) {}
 })();
 true;`;
 
+/** 移除某段的译文节点（该段翻译失败时用，避免留下空节点/占位 "…"）。 */
+const removeTransJs = (i) => `
+(function(){
+  var el = document.querySelector('[data-co3seg="${i}"]');
+  if (!el || !el.parentNode) return;
+  var t = el.parentNode.querySelector('.co3-trans[data-for="${i}"]');
+  if (t && t.parentNode) t.parentNode.removeChild(t);
+})();`;
+
 // 翻译前：给每段在**下方留出空位**（占位符），用户立刻能看到"这里会出译文"，
 // 而不是盯着没有变化的原文干等。
-const placeholdersJs = (n) => `
+// 参数是**真实 DOM 序号数组**（已跳过空段落），避免给空段插空行。
+const placeholdersJs = (idxs) => `
 (function(){
-  for (var i = 0; i < ${n}; i++) {
+  var list = ${JSON.stringify(idxs)};
+  for (var k = 0; k < list.length; k++) {
+    var i = list[k];
     var el = document.querySelector('[data-co3seg="' + i + '"]');
     if (!el || !el.parentNode) continue;
     var old = el.parentNode.querySelector('.co3-trans[data-for="' + i + '"]');
@@ -165,6 +186,8 @@ const ChapterReader = ({
   // 本页翻译状态：原文保留，译文逐段追加在下方
   const [translating, setTranslating] = useState(false);
   const [translated, setTranslated] = useState(false);
+  // 翻译进度 {done,total}；null 表示未在翻译。用于驱动顶部进度提示
+  const [translateProgress, setTranslateProgress] = useState(null);
   const translatingRef = useRef(false);
   const pendingSegsRef = useRef(null);
   const progressSaveTimeoutRef = useRef(null);
@@ -332,9 +355,11 @@ const ChapterReader = ({
     if (!webViewRef.current || translatingRef.current) return;
     translatingRef.current = true;
     setTranslating(true);
+    // 点翻译后立刻收起底栏：否则它会遮住正文（用户反馈过）
+    setBarsVisible(false);
     try {
-      // 1) 从已渲染的 DOM 取段落（保证和屏幕上的段一一对应）
-      const segs = await new Promise((resolve) => {
+      // 1) 从已渲染的 DOM 取段落：items=文本，idxs=真实 DOM 序号（空段已跳过）
+      const seg = await new Promise((resolve) => {
         let settled = false;
         const finish = (v) => {
           if (settled) return;
@@ -346,7 +371,9 @@ const ChapterReader = ({
         webViewRef.current.injectJavaScript(EXTRACT_SEGS_JS);
         setTimeout(() => finish(null), 4000);
       });
-      if (!segs || !segs.length) {
+      const texts = seg && Array.isArray(seg.items) ? seg.items : [];
+      const idxs = seg && Array.isArray(seg.idxs) ? seg.idxs : [];
+      if (!texts.length || idxs.length !== texts.length) {
         Toast.show({
           type: 'error',
           text2: t('reader_translate_no_segments'),
@@ -357,12 +384,13 @@ const ChapterReader = ({
         return;
       }
 
-      // 2) 先给每段在下方**留出空位**，用户立刻能看到"译文将出现在这里"
-      webViewRef.current.injectJavaScript(`${placeholdersJs(segs.length)}\ntrue;`);
+      // 2) 先给每段在下方留出空位（只给有内容的段，否则会凭空多出空行）
+      webViewRef.current.injectJavaScript(`${placeholdersJs(idxs)}\ntrue;`);
+      setTranslateProgress({ done: 0, total: texts.length });
 
-      // 3) 按当前所选引擎走不同路径：
-      //    device(本机 AI) → 逐段**流式**，token 事件实时写入（边翻边看）
-      //    其它(在线/机翻) → 原有的批量路径
+      // 3) 按当前所选引擎分流：
+      //    device(本机 AI) → 逐段流式，token 事件实时写入（边翻边看）
+      //    其它(在线/机翻) → 批量请求
       const { getTranslateEngine } = require('../web/translate/settings');
       const engine = await getTranslateEngine();
       const { Hymt } = NativeModules;
@@ -380,72 +408,61 @@ const ChapterReader = ({
         }
         if (!initOk) throw new Error(t('reader_translate_failed'));
 
-        for (let i = 0; i < segs.length; i += 1) {
-          const src = String(segs[i] || '').trim();
-          if (!src) {
-            doneN += 1;
-            continue;
-          }
+        for (let k = 0; k < texts.length; k += 1) {
+          const domIdx = idxs[k];
           try {
-            await Hymt.translateStream(src, i, 512);
+            await Hymt.translateStream(texts[k], domIdx, 512);
           } catch (e) {
+            // 该段失败：**删掉**占位节点，而不是把它清空 —— 否则会留下空行
             failed += 1;
-            // 该段失败：清掉占位，不留下误导性的"…"
-            webViewRef.current.injectJavaScript(`${updateTransJs(i, '', false)}\ntrue;`);
+            webViewRef.current.injectJavaScript(`${removeTransJs(domIdx)}\ntrue;`);
           }
           doneN += 1;
-          Toast.show({
-            type: 'success',
-            text2: `${t('reader_translate_progress')} ${doneN}/${segs.length}`,
-            position: 'bottom',
-            bottomOffset: 80,
-            autoHide: false,
-          });
+          setTranslateProgress({ done: doneN, total: texts.length });
         }
       } else {
         const { translateTextsSmart } = require('../web/translate/bilingual');
         const BATCH = 6;
-        for (let i = 0; i < segs.length; i += BATCH) {
-          const chunk = segs.slice(i, i + BATCH);
+        for (let s0 = 0; s0 < texts.length; s0 += BATCH) {
+          const tchunk = texts.slice(s0, s0 + BATCH);
+          const ichunk = idxs.slice(s0, s0 + BATCH);
           let zh = null;
           try {
-            zh = await translateTextsSmart(chunk);
+            zh = await translateTextsSmart(tchunk);
           } catch (e) {
             zh = null;
           }
-          if (zh && zh.length === chunk.length) {
-            const js = chunk
-              .map((_, k) =>
-                String(zh[k] || '').trim() ? updateTransJs(i + k, zh[k], false) : '',
+          if (zh && zh.length === tchunk.length) {
+            const js = tchunk
+              .map((_, j) =>
+                String(zh[j] || '').trim()
+                  ? updateTransJs(ichunk[j], zh[j], false)
+                  : removeTransJs(ichunk[j]),
               )
               .join('\n');
             webViewRef.current.injectJavaScript(`${js}\ntrue;`);
           } else {
-            failed += chunk.length;
+            failed += tchunk.length;
+            ichunk.forEach((di) => {
+              webViewRef.current.injectJavaScript(`${removeTransJs(di)}\ntrue;`);
+            });
           }
-          doneN += chunk.length;
-          Toast.show({
-            type: 'success',
-            text2: `${t('reader_translate_progress')} ${doneN}/${segs.length}`,
-            position: 'bottom',
-            bottomOffset: 80,
-            autoHide: false,
-          });
+          doneN += tchunk.length;
+          setTranslateProgress({ done: doneN, total: texts.length });
         }
       }
-      Toast.hide();
+
       setTranslated(true);
-      Toast.show({
-        type: failed ? 'error' : 'success',
-        text2: failed
-          ? `${t('reader_translate_done_with_fail')} (${failed})`
-          : t('reader_translate_done'),
-        position: 'bottom',
-        bottomOffset: 80,
-        visibilityTime: 2500,
-      });
+      if (failed > 0) {
+        Toast.show({
+          type: 'error',
+          text2: `${t('reader_translate_done_with_fail')} (${failed})`,
+          position: 'bottom',
+          bottomOffset: 80,
+          visibilityTime: 2500,
+        });
+      }
     } catch (e) {
-      Toast.hide();
       Toast.show({
         type: 'error',
         text2: `${t('reader_translate_failed')}: ${e.message}`,
@@ -456,6 +473,8 @@ const ChapterReader = ({
     } finally {
       translatingRef.current = false;
       setTranslating(false);
+      // 进度清空 -> 底栏自动恢复显示阅读进度
+      setTranslateProgress(null);
     }
   }, [t]);
 
@@ -486,6 +505,22 @@ const ChapterReader = ({
       }
     };
   }, []);
+
+  // 翻译进度提示：由 state 统一驱动（不再每段都调 Toast.show，避免动画堆积）。
+  // 这是**唯一的**翻译进度来源 —— 底栏不重复显示，两个进度条就不会打架。
+  useEffect(() => {
+    if (translateProgress && translateProgress.total > 0) {
+      Toast.show({
+        type: 'success',
+        text2: `${t('reader_translate_progress')} ${translateProgress.done}/${translateProgress.total}`,
+        position: 'bottom',
+        bottomOffset: 80,
+        autoHide: false,
+      });
+    } else {
+      Toast.hide();
+    }
+  }, [translateProgress, t]);
 
   // Reset state when chapter changes
   useEffect(() => {
@@ -546,9 +581,13 @@ const ChapterReader = ({
             setWebViewReady(true);
             break;
           case 'co3_segments': {
-            // 段落提取回传（本页翻译第一步）
+            // 段落提取回传（本页翻译第一步）：
+            // items = 段落文本，idxs = 各自在 DOM 里的真实序号（已跳过空段）
             if (pendingSegsRef.current) {
-              pendingSegsRef.current(Array.isArray(data.items) ? data.items : []);
+              pendingSegsRef.current({
+                items: Array.isArray(data.items) ? data.items : [],
+                idxs: Array.isArray(data.idxs) ? data.idxs : [],
+              });
             }
             break;
           }
