@@ -3,6 +3,25 @@ import getUrl from '../requestManager';
 
 let DomParser = require('react-native-html-parser').DOMParser;
 
+/**
+ * 在表单里找 authenticity_token 隐藏字段。
+ *
+ * 旧实现两处（登录 / kudos）都是直接取 form.childNodes[0] —— 靠位置取值，
+ * AO3 页面结构一变就取错值，且失败是静默的（返回 undefined 拼进表单），
+ * 表现成"登录/点赞莫名其妙失败"。这里改为按 name 查找，保留旧逻辑兜底。
+ */
+function pickTokenFromForm(form) {
+  const nodes = (form && form.childNodes) || [];
+  for (let i = 0; i < nodes.length; i += 1) {
+    const n = nodes[i];
+    if (n && typeof n.getAttribute === 'function' && n.getAttribute('name') === 'authenticity_token') {
+      return n;
+    }
+  }
+  return nodes[0] || null;
+}
+
+
 export async function fetchLoginAuthenticityToken() {
   try {
     let html = await ky.get("https://archiveofourown.org/users/login").text();
@@ -10,10 +29,22 @@ export async function fetchLoginAuthenticityToken() {
     if (html.includes("You are already logged in to an account. Please log out and try again.")) {
       throw "already logged in.";
     }
-    console.log(html);
-    return new DomParser().parseFromString(html, "text/html")
-      .getElementById("new_user") //Get the form
-      .childNodes[0].getAttribute('value') //Get the hidden element and it's value
+    const doc = new DomParser().parseFromString(html, "text/html");
+    const form = doc.getElementById("new_user"); // 登录表单
+    if (!form) {
+      // 页面里没有登录表单：通常意味着拿到的是 CF 挑战页/错误页，而不是登录页
+      throw new Error(
+        `登录表单 #new_user 未找到（HTML ${html.length} 字符，疑似 CF 挑战页或未登录态异常）`,
+      );
+    }
+    // 旧实现直接取 form.childNodes[0] 的 value —— 靠位置取值，AO3 页面结构一变就取错值，
+    // 表现是"登录一直失败但看不出原因"。改为按 name 查找隐藏字段，并保留旧逻辑兜底。
+    const node = pickTokenFromForm(form);
+    const token = node && typeof node.getAttribute === 'function' ? node.getAttribute('value') : null;
+    if (!token) {
+      throw new Error('authenticity_token 提取失败（表单存在但取不到隐藏字段的值）');
+    }
+    return token;
   } catch (e) {
     console.error("An error occurred while running fetchLoginAuthenticityToken", e);
     throw e;
@@ -33,7 +64,7 @@ export async function fetchKudoAuthenticityToken(workId) {
     }
 
     // Find the authenticity token input within the form
-    const tokenInput = kudoForm.childNodes[0];
+    const tokenInput = pickTokenFromForm(kudoForm);
 
     if (!tokenInput) {
       throw new Error("Authenticity token not found in kudo form");

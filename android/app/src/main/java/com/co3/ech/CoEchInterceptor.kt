@@ -82,6 +82,21 @@ class CoEchInterceptor : Interceptor {
             buffer.readByteArray()
         }
 
+        // 诊断：非 GET 请求必须看到 body_len > 0，否则登录类 POST 必然失败。
+        // 之前日志只记 status，无法区分"body 丢了"还是"响应被拒"，所以查不出原因。
+        if (request.method != "GET") {
+            Diagnostics.event(
+                "ech_req_body",
+                mapOf(
+                    "host" to host,
+                    "method" to request.method,
+                    "body_len" to (bodyBytes?.size ?: 0),
+                    "ctype" to (request.header("Content-Type") ?: "-").take(60),
+                    "url" to request.url.toString().take(70),
+                ),
+            )
+        }
+
         var lastError: Exception? = null
         repeat(2) { attempt ->
             try {
@@ -165,7 +180,18 @@ class CoEchInterceptor : Interceptor {
                     }
                     if (setCookies.isNotEmpty()) { cm.flush(); Diagnostics.event("cookie_recv", mapOf("host" to host, "count" to setCookies.size.toString(), "hasSession" to setCookies.any{it.contains("_otwarchive_session")}.toString())) }
                 } catch (e: Exception) { Diagnostics.event("cookie_recv_err", mapOf("host" to host, "err" to (e.message?:"")))}
-                com.co3.Diagnostics.event("ech_ok", mapOf("host" to host, "status" to statusCode, "ech" to echStatus))
+                com.co3.Diagnostics.event(
+                    "ech_ok",
+                    mapOf(
+                        "host" to host,
+                        "status" to statusCode,
+                        "ech" to echStatus,
+                        "method" to request.method,
+                        "body_len" to (bodyBytes?.size ?: 0),
+                        "loc" to (responseHeaders.build()["Location"] ?: "-").take(50),
+                        "sc" to setCookies.size,
+                    ),
+                )
                 Log.i(TAG, "ECH OK $host -> $statusCode $echStatus attempt=${attempt+1}")
                 return builder.build()
             } catch (e: Exception) {
