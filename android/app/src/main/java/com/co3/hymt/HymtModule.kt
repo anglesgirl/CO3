@@ -390,6 +390,11 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                         "out_len" to out.length,
                         "tokens" to guard,
                         "refusal" to (refusal ?: "-"),
+                        // 截断排查：整段译文的头/尾，以及是否撞到生成上限。
+                        // 尾部没有句末标点 = 很可能被截断（模型早停或 token 用尽）。
+                        "out_head" to out.take(40),
+                        "out_tail" to out.takeLast(40),
+                        "hit_limit" to (guard >= limit).toString(),
                     ),
                 )
                 if (out.isEmpty() || refusal != null) {
