@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { looksBrokenZh } from '../web/translate/deviceTranslate';
+import { diagEvent } from '../utils/diag';
 import {
   Animated,
   Linking,
@@ -451,7 +453,20 @@ const ChapterReader = ({
             try {
               // translateStream 的 resolve 值即该块译文；把它累积下来，
               // 下一块的流式输出就会接在这段已经写好的文字后面。
-              const part = await Hymt.translateStream(chunk, domIdx, 512);
+              let part = await Hymt.translateStream(chunk, domIdx, 512);
+              // 质量门禁：本机 2bit 模型实测会吐截断/混入他语/重复垃圾。
+              // 坏块用单段接口重试一次，仍坏就放弃该段并移除占位 —— 宁可留原文，
+              // 也绝不把垃圾译文显示给用户（fail-closed）。
+              if (looksBrokenZh(part, chunk)) {
+                diagEvent('hymt_quality', {
+                  attempt: -2,
+                  in_len: chunk.length,
+                  out_len: String(part || '').length,
+                  out_tail: String(part || '').slice(-30),
+                });
+                part = String((await Hymt.translate(chunk, 512)) || '');
+                if (looksBrokenZh(part, chunk)) throw new Error('broken translation');
+              }
               segmentPrefixRef.current[domIdx] =
                 String(segmentPrefixRef.current[domIdx] || '') + String(part || '');
               segOk = true;
