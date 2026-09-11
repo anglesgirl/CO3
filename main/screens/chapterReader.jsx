@@ -109,13 +109,44 @@ const placeholdersJs = (idxs) => `
     var el = document.querySelector('[data-co3seg="' + i + '"]');
     if (!el || !el.parentNode) continue;
     var old = el.parentNode.querySelector('.co3-trans[data-for="' + i + '"]');
-    if (old && old.parentNode) old.parentNode.removeChild(old);
+    if (old) {
+      // 【绝不能重置已有译文】本脚本可能被再次执行（重进页面/重跑翻译）。
+      // 若该段已有正式译文（非 pending，且不是占位符号），必须原样保留 ——
+      // 否则表现为"翻到后面时，前面翻好的段落突然变回占位"。
+      var oc = String(old.className || '');
+      var ot = String(old.textContent || '').trim();
+      if (oc.indexOf('co3-pending') < 0 && ot && ot !== '⌛' && ot !== '…') continue;
+      if (old.parentNode) old.parentNode.removeChild(old);
+    }
     var d = document.createElement('p');
     d.className = 'co3-trans co3-pending';
     d.setAttribute('data-for', String(i));
-    d.textContent = '…';
+    d.textContent = '⌛';
     el.parentNode.insertBefore(d, el.nextSibling);
   }
+})();`;
+
+/**
+ * 把某段标记为"正在翻译"：占位显示 ⌛。
+ * 已有正式译文的段落不受影响（不会退回占位）。
+ */
+const setSegmentPendingJs = (i) => `
+(function(){
+  var el = document.querySelector('[data-co3seg="${i}"]');
+  if (!el || !el.parentNode) return;
+  var t = el.parentNode.querySelector('.co3-trans[data-for="${i}"]');
+  if (t) {
+    var oc = String(t.className || '');
+    var ot = String(t.textContent || '').trim();
+    if (oc.indexOf('co3-pending') < 0 && ot && ot !== '⌛' && ot !== '…') return;
+  }
+  if (!t) {
+    t = document.createElement('p');
+    t.setAttribute('data-for', '${i}');
+    el.parentNode.insertBefore(t, el.nextSibling);
+  }
+  t.className = 'co3-trans co3-pending';
+  t.textContent = '⌛';
 })();`;
 
 /**
@@ -445,6 +476,9 @@ const ChapterReader = ({
 
         for (let k = 0; k < texts.length; k += 1) {
           const domIdx = idxs[k];
+          // 该段开始翻译：占位显示 ⌛（已完成段落不受影响）。
+          // 严格串行：本段（含其所有分块）翻完才进入下一段。
+          webViewRef.current.injectJavaScript(`${setSegmentPendingJs(domIdx)}\ntrue;`);
           // 长段落切块：每块单独流式翻译，已完成的块作为前缀累积到同一条译文里
           const chunks = splitLongText(texts[k]);
           segmentPrefixRef.current[domIdx] = '';
@@ -470,6 +504,12 @@ const ChapterReader = ({
               segmentPrefixRef.current[domIdx] =
                 String(segmentPrefixRef.current[domIdx] || '') + String(part || '');
               segOk = true;
+              // 把「通过质量门禁的正式译文」写回 DOM：
+              // 流式过程中写入的是模型原始输出，门禁重试后的结果才是最终版 ——
+              // 不写回来就会把坏译文（截断/混语）留在屏幕上。
+              webViewRef.current.injectJavaScript(
+                `${updateTransJs(domIdx, segmentPrefixRef.current[domIdx], true)}\ntrue;`,
+              );
             } catch (e) {
               segmentPrefixRef.current[domIdx] = '';
               break;
@@ -478,6 +518,11 @@ const ChapterReader = ({
           if (!segOk) {
             failed += 1;
             webViewRef.current.injectJavaScript(`${removeTransJs(domIdx)}\ntrue;`);
+          } else {
+            // 本段（含所有分块）全部完成：去掉 pending 样式，⌛/弱化样式 → 正式译文
+            webViewRef.current.injectJavaScript(
+              `${updateTransJs(domIdx, segmentPrefixRef.current[domIdx] || '', false)}\ntrue;`,
+            );
           }
           delete segmentPrefixRef.current[domIdx];
           doneN += 1;
@@ -556,6 +601,10 @@ const ChapterReader = ({
       if (!evt || !webViewRef.current) return;
       const idx = typeof evt.index === 'number' ? evt.index : -1;
       if (idx < 0) return;
+      // 【关键修复】只更新"正在翻译中"的段：段翻完后我们会 delete 掉它的前缀记录，
+      // 此时若有迟到/串段的流式事件到达，必须忽略 —— 否则会用不完整文本覆盖已翻好的内容
+      //（真机现象：翻到下一段时，上一段译文突然变短或退回占位）。
+      if (!(idx in segmentPrefixRef.current)) return;
       const pfx = segmentPrefixRef.current[idx] || '';
       webViewRef.current.injectJavaScript(
         `${updateTransJs(idx, pfx + String(evt.full || ''), true)}\ntrue;`,
