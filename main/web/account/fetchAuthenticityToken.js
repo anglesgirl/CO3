@@ -29,23 +29,20 @@ function pickTokenFromForm(form) {
  */
 function pickFieldByName(form, name) {
   if (!form) return null;
-  const direct = (form && form.childNodes) || [];
-  for (let i = 0; i < direct.length; i += 1) {
-    const n = direct[i];
-    if (n && typeof n.getAttribute === 'function' && n.getAttribute('name') === name) return n;
-  }
-  const tags = ['input', 'button'];
-  for (let t = 0; t < tags.length; t += 1) {
-    let list = null;
-    try {
-      list = form.getElementsByTagName ? form.getElementsByTagName(tags[t]) : null;
-    } catch (_) {
-      list = null;
-    }
-    if (!list) continue;
-    for (let i = 0; i < list.length; i += 1) {
-      const n = list[i];
-      if (n && typeof n.getAttribute === 'function' && n.getAttribute('name') === name) return n;
+  // 深度优先遍历全部后代节点，不依赖 getElementsByTagName ——
+  // 实测（2026-09-11 真机日志 csrf_ok commit="Log in" 走了兜底值）：
+  // react-native-html-parser 上 getElementsByTagName 取不到嵌套的 commit 按钮，
+  // 导致 commit 用了写死的英文值，与登录页实际按钮值（"Log In"）不符。
+  const stack = [];
+  const seed = (form && form.childNodes) || [];
+  for (let i = seed.length - 1; i >= 0; i -= 1) stack.push(seed[i]);
+  while (stack.length) {
+    const n = stack.pop();
+    if (!n) continue;
+    if (typeof n.getAttribute === 'function' && n.getAttribute('name') === name) return n;
+    const kids = n.childNodes;
+    if (kids && kids.length) {
+      for (let i = kids.length - 1; i >= 0; i -= 1) stack.push(kids[i]);
     }
   }
   return null;

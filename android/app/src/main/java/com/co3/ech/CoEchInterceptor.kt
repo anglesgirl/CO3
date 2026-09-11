@@ -108,11 +108,20 @@ class CoEchInterceptor : Interceptor {
             )
             // 400 Bad Request 多为 multipart 成形问题/请求头缺失。
             // 记下实际发出去的头列表 + body 开头，才能判断边界符、Origin、Content-Length 等。
+            // Cookie 值动辄 700+ 字符，会把其他头挤出 400 字符窗口（曾因此看不到 Origin 是否带上），
+            // 故分开记：Cookie 只记名字（用于判断 cf_clearance/__cf_bm/_cfuvid 是否齐全），其余头全量。
+            val sentCookieNames = headers.filter { it.startsWith("Cookie:", ignoreCase = true) }
+                .flatMap { it.substringAfter(":").split(";") }
+                .map { it.substringBefore("=").trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
             Diagnostics.event(
                 "ech_req_headers",
                 mapOf(
                     "host" to host,
-                    "hdrs" to headers.joinToString(" | ").take(400),
+                    "hdrs" to headers.filterNot { it.startsWith("Cookie:", ignoreCase = true) }
+                        .joinToString(" | ").take(500),
+                    "cookieNames" to sentCookieNames.joinToString(",").take(200),
                     "body_head" to (bodyBytes?.let { b ->
                         String(b.copyOfRange(0, minOf(b.size, 160)), Charsets.ISO_8859_1)
                             .replace("\r", "\\r").replace("\n", "\\n")
@@ -204,17 +213,28 @@ class CoEchInterceptor : Interceptor {
                     }
                     if (setCookies.isNotEmpty()) { cm.flush(); Diagnostics.event("cookie_recv", mapOf("host" to host, "count" to setCookies.size.toString(), "hasSession" to setCookies.any{it.contains("_otwarchive_session")}.toString(), "hasCred" to setCookies.any{it.contains("user_credentials")}.toString())) }
                 } catch (e: Exception) { Diagnostics.event("cookie_recv_err", mapOf("host" to host, "err" to (e.message?:"")))}
-                // 把 4xx/5xx 的响应正文捞出来 —— 服务端的报错文本就是最直接的线索
-                if (statusCode >= 400) {
+                // 把非 GET 的响应正文捞出来 —— 登录 POST 返回 200 但无 Set-Cookie 时，
+                // 正文才是唯一能分辨"CF 挑战页 / AO3 重渲染登录页 / 真报错"的证据。
+                // 之前只在 >=400 时记录，导致 200 场景完全黑箱（sc=0 查不出原因）。
+                if (statusCode >= 400 || request.method != "GET") {
                     try {
-                        val head = String(bodyBytesDecoded.copyOfRange(0, minOf(bodyBytesDecoded.size, 220)), Charsets.UTF_8)
-                            .replace("\n", " ").replace("\r", " ")
+                        val text = String(bodyBytesDecoded, Charsets.UTF_8)
+                        val feats = listOf(
+                            "challenge-platform", "_cf_chl_opt", "Just a moment",
+                            "challenges.cloudflare.com", "Turnstile", "doesn",
+                            "auth_error", "Session Expired", "new_user", "Log Out",
+                            "user_credentials", "flash alert",
+                        ).filter { text.contains(it) }.joinToString(",")
+                        val head = text.replace("\n", " ").replace("\r", " ")
+                            .take(minOf(220, text.length))
                         Diagnostics.event(
-                            "ech_err_body",
+                            "ech_resp_body",
                             mapOf(
                                 "host" to host,
+                                "method" to request.method,
                                 "code" to statusCode,
                                 "len" to bodyBytesDecoded.size,
+                                "feats" to feats.take(180),
                                 "head" to head,
                             ),
                         )
