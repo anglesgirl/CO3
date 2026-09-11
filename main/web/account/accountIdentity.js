@@ -1,5 +1,6 @@
 import getUrl from '../requestManager';
 import { getUsername, setUsernameOnly, setPseudOnly } from '../../storage/Credentials';
+import { diagEvent } from '../../utils/diag';
 
 /**
  * 取真实的 AO3 账号身份（username + pseud）。
@@ -30,19 +31,34 @@ export async function fetchAccountIdentity(force = false) {
     const html = await getUrl('https://archiveofourown.org/', false);
     if (!html || typeof html !== 'string') return null;
 
-    // 未登录首页也可能出现 /users/... 链接，所以先确认登录态（有 Log Out 才算）
     const loggedIn = html.includes('Log Out') || html.includes('Log out') || html.includes('/users/logout');
 
-    // 首选：导航栏用户菜单的权威链接
-    let match = html.match(/\/users\/([^\/"'?#\s]+)\/pseuds\/([^\/"'?#\s]+)/);
-    if (!match && loggedIn) {
-      // 兜底：只拿到 username（没有 pseud 链接时）
-      match = html.match(/\/users\/([^\/"'?#\s]+)\/(?:bookmarks|works|readings|preferences)/);
-    }
-    if (!match) return null;
+    // 【为什么不用 /users/X/pseuds/Y】服务器实测（真实账号抓 AO3 首页）：
+    // 首页推荐位里就含**别人的** /users/<别人>/pseuds/<别人>，
+    // 用它当首选会把当前用户名解析成陌生作者（书签/稍后读 URL 随之全错）。
+    // 权威锚点是**只有当前登录用户才可能有**的这些链接：
+    //   /users/X/preferences  /users/X/subscriptions  /users/X/readings
+    // 次选导航栏 "Hi, xxx!" 的那个链接。
+    const m =
+      html.match(/\/users\/([^\/"'?#\s]+)\/(?:preferences|subscriptions|readings)/)
+      || html.match(/<a[^>]+href="\/users\/([^\/"'?#\s]+)"[^>]*>\s*Hi,/i)
+      || (loggedIn ? html.match(/\/users\/([^\/"'?#\s]+)\/(?:bookmarks|works)/) : null);
+    if (!m) return null;
 
-    const username = decodeURIComponent(match[1]);
-    const pseud = match[2] ? decodeURIComponent(match[2]) : null;
+    const username = decodeURIComponent(m[1]);
+    // pseud：导航栏 "Hi, <pseud>!" 的文本（首页没有 /users/X/pseuds/Y 链接时唯一的来源）
+    let pseud = null;
+    const pm = html.match(/<a[^>]+href="\/users\/[^"'?#\s\/]+"[^>]*>\s*Hi,\s*([^<]+?)\s*</i);
+    if (pm) pseud = decodeURIComponent(pm[1].replace(/[!！]\s*$/, '').trim()) || null;
+
+    diagEvent('account_identity', {
+      html_len: html.length,
+      logged_in: loggedIn,
+      matched: m[0].slice(0, 40),
+      user_head: username.slice(0, 3),
+      pseud_head: pseud ? pseud.slice(0, 3) : '-',
+    });
+
     cachedIdentity = { username, pseud };
     return cachedIdentity;
   } catch (error) {

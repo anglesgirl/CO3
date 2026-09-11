@@ -1,4 +1,4 @@
-import { getRealUsername } from '../account/accountIdentity';
+import { getRealUsername, looksLikeEmail } from '../account/accountIdentity';
 import { parseWorkElements } from '../browse/fetchWorks';
 import getUrl from '../requestManager';
 
@@ -7,7 +7,10 @@ let DomParser = require('react-native-html-parser').DOMParser;
 export async function fetchBookmarks(page, username, pseud, noWebview = false) {
   let url;
   try {
-    const resolvedUsername = username || await getRealUsername();
+    // username 可能是登录输入值（邮箱）—— 老 bug：用它拼 /users/<邮箱>/... 一定 404。
+    // 自己的用户名不会是邮箱，所以"邮箱值"必须走自愈换成真实用户名。
+    const resolvedUsername =
+      username && !looksLikeEmail(username) ? username : await getRealUsername();
     if (pseud) {
       url = `https://archiveofourown.org/users/${resolvedUsername}/pseuds/${encodeURIComponent(pseud)}/bookmarks?page=${page}`;
     } else {

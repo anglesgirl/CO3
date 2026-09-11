@@ -13,7 +13,7 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
 import { fetchBookmarks } from '../../web/other/bookmarks';
 import BookCard from '../../components/Library/BookCard';
 import LoadingSpinner from '../../components/History/Spinner';
-import { getRealUsername } from '../../web/account/accountIdentity';
+import { getRealUsername, looksLikeEmail } from '../../web/account/accountIdentity';
 import EmptyState from '../../components/History/Empty';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
@@ -81,9 +81,12 @@ export default function BookmarksScreen({ route }) {
   };
 
   const loadInitialBookmarks = async () => {
+    // 【必须让"邮箱值"也走自愈】老数据/邮箱登录时 username 里存的是邮箱（非空），
+    // 原来的 `if (!username)` 永远不会触发，书签地址就一直是 /users/邮箱/bookmarks → 404。
+    // 用自己的用户名不会是邮箱这一点做判断：只有"空或邮箱"才去页面取真值，正常情况零开销。
     let usrname = username;
 
-    if (!username) usrname = await getRealUsername();
+    if (!username || looksLikeEmail(username)) usrname = await getRealUsername();
 
     if (!usrname) {
       setError({ message: t('screen_bookmarks_error_not_logged_in') });
@@ -186,37 +189,23 @@ export default function BookmarksScreen({ route }) {
 
       <TouchableOpacity
         style={{ marginLeft: 'auto' }}
-        onPress={() => {
-          username
-            ? InAppBrowser.open(`https://archiveofourown.org/users/${username}/bookmarks`, {
-              // Android
-              showTitle: true,
-              toolbarColor: currentTheme.backgroundColor,
-              enableUrlBarHiding: true,
-              enableDefaultShare: true,
-              forceCloseOnRedirection: false,
-              // iOS
-              dismissButtonStyle: 'close',
-              preferredBarTintColor: currentTheme.backgroundColor,
-              preferredControlTintColor: 'white',
-            })
-        : getUsername().then(usrname => {
-              InAppBrowser.open(
-                `https://archiveofourown.org/users/${usrname}/bookmarks`,
-                {
-                  // Android
-                  showTitle: true,
-                  toolbarColor: currentTheme.backgroundColor,
-                  enableUrlBarHiding: true,
-                  enableDefaultShare: true,
-                  forceCloseOnRedirection: false,
-                  // iOS
-                  dismissButtonStyle: 'close',
-                  preferredBarTintColor: currentTheme.backgroundColor,
-                  preferredControlTintColor: 'white',
-                },
-              );
-            });
+        onPress={async () => {
+          // 统一定位到「真实用户名」再打开：username 可能是邮箱（老数据），
+          // 用它拼 URL 必定 404（作者原版的老 bug）。
+          const usrname = await getRealUsername();
+          if (!usrname) return;
+          InAppBrowser.open(`https://archiveofourown.org/users/${usrname}/bookmarks`, {
+            // Android
+            showTitle: true,
+            toolbarColor: currentTheme.backgroundColor,
+            enableUrlBarHiding: true,
+            enableDefaultShare: true,
+            forceCloseOnRedirection: false,
+            // iOS
+            dismissButtonStyle: 'close',
+            preferredBarTintColor: currentTheme.backgroundColor,
+            preferredControlTintColor: 'white',
+          });
         }}
       >
         <Icon name="link" size={24} color={currentTheme.textColor} />
