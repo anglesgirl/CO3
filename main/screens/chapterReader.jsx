@@ -778,16 +778,26 @@ const ChapterReader = ({
     //   AO3 自身域名与已代理过的地址都不动。
     (function () {
       var AO3 = /(^|\\.)archiveofourown\\.org$/;
-      var PHOTON = /\.wp\.com$/;
       // Photon 只处理 .gif/.png/.jpg/.webp（官方文档明确的限制），
       // 视频/音频/动图 PNG 会直接失败 —— 没必要让它们白跑一趟。
       var OK_EXT = /\\.(gif|png|jpe?g|webp)($|[?#])/i;
+      // 【实测】i0/i2.wp.com 在部分运营商（移动宽带）被屏蔽，只有 i1 可用，
+      // 所以统一固定到 i1、不做 i0/i1/i2 轮换。
+      var I1 = /^i1\\.wp\\.com$/;
+      var IWP = /^i[0-9]\\.wp\\.com$/;
       function toPhoton(u) {
         try {
           var a = document.createElement('a');
           a.href = u;
           if (a.protocol !== 'http:' && a.protocol !== 'https:') return null;
-          if (!a.hostname || AO3.test(a.hostname) || PHOTON.test(a.hostname)) return null;
+          if (!a.hostname || AO3.test(a.hostname)) return null;
+          if (I1.test(a.hostname)) return null;          // 已经是 i1，不动
+          if (IWP.test(a.hostname)) {
+            // 原图挂在 i0/i2 等 Photon 子域上 —— 在移动宽带上就是打不开，
+            // 只换子域即可（i0.wp.com/<host>/<path> → i1.wp.com/<host>/<path>）。
+            return 'https://i1.wp.com' + a.pathname + a.search;
+          }
+          if (/\\.wp\\.com$/.test(a.hostname)) return null;  // 其它 wp.com 图床不二次代理
           if (!OK_EXT.test(a.pathname + a.search)) return null;
           return 'https://i1.wp.com/' + a.hostname + a.pathname + a.search;
         } catch (e) { return null; }
