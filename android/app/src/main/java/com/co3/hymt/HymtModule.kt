@@ -195,10 +195,21 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                 // 逐 token 取，直到返回 null/空串（软件上限兜底防死循环）
                 var guard = 0
                 val limit = mt * 2 + 16
+                // 【译文被截断的根因】官方引擎在生成过程中可能返回一次空串，
+                // 那并不代表真正结束。旧写法 `if (tok.isNullOrEmpty()) break`
+                // 会立刻收工，症状就是译文"说到一半突然没了"（实测: 输入 88 字符
+                // 只产出 31 字符, 且尾部没有句末标点）。
+                // 改为"连续 3 次空"才判定结束：既容忍偶发空串，又不会死循环。
+                var emptyStreak = 0
                 while (guard < limit) {
                     guard++
                     val tok = e.nextToken()
-                    if (tok.isNullOrEmpty()) break
+                    if (tok.isNullOrEmpty()) {
+                        emptyStreak++
+                        if (emptyStreak >= 3) break
+                        continue
+                    }
+                    emptyStreak = 0
                     sb.append(tok)
                 }
                 val out = sb.toString().trim()
@@ -269,10 +280,18 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                 val sb = StringBuilder()
                 var guard = 0
                 val limit = mt * 2 + 16
+                var emptyStreak = 0
                 while (guard < limit) {
                     guard++
                     val tok = e.nextToken()
-                    if (tok.isNullOrEmpty()) break
+                    // 同 translateStream：一遇空串就 break 会导致译文截断，
+                    // 改为连续 3 次空才判定生成结束。
+                    if (tok.isNullOrEmpty()) {
+                        emptyStreak++
+                        if (emptyStreak >= 3) break
+                        continue
+                    }
+                    emptyStreak = 0
                     sb.append(tok)
                 }
                 val out = sb.toString().trim()
@@ -364,10 +383,18 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                 val limit = mt * 2 + 16
                 var lastEmit = 0L
                 // 节流 80ms：注入太频繁会拖慢 JS/WebView，这个间隔已足够顺滑
+                var emptyStreak = 0
                 while (guard < limit) {
                     guard++
                     val tok = e.nextToken()
-                    if (tok.isNullOrEmpty()) break
+                    // 同 translateStream：一遇空串就 break 会导致译文截断，
+                    // 改为连续 3 次空才判定生成结束。
+                    if (tok.isNullOrEmpty()) {
+                        emptyStreak++
+                        if (emptyStreak >= 3) break
+                        continue
+                    }
+                    emptyStreak = 0
                     sb.append(tok)
                     val now = System.currentTimeMillis()
                     if (now - lastEmit >= 80L) {
