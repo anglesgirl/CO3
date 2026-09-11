@@ -202,7 +202,7 @@ class CoEchInterceptor : Interceptor {
                             android.util.Log.i("CO-COOKIE", "recv cookie ${if(isCred) "user_credentials" else "session"} $sc")
                         }
                     }
-                    if (setCookies.isNotEmpty()) { cm.flush(); Diagnostics.event("cookie_recv", mapOf("host" to host, "count" to setCookies.size.toString(), "hasSession" to setCookies.any{it.contains("_otwarchive_session")}.toString())) }
+                    if (setCookies.isNotEmpty()) { cm.flush(); Diagnostics.event("cookie_recv", mapOf("host" to host, "count" to setCookies.size.toString(), "hasSession" to setCookies.any{it.contains("_otwarchive_session")}.toString(), "hasCred" to setCookies.any{it.contains("user_credentials")}.toString())) }
                 } catch (e: Exception) { Diagnostics.event("cookie_recv_err", mapOf("host" to host, "err" to (e.message?:"")))}
                 // 把 4xx/5xx 的响应正文捞出来 —— 服务端的报错文本就是最直接的线索
                 if (statusCode >= 400) {

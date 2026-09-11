@@ -48,13 +48,18 @@ export const handleLogin = async (username, password) => {
 
 export default async function login(username, password) {
   try {
-    // Prepare the form data
-    const formData = new FormData();
-    formData.append('authenticity_token', await fetchLoginAuthenticityToken());
-    formData.append('user[login]', username);
-    formData.append('user[password]', password);
-    formData.append('user[remember_me]', '1');
-    formData.append('commit', 'Log in');
+    // 表单编码铁律（2026-08-31 血泪，二次复发）：
+    // AO3 是 Rails，登录 POST 只认 application/x-www-form-urlencoded。
+    // 绝对不能用 FormData —— RN 的 fetch 会把它序列化成
+    // multipart/form-data; boundary=...，服务端视为无效请求，
+    // 返回 200 重渲染登录页（仅有 _otwarchive_session，无 user_credentials）。
+    // 日志特征：ech_req_body ctype=multipart/... + post_login status=200 且 finalUrl 仍含 /users/login
+    const params = new URLSearchParams();
+    params.append('authenticity_token', await fetchLoginAuthenticityToken());
+    params.append('user[login]', username);
+    params.append('user[password]', password);
+    params.append('user[remember_me]', '1');
+    params.append('commit', 'Log in');
 
     // Send the login request
     // 下面这组 URL/请求头是照 HAR 里"官方浏览器成功登录"那条请求 1:1 对齐的：
@@ -66,13 +71,15 @@ export default async function login(username, password) {
     const LOGIN_URL = 'https://archiveofourown.org/users/login?return_to=%2F';
     const response = await fetch(LOGIN_URL, {
       method: 'POST',
-      body: formData,
+      body: params.toString(),
       credentials: 'include', // Important for cookies
       headers: {
         Accept:
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate',
+        // Content-Type 必须显式声明为 urlencoded（RN 传字符串 body 时默认给 text/plain）
+        'Content-Type': 'application/x-www-form-urlencoded',
+        // 不要手写 Accept-Encoding：交给 OkHttp 自动协商，手写会导致响应体未解压
         Origin: 'https://archiveofourown.org',
         Referer: LOGIN_URL,
         'User-Agent':
@@ -89,7 +96,9 @@ export default async function login(username, password) {
       finalUrl: String(response.url || '-').slice(0, 80),
       setCookie: response.headers && response.headers.get && response.headers.get('set-cookie') ? 'yes' : 'no',
     });
-    if (response.url === 'https://archiveofourown.org/users/login') {
+    // 仍在登录页 = 被拒。必须用 includes：服务端/我们发出的 URL 都带 ?return_to=%2F，
+    // 用 === 比较会永远不匹配 → 200 被误判成"成功但没 cookie"。
+    if (String(response.url || '').includes('/users/login')) {
       throw new Error('Wrong username or password');
     }
 
@@ -116,7 +125,7 @@ export default async function login(username, password) {
     if (response.ok) {
       if (
         response.redirected ||
-        response.url !== 'https://archiveofourown.org/users/login'
+        !String(response.url || '').includes('/users/login')
       ) {
         console.log(
           'Login appears successful but session cookie not found in headers',
