@@ -108,13 +108,14 @@ object CoWebViewHelper {
                         Diagnostics.event("webview_cookie_recv_err", mapOf("host" to host, "err" to (e.message ?: "")))
                     }
 
+                    val redirected = if (resp.priorResponse != null) "yes" else "no"
                     Diagnostics.event(
                         "webview_ok",
                         mapOf(
                             "host" to host,
                             "code" to resp.code.toString(),
                             "len" to bodyBytes.size.toString(),
-                            "redirected" to resp.priorResponse?.let { "yes" } ?: "no",
+                            "redirected" to redirected,
                             "hasSession" to hasSession.toString(),
                         ),
                     )
