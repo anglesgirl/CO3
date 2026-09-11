@@ -768,6 +768,68 @@ const ChapterReader = ({
   }, [hasPreviousChapter, onPreviousChapter, isIncognitoMode, scrollProgress, workId, chapterID, progressDAO]);
 
   const injectedJavaScript = `
+    // ── 外链图片兜底：加载失败时改用 WordPress Photon（i1.wp.com）代理重试 ──
+    // 用途：文章里引用的站外图常因防盗链（Referer 校验）或被墙而打不开，
+    //      Photon 由其服务端去取原图，能绕开 Referer 限制。
+    // 【只在加载失败时回退，不做无条件替换】实测 Photon 有白名单：
+    //   Wikipedia → 400、imgur → 429、未知域名 → 400；
+    //   无条件替换会把本来能看的图也弄坏。
+    // 安全性：代理请求的 SNI 是 i1.wp.com，不是被墙的原域名；
+    //   AO3 自身域名与已代理过的地址都不动。
+    (function () {
+      var AO3 = /(^|\\.)archiveofourown\\.org$/;
+      var PHOTON = /\.wp\.com$/;
+      // Photon 只处理 .gif/.png/.jpg/.webp（官方文档明确的限制），
+      // 视频/音频/动图 PNG 会直接失败 —— 没必要让它们白跑一趟。
+      var OK_EXT = /\\.(gif|png|jpe?g|webp)($|[?#])/i;
+      function toPhoton(u) {
+        try {
+          var a = document.createElement('a');
+          a.href = u;
+          if (a.protocol !== 'http:' && a.protocol !== 'https:') return null;
+          if (!a.hostname || AO3.test(a.hostname) || PHOTON.test(a.hostname)) return null;
+          if (!OK_EXT.test(a.pathname + a.search)) return null;
+          return 'https://i1.wp.com/' + a.hostname + a.pathname + a.search;
+        } catch (e) { return null; }
+      }
+      function retry(img) {
+        var src = img.getAttribute('src') || img.src || '';
+        var alt = toPhoton(src);
+        if (!alt) return;
+        img.setAttribute('data-co3-orig', src);
+        img.src = alt;
+      }
+      function hook(img) {
+        if (!img || img.__co3Photon) return;
+        img.__co3Photon = 1;
+        img.addEventListener('error', function () {
+          if (img.__co3PhotonTried) return;   // 每个图只回退一次，避免来回抖动
+          img.__co3PhotonTried = 1;
+          retry(img);
+        });
+        // 注入可能晚于图片失败 —— error 事件已经错过，用 complete 且 naturalWidth=0 补判
+        if (img.complete && img.naturalWidth === 0) retry(img);
+      }
+      var list = document.querySelectorAll('img');
+      for (var i = 0; i < list.length; i++) hook(list[i]);
+      try {
+        new MutationObserver(function (muts) {
+          for (var m = 0; m < muts.length; m++) {
+            var added = muts[m].addedNodes;
+            for (var n = 0; n < added.length; n++) {
+              var el = added[n];
+              if (el.nodeType !== 1) continue;
+              if (el.tagName === 'IMG') hook(el);
+              else if (el.querySelectorAll) {
+                var subs = el.querySelectorAll('img');
+                for (var s = 0; s < subs.length; s++) hook(subs[s]);
+              }
+            }
+          }
+        }).observe(document.body, { childList: true, subtree: true });
+      } catch (e) {}
+    })();
+
     //Initial scroll. That's not perfect since some CSS element / image might have not loaded yet and you then lose like 5% every times
     //Works fine on only text tho
     const ch = document.body.scrollHeight;
