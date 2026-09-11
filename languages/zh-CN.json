@@ -140,6 +140,7 @@
   "screen_preferences_translate_engine": "翻译引擎",
   "screen_preferences_translate_engine_auto": "在线免费（机翻）",
   "screen_preferences_translate_engine_device": "本机 AI（混元 HyMT）",
+  "common_cancel": "取消",
   "screen_preferences_translate_download": "下载模型（建议 Wi-Fi）",
   "screen_preferences_translate_downloading": "下载中",
   "screen_preferences_translate_model_ready": "模型就绪",

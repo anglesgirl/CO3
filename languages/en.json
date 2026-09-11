@@ -140,6 +140,7 @@
   "screen_preferences_translate_engine": "Translation engine",
   "screen_preferences_translate_engine_auto": "Online free (MT)",
   "screen_preferences_translate_engine_device": "On-device AI (HyMT)",
+  "common_cancel": "Cancel",
   "screen_preferences_translate_download": "Download model (Wi-Fi recommended)",
   "screen_preferences_translate_downloading": "Downloading",
   "screen_preferences_translate_model_ready": "Model ready",

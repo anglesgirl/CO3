@@ -7,6 +7,7 @@ import React, {
 } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   DeviceEventEmitter,
   FlatList,
   Linking,
@@ -33,7 +34,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import CategorySelectionModal from '../components/WorkScreen/CategorySelectionModal';
 import { markForLater } from '../web/other/markedLater';
 import Toast from 'react-native-toast-message';
-import { getTranslateMode } from '../web/translate/settings';
+import { setTranslateEngine } from '../web/translate/settings';
 import { translateTextsSmart } from '../web/translate/bilingual';
 import { bookmark } from '../web/other/bookmarks';
 import { normalizeWorkData } from '../storage/dao/WorkDAO';
@@ -542,8 +543,9 @@ const ChapterInfoScreen = ({ route }) => {
   /** 简介/标题/章节名翻纯中文（后台跑，不挡页面） */
   const translateWorkMeta = async workData => {
     try {
-      const mode = await getTranslateMode();
-      if (mode === 'off' || !workData) return;
+      // 按钮是**显式操作**：不受 translateMode（正文自动翻译开关）影响，
+      // 否则设置里 mode=off 时点按钮会毫无反应。
+      if (!workData) return;
       const strip = s =>
         String(s || '')
           .replace(/<br\s*\/?>/gi, '\n')
@@ -580,6 +582,51 @@ const ChapterInfoScreen = ({ route }) => {
       setTranslatingMeta(false);
     }
   };
+
+  /**
+   * 顶部翻译按钮 —— 短按：翻译本页（标题 / 简介 / 章节名），译文追加在原文下方。
+   * 已有译文时再按一次恢复原文（可来回切）。
+   */
+  const handleTranslatePress = () => {
+    if (translatingMeta) return;
+    if (metaZh) {
+      setMetaZh(null);
+      return;
+    }
+    translateWorkMeta(work);
+  };
+
+  /**
+   * 长按同一按钮 —— 选择翻译引擎（在线机翻 / 本机 AI），选完立刻用该引擎翻一次。
+   * 就地切换可以省掉"跑设置页改引擎再回来"的来回。
+   */
+  const handleTranslateLongPress = () => {
+    if (translatingMeta) return;
+    Alert.alert(
+      t('screen_preferences_translate_engine'),
+      t('screen_preferences_translate_hint'),
+      [
+        {
+          text: t('screen_preferences_translate_engine_auto'),
+          onPress: () => runTranslateWithEngine('auto'),
+        },
+        {
+          text: t('screen_preferences_translate_engine_device'),
+          onPress: () => runTranslateWithEngine('device'),
+        },
+        { text: t('common_cancel'), style: 'cancel' },
+      ],
+    );
+  };
+
+  const runTranslateWithEngine = async engine => {
+    try {
+      await setTranslateEngine(engine);
+    } catch (_) {}
+    setMetaZh(null);
+    translateWorkMeta(work);
+  };
+
   useEffect(() => {
     loadCategories();
     getJsonSettings().then(settings => {
@@ -672,8 +719,12 @@ const ChapterInfoScreen = ({ route }) => {
 
       setWork(workData);
       setChapters(workData.chapters);
+      // 【按用户要求改为手动触发】原来只要 translateMode !== 'off' 就自动跑，
+      // 而默认引擎是 auto（在线机翻）—— 用户看到的是"没人点它自己就机翻了"。
+      // 现在详情页不再自动翻译，只由顶部工具栏的翻译按钮触发；
+      // 长按该按钮可在「在线机翻 / 本机 AI」之间就地切换。
+      // 换作品时清掉上一部的译文，避免串味。
       setMetaZh(null);
-      translateWorkMeta(workData);
 
       const progressMap = progressData.reduce((acc, item) => {
         acc[item.chapterID] = item.progress;
@@ -1755,6 +1806,22 @@ const ChapterInfoScreen = ({ route }) => {
         >
           {metaZh?.title || work.title}
         </Text>
+        <TouchableOpacity
+          onPress={handleTranslatePress}
+          onLongPress={handleTranslateLongPress}
+          delayLongPress={350}
+          style={styles.menuButton}
+        >
+          {translatingMeta ? (
+            <ActivityIndicator size="small" color={currentTheme.primaryColor} />
+          ) : (
+            <Icon
+              name="translate"
+              size={24}
+              color={metaZh ? currentTheme.primaryColor : currentTheme.iconColor}
+            />
+          )}
+        </TouchableOpacity>
         <TouchableOpacity
           onPress={() => setDownloadMenuVisible(true)}
           style={styles.menuButton}
