@@ -6,20 +6,63 @@ async function scrapeUserPage(url, username) {
   const res = await getUrl(url);
 
   const doc = new DomParser().parseFromString(res, "text/html");
-  const avatar = Array.from(doc.getElementsByTagName("img")).filter(img => img?.getAttribute("class") === "icon")[0];
-  const bio = Array.from(doc.getElementsByTagName("blockquote"))
-    .filter(a => a.getAttribute("class") === `userstuff` && a.parentNode.getAttribute("id") !== "admin-banner")[0];
 
-  const meta = Array.from(doc.getElementsByTagName("dl"))
-    .filter(a => a.getAttribute("class") === `meta`)[0];
-  console.log(meta);
-  const joinDate = meta?.childNodes[7]?.textContent;
+  // 【头像必须限定在 #main 内 —— 老 bug 的根因】
+  // 已登录时，页面顶栏（位于 #main 之外）也含一个 <img class="icon">，那是**观看者自己的头像**，
+  // 且 DOM 顺序排在作者头像之前。所以"全页面取第一个 class=icon 的 img"会让每个作者主页
+  // 都显示成登录用户自己的头像。
+  // 实测（登录态抓 /users/astolat/profile）：全页 2 个 class=icon 的 img，
+  //   第 0 个 alt=""（顶栏自己的）、第 1 个 alt="the lady of shalott weaving"（作者本人）；
+  //   #main 内只有 1 个，正是作者头像。
+  // 因此两道保险：①只在 #main 内找；②排除 alt 为空的那个（顶栏头像 alt 恒为空）。
+  const scope = doc.getElementById("main") || doc;
+  const iconImgs = Array.from(scope.getElementsByTagName("img") || []);
+  const avatar = iconImgs.filter(img => {
+    const cls = (img && typeof img.getAttribute === 'function' ? img.getAttribute("class") : "") || "";
+    const alt = img && typeof img.getAttribute === 'function' ? img.getAttribute("alt") : null;
+    return cls.split(/\s+/).includes("icon") && !!alt;
+  })[0] || null;
 
-  console.log(avatar);
+  // bio：限定 #main，并排除全局公告（admin-banner）
+  const bio = Array.from(scope.getElementsByTagName("blockquote") || [])
+    .filter(a => {
+      const cls = a.getAttribute("class") || "";
+      const parentId = a.parentNode ? a.parentNode.getAttribute("id") : null;
+      return cls === "userstuff" && parentId !== "admin-banner";
+    })[0] || null;
 
-  let avatarUrl = avatar.getAttribute("src");
-  if (avatarUrl === "/images/skins/iconsets/default/icon_user.png") {
-    avatarUrl = "https://archiveofourown.org/images/skins/iconsets/default/icon_user.png";
+  const meta = Array.from(scope.getElementsByTagName("dl") || [])
+    .filter(a => a.getAttribute("class") === "meta")[0];
+
+  // joinDate：原来用 meta.childNodes[7]（固定下标，页面加一个字段就错位）。
+  // 改为按 <dt>Joined:</dt> 找它后面的 <dd>。
+  let joinDate = null;
+  if (meta && meta.childNodes) {
+    const nodes = Array.from(meta.childNodes);
+    for (let i = 0; i < nodes.length; i += 1) {
+      const n = nodes[i];
+      const text = (n && n.textContent) ? String(n.textContent).trim() : "";
+      if (/^joined/i.test(text)) {
+        for (let j = i + 1; j < nodes.length; j += 1) {
+          const cand = nodes[j];
+          const candText = (cand && cand.textContent) ? String(cand.textContent).trim() : "";
+          if (candText) {
+            joinDate = candText;
+            break;
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  let avatarUrl = avatar && typeof avatar.getAttribute === 'function'
+    ? avatar.getAttribute("src")
+    : null;
+
+  // 相对路径补全（解析器里不会自动 resolve），默认头像也补全域名
+  if (avatarUrl && avatarUrl.startsWith("/")) {
+    avatarUrl = `https://archiveofourown.org${avatarUrl}`;
   }
 
   return {
