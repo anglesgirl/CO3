@@ -43,24 +43,25 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    // Hook React Native OkHttp：这里只注册工厂类，**不触发任何 native 初始化**
+    // （Conscrypt 的 provider 是懒加载，第一次真正发请求时才创建，那时 SoLoader 早已就绪）
     try {
-        com.co3.ech.ConscryptEch.install()
-        android.util.Log.i("CO-ECH", "Conscrypt ECH init ok, ready=" + com.co3.ech.ConscryptEch.ready)
-        // Hook React Native OkHttp
-        try {
-            val provider = Class.forName("com.facebook.react.modules.network.OkHttpClientProvider")
-            val method = provider.getMethod("setOkHttpClientFactory", Class.forName("com.facebook.react.modules.network.OkHttpClientFactory"))
-            val factory = com.co3.ech.ReactNativeEchFactory()
-            method.invoke(null, factory)
-            android.util.Log.i("CO-ECH", "OkHttpClientProvider patched")
-        } catch (e: Exception) {
-            android.util.Log.w("CO-ECH", "OkHttp hook failed (will use NativeModule only): " + e.message)
-        }
-    } catch (e: Exception) {
-        android.util.Log.e("CO-ECH", "ECH init failed: " + e.message)
+        val provider = Class.forName("com.facebook.react.modules.network.OkHttpClientProvider")
+        val method = provider.getMethod("setOkHttpClientFactory", Class.forName("com.facebook.react.modules.network.OkHttpClientFactory"))
+        val factory = com.co3.ech.ReactNativeEchFactory()
+        method.invoke(null, factory)
+        android.util.Log.i("CO-ECH", "OkHttpClientProvider patched")
+    } catch (t: Throwable) {
+        // 必须捕 Throwable：native 库未就绪时抛的是 Error，catch(Exception) 捕不到
+        android.util.Log.w("CO-ECH", "OkHttp hook failed: " + t.message)
     }
     com.co3.Diagnostics.initialize(this)
     ProcessLifecycleOwner.get().lifecycle.addObserver(AppForegroundTracker)
+    // ⚠️ 【绝不可在此行之前加载任何 native 库】
+    // loadReactNative 里才初始化 SoLoader 与 Fresco。若在它之前调用 native 库（例如 Conscrypt），
+    // 会因 SoLoader 未就绪抛 Error；一旦冒泡出去，本行不执行 → Fresco 未初始化 →
+    // 渲染第一个 <Image> 时 Fresco.newDraweeControllerBuilder() 为 null → 启动即崩
+    // （2026-09-11 真机实测：java.lang.NullPointerException at ReactImageManager.createViewInstance）。
     loadReactNative(this)
   }
 }

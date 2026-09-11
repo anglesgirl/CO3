@@ -16,6 +16,8 @@ import java.util.concurrent.TimeUnit
 object EchHttp {
 
     val client: OkHttpClient by lazy {
+        // 首次真正需要网络时再初始化 Conscrypt（那时 SoLoader/Fresco 都已就绪）
+        ConscryptEch.install()
         OkHttpClient.Builder()
             .sslSocketFactory(ConscryptEch.socketFactory, ConscryptEch.trustManager)
             .dns(EchDns())

@@ -30,7 +30,9 @@ object CoWebViewHelper {
         }
         // 非 GET 不拦截（WebView 的 POST body 取不到）
         if (method != "GET") return null
-        if (!ConscryptEch.ready) {
+        // 惰性确保：ready 为 false 时主动初始化一次（幂等、不抛异常）。
+        // 注意拦截器不在启动路径上，这里首次调用时 SoLoader/Fresco 早已就绪。
+        if (!ConscryptEch.ready && !ConscryptEch.install()) {
             Diagnostics.event("webview_ech_not_ready", mapOf("host" to host))
             return null
         }

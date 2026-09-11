@@ -50,7 +50,11 @@ object ConscryptEch {
     var ready = false
         private set
 
-    private val provider = Conscrypt.newProvider()
+    // 【必须 lazy】Conscrypt.newProvider() 会触发 native 库加载；若在 Application.onCreate
+    // 早期（SoLoader 尚未初始化）执行会抛 Error，冒泡后中断 RN 的 loadReactNative
+    // → Fresco 未初始化 → 渲染第一个 <Image> 直接崩（2026-09-11 真机实测）。
+    // 懒加载后只有第一次真正发请求时才初始化，那时 SoLoader 早已就绪。
+    private val provider: java.security.Provider by lazy { Conscrypt.newProvider() }
 
     private val systemTrustManager: X509TrustManager by lazy {
         val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
@@ -71,10 +75,23 @@ object ConscryptEch {
 
     val socketFactory: SSLSocketFactory by lazy { EchSocketFactory(sslContext.socketFactory) }
 
-    fun install() {
-        if (ready) return
-        ready = true
-        Log.i(TAG, "Conscrypt ECH 就绪，version=${runCatching { Conscrypt.version().toString() }.getOrNull()}")
+    /**
+     * 幂等安装：触发惰性初始化并确认真的可用。
+     * **绝不抛异常**（启动路径可能调到它），失败返回 false。
+     */
+    fun install(): Boolean {
+        if (ready) return true
+        return runCatching {
+            provider      // 触发 Conscrypt native 加载
+            sslContext    // 建好挂了 ECH 策略的 SSLContext
+            socketFactory
+            ready = true
+            Log.i(TAG, "Conscrypt ECH 就绪，version=${Conscrypt.version()}")
+            true
+        }.getOrElse { t ->
+            Log.e(TAG, "Conscrypt ECH 初始化失败: ${t.javaClass.simpleName} ${t.message}")
+            false
+        }
     }
 
     class PolicyTrustManager(private val delegate: X509TrustManager) : X509TrustManager {
