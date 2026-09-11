@@ -22,8 +22,48 @@ function pickTokenFromForm(form) {
   return nodes[0] || null;
 }
 
+/**
+ * 按 name 取表单里的字段（先扫直接子节点，再退回 getElementsByTagName 兜底）。
+ * 用于 commit 按钮 —— HAR 实证：commit 值随页面语言变化（中文页"用户登录"、英文页"Log in"），
+ * 写死会让"表单字段"与页面不一致，故一律从实际登录页读取。
+ */
+function pickFieldByName(form, name) {
+  if (!form) return null;
+  const direct = (form && form.childNodes) || [];
+  for (let i = 0; i < direct.length; i += 1) {
+    const n = direct[i];
+    if (n && typeof n.getAttribute === 'function' && n.getAttribute('name') === name) return n;
+  }
+  const tags = ['input', 'button'];
+  for (let t = 0; t < tags.length; t += 1) {
+    let list = null;
+    try {
+      list = form.getElementsByTagName ? form.getElementsByTagName(tags[t]) : null;
+    } catch (_) {
+      list = null;
+    }
+    if (!list) continue;
+    for (let i = 0; i < list.length; i += 1) {
+      const n = list[i];
+      if (n && typeof n.getAttribute === 'function' && n.getAttribute('name') === name) return n;
+    }
+  }
+  return null;
+}
+
 
 export async function fetchLoginAuthenticityToken() {
+  const fields = await fetchLoginFormFields();
+  return fields.token;
+}
+
+/**
+ * 取登录页上的 authenticity_token 与 commit 值。
+ * HAR 对齐（2026-08-31）：成功请求的 body 是
+ *   authenticity_token=...&user[login]=...&user[password]=...&commit=用户登录
+ * commit 就是表单提交按钮的 value，随站点语言变化，必须从页面实际读取。
+ */
+export async function fetchLoginFormFields() {
   try {
     // 登录链路第 1 步：取登录页（走 ECH 拦截器）
     diagEvent('login_step', { step: 'get_login_page' });
@@ -56,10 +96,14 @@ export async function fetchLoginAuthenticityToken() {
       diagEvent('login_step', { step: 'csrf_missing' });
       throw new Error('authenticity_token 提取失败（表单存在但取不到隐藏字段的值）');
     }
-    diagEvent('login_step', { step: 'csrf_ok', len: token.length });
-    return token;
+    const commitNode = pickFieldByName(form, 'commit');
+    const commit =
+      (commitNode && typeof commitNode.getAttribute === 'function' && commitNode.getAttribute('value')) ||
+      'Log in';
+    diagEvent('login_step', { step: 'csrf_ok', len: token.length, commit: String(commit).slice(0, 20) });
+    return { token, commit };
   } catch (e) {
-    console.error("An error occurred while running fetchLoginAuthenticityToken", e);
+    console.error("An error occurred while running fetchLoginFormFields", e);
     throw e;
   }
 }

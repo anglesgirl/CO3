@@ -1,4 +1,4 @@
-import { fetchLoginAuthenticityToken } from './fetchAuthenticityToken';
+import { fetchLoginFormFields } from './fetchAuthenticityToken';
 import { diagEvent } from '../../utils/diag';
 import Toast from 'react-native-toast-message';
 import {
@@ -55,11 +55,13 @@ export default async function login(username, password) {
     // 返回 200 重渲染登录页（仅有 _otwarchive_session，无 user_credentials）。
     // 日志特征：ech_req_body ctype=multipart/... + post_login status=200 且 finalUrl 仍含 /users/login
     const params = new URLSearchParams();
-    params.append('authenticity_token', await fetchLoginAuthenticityToken());
+    const { token, commit } = await fetchLoginFormFields();
+    params.append('authenticity_token', token);
     params.append('user[login]', username);
     params.append('user[password]', password);
     params.append('user[remember_me]', '1');
-    params.append('commit', 'Log in');
+    // commit 与页面语言配套：HAR 成功样本是中文页的"用户登录"，写死 'Log in' 会与页面不符
+    params.append('commit', commit);
 
     // Send the login request
     // 下面这组 URL/请求头是照 HAR 里"官方浏览器成功登录"那条请求 1:1 对齐的：
@@ -76,12 +78,20 @@ export default async function login(username, password) {
       headers: {
         Accept:
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
+        // 与 HAR 成功样本一致（中文界面）；页面语言决定 commit 按钮值，故两者必须配套
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
         // Content-Type 必须显式声明为 urlencoded（RN 传字符串 body 时默认给 text/plain）
         'Content-Type': 'application/x-www-form-urlencoded',
         // 不要手写 Accept-Encoding：交给 OkHttp 自动协商，手写会导致响应体未解压
         Origin: 'https://archiveofourown.org',
         Referer: LOGIN_URL,
+        // 下面这批是浏览器自动携带、RN fetch 一律不会加的头，HAR 成功样本里都有
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'same-origin',
+        'Sec-Fetch-User': '?1',
+        Priority: 'u=0, i',
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
       }, //Yea cloudflare was hard on this one, so i'm officially a web browser YaY
