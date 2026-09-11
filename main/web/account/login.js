@@ -57,7 +57,14 @@ export default async function login(username, password) {
     formData.append('commit', 'Log in');
 
     // Send the login request
-    const response = await fetch('https://archiveofourown.org/users/login', {
+    // 下面这组 URL/请求头是照 HAR 里"官方浏览器成功登录"那条请求 1:1 对齐的：
+    //   POST /users/login?return_to=%2F
+    //   Origin: https://archiveofourown.org          <- 浏览器会自动带，RN fetch 不会，必须手写
+    //   Referer: https://archiveofourown.org/users/login?return_to=%2F  <- 必须带 query
+    // 实测教训：缺 Origin 或 Referer 丢了 query，AO3 会返回 400 Bad Request
+    //（此前一直卡在登录失败，根因就在这里）。
+    const LOGIN_URL = 'https://archiveofourown.org/users/login?return_to=%2F';
+    const response = await fetch(LOGIN_URL, {
       method: 'POST',
       body: formData,
       credentials: 'include', // Important for cookies
@@ -66,7 +73,8 @@ export default async function login(username, password) {
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
         'Accept-Encoding': 'gzip, deflate',
-        Referer: 'https://archiveofourown.org/users/login',
+        Origin: 'https://archiveofourown.org',
+        Referer: LOGIN_URL,
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
       }, //Yea cloudflare was hard on this one, so i'm officially a web browser YaY
