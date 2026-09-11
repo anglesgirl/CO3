@@ -43,6 +43,9 @@ export default function BookmarksScreen({ route }) {
   const [currentPage, setCurrentPage] = useState(1);
   const [viewMode, setViewMode] = useState('med');
   const [error, setError] = useState(null);
+  // 自愈后的真实用户名：route.params.username 可能是邮箱（老数据 / 邮箱登录），
+  // 直接拿来显示就会把邮箱露在标题上（用户实测反馈"书签里还是邮箱，不是用户名"）。
+  const [realUsername, setRealUsername] = useState('');
 
   const { t } = useTranslation();
 
@@ -88,6 +91,8 @@ export default function BookmarksScreen({ route }) {
     let usrname = username;
 
     if (!username || looksLikeEmail(username)) usrname = await getRealUsername();
+    // 让标题也用自愈后的值（否则请求对了、界面仍显示邮箱）
+    if (usrname) setRealUsername(usrname);
 
     if (!usrname) {
       setError({ message: t('screen_bookmarks_error_not_logged_in') });
@@ -183,8 +188,8 @@ export default function BookmarksScreen({ route }) {
         <Icon name="arrow-back" size={24} color={currentTheme.textColor} />
       </TouchableOpacity>
       <Text style={[styles.title, { color: currentTheme.textColor }]}>
-        {username
-          ? t('screen_bookmarks_title_username', { username: username })
+        {realUsername || username
+          ? t('screen_bookmarks_title_username', { username: realUsername || username })
           : t('screen_bookmarks_title')}
       </Text>
 

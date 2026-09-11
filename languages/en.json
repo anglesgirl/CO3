@@ -152,7 +152,7 @@
   "screen_preferences_translate_test_fail": "On-device translation failed",
   "screen_preferences_translate_test_cost": "Took: ",
   "screen_work_loading_chapter": "Loading chapter",
-  "screen_work_loading_chapter_translating": "Fetching and translating, please wait…",
+  "screen_work_loading_chapter_translating": "Loading chapter…",
   "screen_work_translating_meta": "Translating summary…",
   "screen_preferences_setting_download_update": "Download on Update",
   "screen_preferences_label_theme": "Theme",

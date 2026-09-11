@@ -79,9 +79,13 @@ const BookCard = ({ book, viewMode, theme, onUpdate, setScreens, libraryDAO, wor
       }
     }
 
-    if (jsonSettings.showStatusBadge) getBadgeColor();
+    // 【必须用可选链】BookCard 也被 UserWorkScreen（作者作品页）等页面复用，
+    // 那些页面并不传 jsonSettings。历史上这里漏了 ?. ，一进作者作品页就崩：
+    //   TypeError: Cannot read property 'showStatusBadge' of undefined
+    // （上面第 54 行有 ?.、第 140 行也有，唯独这两处漏了 —— 修改时请保持三处一致。）
+    if (jsonSettings?.showStatusBadge) getBadgeColor();
 
-  }, [book.id, chapterDAO, jsonSettings.showStatusBadge, progressDAO, theme.statusBadge.clicked, theme.statusBadge.finished, theme.statusBadge.started, workDAO]);
+  }, [book.id, chapterDAO, jsonSettings?.showStatusBadge, progressDAO, theme.statusBadge.clicked, theme.statusBadge.finished, theme.statusBadge.started, workDAO]);
 
   const isSmall = viewMode === 'small';
   const isMed = viewMode === 'med';

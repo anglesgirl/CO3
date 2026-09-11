@@ -231,6 +231,10 @@ const ChapterReader = ({
   // 翻译进度 {done,total}；null 表示未在翻译。用于驱动顶部进度提示
   const [translateProgress, setTranslateProgress] = useState(null);
   const translatingRef = useRef(false);
+  // 用户主动离开本页（返回 / 切章）时置位：
+  // ① 之后的失败**不算"翻译失败"**（原实现会误报，用户实测反馈"主动退出不该提示失败"）；
+  // ② 停止继续往（可能已卸载的）WebView 注入译文。
+  const translateCancelledRef = useRef(false);
   // 分块翻译时的前缀累积：{ DOM序号: 已翻完的块 }，使同一段的后续块接在已有译文后面
   const segmentPrefixRef = useRef({});
   const pendingSegsRef = useRef(null);
@@ -395,6 +399,15 @@ const ChapterReader = ({
    * 端侧推理一篇文章要一两分钟；边翻边追加，用户能立刻开始读原文，
    * 译文随滚动陆续出现，慢也不至于让人以为卡死。
    */
+  // 用户离开本页（返回 / 切章）即标记取消。
+  // chapterID 变化会先跑清理函数（视为"离开当前章"），组件卸载同理。
+  useEffect(() => {
+    translateCancelledRef.current = false;
+    return () => {
+      translateCancelledRef.current = true;
+    };
+  }, [chapterID]);
+
   const handleTranslate = useCallback(async () => {
     if (!webViewRef.current || translatingRef.current) return;
     translatingRef.current = true;
@@ -453,6 +466,9 @@ const ChapterReader = ({
         if (!initOk) throw new Error(t('reader_translate_failed'));
 
         for (let k = 0; k < texts.length; k += 1) {
+          // 用户已返回 / 切章 —— 立即停止，别再往（可能已卸载的）WebView 注入译文，
+          // 也不要让后半程的失败被当成"翻译失败"。
+          if (translateCancelledRef.current) break;
           const domIdx = idxs[k];
           // 该段开始翻译：占位显示 ⌛（已完成段落不受影响）。
           // 严格串行：本段（含其所有分块）翻完才进入下一段。
@@ -551,6 +567,9 @@ const ChapterReader = ({
         });
       }
     } catch (e) {
+      // 用户主动返回 / 切章导致的失败**不算"翻译失败"**（用户实测反馈：
+      // 没翻完就退出会弹出"翻译失败"，那是误报）。
+      if (translateCancelledRef.current) return;
       Toast.show({
         type: 'error',
         text2: `${t('reader_translate_failed')}: ${e.message}`,

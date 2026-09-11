@@ -15,12 +15,17 @@ async function scrapeUserPage(url, username) {
   //   第 0 个 alt=""（顶栏自己的）、第 1 个 alt="the lady of shalott weaving"（作者本人）；
   //   #main 内只有 1 个，正是作者头像。
   // 因此两道保险：①只在 #main 内找；②排除 alt 为空的那个（顶栏头像 alt 恒为空）。
+  // 【不再要求 alt 非空 —— 那会漏掉"没设置头像"的作者】
+  // 没设置头像时 AO3 会给一张默认图，它的 alt 可能为空；
+  // 原实现用 `cls.includes("icon") && !!alt` 过滤，会把这类作者的头像整批丢掉，
+  // 表现为"作者头像不显示"（用户实测反馈：没设置也应该有默认头像）。
+  // 顶栏那个"观看者自己的头像"在 #main 之外，靠上面的 scope 已经排除，不必再用 alt 区分。
+  // 实测 /users/astolat/profile：#main 内 class=icon 的 img 恰好 1 个（作者本人）。
   const scope = doc.getElementById("main") || doc;
   const iconImgs = Array.from(scope.getElementsByTagName("img") || []);
   const avatar = iconImgs.filter(img => {
     const cls = (img && typeof img.getAttribute === 'function' ? img.getAttribute("class") : "") || "";
-    const alt = img && typeof img.getAttribute === 'function' ? img.getAttribute("alt") : null;
-    return cls.split(/\s+/).includes("icon") && !!alt;
+    return cls.split(/\s+/).includes("icon");
   })[0] || null;
 
   // bio：限定 #main，并排除全局公告（admin-banner）
