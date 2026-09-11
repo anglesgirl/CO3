@@ -1,4 +1,4 @@
-import { getUsername } from '../../storage/Credentials';
+import { getRealUsername } from '../account/accountIdentity';
 import { parseWorkElements } from '../browse/fetchWorks';
 import getUrl from '../requestManager';
 
@@ -7,7 +7,7 @@ let DomParser = require('react-native-html-parser').DOMParser;
 export async function fetchBookmarks(page, username, pseud, noWebview = false) {
   let url;
   try {
-    const resolvedUsername = username || await getUsername();
+    const resolvedUsername = username || await getRealUsername();
     if (pseud) {
       url = `https://archiveofourown.org/users/${resolvedUsername}/pseuds/${encodeURIComponent(pseud)}/bookmarks?page=${page}`;
     } else {
@@ -85,19 +85,23 @@ export async function bookmark(work) {
       throw new Error(`Extraction failed. Token: ${!!token}, Pseud: ${!!pseudId}`);
     }
 
-    const formData = new FormData();
-    formData.append('authenticity_token', token);
-    formData.append('bookmark[pseud_id]', pseudId);
-    formData.append('bookmark[private]', '0');
-    formData.append('bookmark[rec]', '0');
-    formData.append('commit', 'Create');
+    // 【必须 urlencoded】RN 的 fetch 会把 FormData 序列化成 multipart/form-data，
+    // 而 AO3(Rails) 只认 application/x-www-form-urlencoded —— 用 FormData 提交会被静默忽略。
+    const params = new URLSearchParams();
+    params.append('authenticity_token', token);
+    params.append('bookmark[pseud_id]', pseudId);
+    params.append('bookmark[private]', '0');
+    params.append('bookmark[rec]', '0');
+    params.append('commit', 'Create');
 
     const postResponse = await fetch(`https://archiveofourown.org/works/${workId}/bookmarks`, {
       method: 'POST',
-      body: formData,
+      body: params.toString(),
       credentials: 'include',
       headers: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Origin': 'https://archiveofourown.org',
         'Referer': url,
         'User-Agent': userAgent,
       }

@@ -1,11 +1,14 @@
 import { fetchLoginFormFields } from './fetchAuthenticityToken';
+import { fetchAccountIdentity, clearIdentityCache, looksLikeEmail } from './accountIdentity';
 import { diagEvent } from '../../utils/diag';
 import Toast from 'react-native-toast-message';
 import {
   deleteCredsPasswd,
+  getPseud,
   hasStoredPassword,
   setCredsToken,
   setLastLogin,
+  setPseudOnly,
   setUsernameOnly,
 } from '../../storage/Credentials';
 import i18n from 'i18next';
@@ -27,8 +30,29 @@ export const handleLogin = async (username, password) => {
         await setCredsToken(sessionToken);
       } else {
         await deleteCredsPasswd();
-        await setUsernameOnly(username);
       }
+
+      // 【关键修复】存进 Credentials 的必须是 AO3 的**真实 username**，而不是登录输入值。
+      // 用邮箱登录时两者不同，而书签 / 稍后读 / 用户作品页的 URL 都是 /users/<username>/...，
+      // 存成邮箱就会 404 —— 这是作者原版账号中心一直存在的老 bug（没人报，作者也不知道）。
+      let storedName = username;
+      try {
+        clearIdentityCache();
+        const identity = await fetchAccountIdentity(true);
+        if (identity && identity.username) {
+          storedName = identity.username;
+          if (identity.pseud) await setPseudOnly(identity.pseud);
+        }
+      } catch (e) {
+        console.error('resolve real username failed:', e);
+      }
+      await setUsernameOnly(storedName);
+      diagEvent('login_step', {
+        step: 'account_identity',
+        inputIsEmail: looksLikeEmail(username).toString(),
+        resolved: String(storedName || '').slice(0, 40),
+        pseud: String((await getPseud()) || '').slice(0, 40),
+      });
 
       await setLastLogin();
       Toast.show({

@@ -12,7 +12,7 @@ import {
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import BookCard from '../../components/Library/BookCard';
 import LoadingSpinner from '../../components/History/Spinner';
-import { getUsername } from '../../storage/Credentials';
+import { getRealUsername } from '../../web/account/accountIdentity';
 import { fetchMarkedLater } from '../../web/other/markedLater';
 import EmptyState from '../../components/History/Empty';
 import { useTranslation } from 'react-i18next';
@@ -83,7 +83,7 @@ export default function ReadLaterScreen({ route }) {
   };
 
   const loadInitialEntries = async () => {
-    const username = await getUsername();
+    const username = await getRealUsername();
     if (!username) {
       setError({
         message: t('screen_bookmarks_error_not_logged_in'),
@@ -178,7 +178,7 @@ export default function ReadLaterScreen({ route }) {
       <TouchableOpacity
         style={{ marginLeft: 'auto' }}
         onPress={() =>
-          getUsername().then(usrname => {
+          getRealUsername().then(usrname => {
             InAppBrowser.open(
               `https://archiveofourown.org/users/${usrname}/readings?show=to-read`,
               {

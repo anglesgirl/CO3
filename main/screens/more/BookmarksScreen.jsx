@@ -13,7 +13,7 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
 import { fetchBookmarks } from '../../web/other/bookmarks';
 import BookCard from '../../components/Library/BookCard';
 import LoadingSpinner from '../../components/History/Spinner';
-import { getUsername } from '../../storage/Credentials';
+import { getRealUsername } from '../../web/account/accountIdentity';
 import EmptyState from '../../components/History/Empty';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
@@ -83,7 +83,7 @@ export default function BookmarksScreen({ route }) {
   const loadInitialBookmarks = async () => {
     let usrname = username;
 
-    if (!username) usrname = await getUsername();
+    if (!username) usrname = await getRealUsername();
 
     if (!usrname) {
       setError({ message: t('screen_bookmarks_error_not_logged_in') });
@@ -94,11 +94,10 @@ export default function BookmarksScreen({ route }) {
     try {
       setLoading(true);
       setCurrentPage(1);
+      // 用解析后的真实用户名（而非登录输入值）拼 URL，否则邮箱会拼出 404 地址
       const res = pseud
-        ? await fetchBookmarks(1, username, pseud)
-        : username
-        ? await fetchBookmarks(1, username)
-        : await fetchBookmarks(1);
+        ? await fetchBookmarks(1, usrname, pseud)
+        : await fetchBookmarks(1, usrname);
       setBookmarks(res || []);
       setHasMore((res?.length || 0) === PAGE_SIZE);
     } catch (error) {

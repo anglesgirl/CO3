@@ -1,4 +1,4 @@
-import { getUsername } from '../../storage/Credentials';
+import { getRealUsername } from '../account/accountIdentity';
 import { parseWorkElements } from '../browse/fetchWorks';
 import getUrl from '../requestManager';
 
@@ -7,7 +7,7 @@ let DomParser = require('react-native-html-parser').DOMParser;
 export async function fetchUserWorks(page, username, pseud) {
   let url;
   try {
-    const resolvedUsername = username || await getUsername();
+    const resolvedUsername = username || await getRealUsername();
     if (pseud) {
       url = `https://archiveofourown.org/users/${resolvedUsername}/pseuds/${encodeURIComponent(pseud)}/works?page=${page}`;
     } else {

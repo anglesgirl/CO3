@@ -1,11 +1,11 @@
-import { getUsername } from '../../storage/Credentials';
+import { getRealUsername } from '../account/accountIdentity';
 import { parseWorkElements } from '../browse/fetchWorks';
 import getUrl from '../requestManager';
 
 let DomParser = require('react-native-html-parser').DOMParser;
 
 export async function fetchMarkedLater(page){
-  const url = `https://archiveofourown.org/users/${await getUsername()}/readings?show=to-read&page=${page}`;
+  const url = `https://archiveofourown.org/users/${await getRealUsername()}/readings?show=to-read&page=${page}`;
 
   const res = await getUrl(url);
   const doc = await new DomParser().parseFromString(res, "text/html");
@@ -50,16 +50,19 @@ export async function markForLater(work) {
     const token = tokenMatch[1];
     const markUrl = `https://archiveofourown.org${action}`;
 
-    const formData = new FormData();
-    formData.append('authenticity_token', token);
-    formData.append('_method', 'patch');
+    // 【必须 urlencoded】FormData 会被 RN 发成 multipart，AO3 只认 urlencoded（同登录那个坑）
+    const params = new URLSearchParams();
+    params.append('authenticity_token', token);
+    params.append('_method', 'patch');
 
     const response = await fetch(markUrl, {
       method: 'POST',
-      body: formData,
+      body: params.toString(),
       credentials: 'include',
       headers: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Origin': 'https://archiveofourown.org',
         'Referer': url,
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       }

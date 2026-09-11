@@ -176,6 +176,31 @@ export async function setUsernameOnly(username) {
   }
 }
 
+/**
+ * AO3 的 pseud（笔名）。书签/稍后读可以用 pseud 拼 URL，
+ * 与 username 一起从登录后页面提取，避免用户手填。
+ */
+export async function setPseudOnly(pseud) {
+  if (!pseud) return;
+  try {
+    await Keychain.setGenericPassword(pseud, 'placeholder', {
+      service: 'pseud_only',
+    });
+  } catch (error) {
+    console.error('Failed to store pseud:', error);
+  }
+}
+
+export async function getPseud() {
+  try {
+    const creds = await Keychain.getGenericPassword({ service: 'pseud_only' });
+    return creds ? creds.username : null;
+  } catch (error) {
+    console.error('Failed to retrieve pseud:', error);
+    return null;
+  }
+}
+
 export async function hasStoredPassword() {
   try {
     const creds = await Keychain.getGenericPassword({ service: 'username_only' });
