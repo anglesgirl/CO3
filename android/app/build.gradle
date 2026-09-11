@@ -93,6 +93,11 @@ dependencies {
     implementation "com.facebook.react:react-android"
     implementation "androidx.work:work-runtime:2.11.2"
     implementation "androidx.lifecycle:lifecycle-process:2.11.0"
+    // ECH 传输层：Conscrypt = BoringSSL 的 JSSE provider（in-process，无外挂线程/无本地端口）
+    implementation "org.conscrypt:conscrypt-android:2.7.0"
+    // DoH：用 OkHttp 官方实现（A/AAAA + TTL 缓存 + bootstrapDnsHosts 钉 IP）
+    // 版本与 react-native 0.85.3 依赖的 okhttp 4.9.2 严格对齐，避免 4/5 混用
+    implementation "com.squareup.okhttp3:okhttp-dnsoverhttps:4.9.2"
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

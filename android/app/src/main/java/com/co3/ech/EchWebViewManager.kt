@@ -1,6 +1,5 @@
 package com.co3.ech
 
-import android.util.Base64
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -11,8 +10,9 @@ import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.uimanager.SimpleViewManager
 import com.facebook.react.uimanager.ThemedReactContext
 import com.facebook.react.uimanager.annotations.ReactProp
-import com.liar.han1meplus.EchHttpClient
-import org.json.JSONObject
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 
 class EchWebViewManager : SimpleViewManager<WebView>() {
     private var reactContext: ThemedReactContext? = null
@@ -108,60 +108,62 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
             try { com.co3.Diagnostics.event("webview_postLogin", mapOf("url" to absoluteUrl.take(80), "len" to body.length.toString(), "hasToken" to body.contains("authenticity_token").toString(), "hasLogin" to body.contains("user%5Blogin%5D").toString())) } catch(_:Exception){}
             Thread {
                 try {
-                    val dohUrl = "https://82sew1c85i.cloudflare-gateway.com/dns-query"
-                    val dohResolve = "82sew1c85i.cloudflare-gateway.com:443:162.159.36.20,162.159.36.5"
-                    // 注入 Cookie
+                    // 【改造】POST 改走 OkHttp + Conscrypt（标准语义），不再走 JNI + libcurl。
+                    // 关键收益：302 响应里的 Set-Cookie（user_credentials）不会再被中间层吃掉 —— 那正是登录失败的老根因。
+                    // Cookie 交给 cookieJar（同一 CookieManager）注入，不再手工拼 Cookie 头。
                     val cm = CookieManager.getInstance()
-                    val cookie = try { cm.getCookie(absoluteUrl) ?: "" } catch(_:Exception){ "" }
-                    val headers = mutableListOf<String>()
-                    if (cookie.isNotEmpty()) headers.add("Cookie: "+cookie)
-                    headers.add("Content-Type: application/x-www-form-urlencoded")
-                    headers.add("Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                    headers.add("Accept-Language: zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en-US;q=0.6,en;q=0.5")
-                    // HAR 成功：Referer 带 ?return_to=%2F，Origin 必带
                     // 确保 POST URL 带 return_to，否则 AO3 可能返回 200 无跳转
-                    val postUrl = if (absoluteUrl.contains("?")) absoluteUrl else if (absoluteUrl.contains("/users/login")) absoluteUrl + "?return_to=%2F" else absoluteUrl
-                    headers.add("Referer: https://archiveofourown.org/users/login?return_to=%2F")
-                    headers.add("Origin: https://archiveofourown.org")
-                    headers.add("User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                    headers.add("Upgrade-Insecure-Requests: 1")
-                    headers.add("Sec-Fetch-Dest: document")
-                    headers.add("Sec-Fetch-Mode: navigate")
-                    headers.add("Sec-Fetch-Site: same-origin")
-                    headers.add("Sec-Fetch-User: ?1")
-                    headers.add("Priority: u=0, i")
-                    val bodyBytes = body.toByteArray(Charsets.UTF_8)
-                    // ECH POST，带 body
-                    val jsonStr = EchHttpClient.request("POST", postUrl, headers.toTypedArray(), bodyBytes, dohUrl, dohResolve)
-                    val json = JSONObject(jsonStr)
-                    val statusCode = json.optInt("statusCode", 200)
-                    val bodyBase64 = json.optString("body", "")
-                    val headersJson = json.optJSONArray("headers")
+                    val postUrl = if (absoluteUrl.contains("?")) absoluteUrl
+                                  else if (absoluteUrl.contains("/users/login")) absoluteUrl + "?return_to=%2F"
+                                  else absoluteUrl
+                    // 登录 POST 用「不跟随重定向」的客户端：这样能直接读 302 与它携带的 Set-Cookie。
+                    // 若跟随了就只能看到最终 200，读不到 user_credentials（旧 JNI 库正是这么栽的）。
+                    val loginClient = EchHttp.client.newBuilder().followRedirects(false).build()
+                    val reqBuilder = Request.Builder()
+                        .url(postUrl)
+                        .post(body.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
+                        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                        .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+                        // HAR 成功样本：Referer 必带 ?return_to=%2F，Origin 必带
+                        .header("Referer", "https://archiveofourown.org/users/login?return_to=%2F")
+                        .header("Origin", "https://archiveofourown.org")
+                        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+                        .header("Upgrade-Insecure-Requests", "1")
+                        .header("Sec-Fetch-Dest", "document")
+                        .header("Sec-Fetch-Mode", "navigate")
+                        .header("Sec-Fetch-Site", "same-origin")
+                        .header("Sec-Fetch-User", "?1")
+                        .header("Priority", "u=0, i")
+                    var statusCode = 200
                     var location: String? = null
                     var isSession = false
                     // 真正的登录成功标志：user_credentials cookie（匿名会话也有 _otwarchive_session，不能用作登录判定）
                     var hasUserCredentials = false
-                    val htmlText = if (bodyBase64.isNotEmpty()) String(Base64.decode(bodyBase64, Base64.DEFAULT), Charsets.UTF_8) else ""
-                    if (headersJson != null) {
-                        for (i in 0 until headersJson.length()) {
-                            val h = headersJson.optString(i) ?: continue
-                            val idx = h.indexOf('\t')
-                            if (idx <= 0) continue
-                            val name = h.substring(0, idx)
-                            val value = h.substring(idx+1)
-                            if (name.equals("set-cookie", true)) {
-                                var fixed = value
-                                fixed = fixed.replace(Regex(";\\s*Domain=[^;]+", RegexOption.IGNORE_CASE), "")
-                                fixed = fixed.replace(Regex(";\\s*Secure", RegexOption.IGNORE_CASE), "")
-                                fixed = fixed.replace(Regex(";\\s*SameSite=[^;]+", RegexOption.IGNORE_CASE), "; SameSite=Lax")
-                                try { cm.setCookie(absoluteUrl, fixed) } catch(_:Exception){}
-                                try { cm.setCookie("https://archiveofourown.org/", fixed) } catch(_:Exception){}
-                                if (value.contains("user_credentials")) hasUserCredentials = true
-                                if (value.contains("_otwarchive_session")) isSession = true
-                            }
-                            if (name.equals("location", true) || name.equals("Location", true)) location = value
+                    var htmlText = ""
+                    loginClient.newCall(reqBuilder.build()).execute().use { resp ->
+                        statusCode = resp.code
+                        location = resp.header("Location")
+                        htmlText = resp.body?.string() ?: ""
+                        for (raw in resp.headers.values("Set-Cookie")) {
+                            // 兼容旧行为：去 Domain/Secure 后再写 CookieManager，确保 WebView 也能收下（尤其 user_credentials）
+                            var fixed = raw
+                            fixed = fixed.replace(Regex(";\\s*Domain=[^;]+", RegexOption.IGNORE_CASE), "")
+                            fixed = fixed.replace(Regex(";\\s*Secure", RegexOption.IGNORE_CASE), "")
+                            fixed = fixed.replace(Regex(";\\s*SameSite=[^;]+", RegexOption.IGNORE_CASE), "; SameSite=Lax")
+                            try { cm.setCookie(absoluteUrl, fixed) } catch (_: Exception) {}
+                            try { cm.setCookie("https://archiveofourown.org/", fixed) } catch (_: Exception) {}
+                            if (raw.contains("user_credentials")) hasUserCredentials = true
+                            if (raw.contains("_otwarchive_session")) isSession = true
                         }
                         cm.flush()
+                    }
+                    // 双保险：即使这一跳的响应头没读到，也从 CookieManager 复核登录态
+                    if (!hasUserCredentials) {
+                        hasUserCredentials = try {
+                            (cm.getCookie("https://archiveofourown.org/") ?: "").contains("user_credentials")
+                        } catch (_: Exception) {
+                            false
+                        }
                     }
                     // 诊断：POST 响应 HTML 片段（脱敏）用于定位 Session Expired 等
                     // 取 body 中的错误提示而非 head
@@ -185,8 +187,7 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                         (htmlText.contains("Wrong username or password", true) || htmlText.contains("doesn't match", true) || htmlText.contains("does not match", true) || htmlText.contains("Invalid", true))
                     try { com.co3.Diagnostics.event("webview_postLogin_result", mapOf("status" to statusCode.toString(), "hasSession" to isSession.toString(), "loginSuccess" to loginSuccess.toString(), "wrongPwd" to isWrongPassword.toString(), "location" to (location?: "").take(80))) } catch(_:Exception){}
                     android.util.Log.i("CO-ECH", "postLogin result status="+statusCode+" loginSuccess="+loginSuccess+" wrongPwd="+isWrongPassword+" location="+location)
-                    val bodyBytesDecoded = if (bodyBase64.isNotEmpty()) Base64.decode(bodyBase64, Base64.DEFAULT) else ByteArray(0)
-                    val html = String(bodyBytesDecoded, Charsets.UTF_8)
+                    val html = htmlText
                     webView.post {
                         try {
                             if (isWrongPassword) {

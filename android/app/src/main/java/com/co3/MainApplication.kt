@@ -44,8 +44,8 @@ class MainApplication : Application(), ReactApplication {
   override fun onCreate() {
     super.onCreate()
     try {
-        com.liar.han1meplus.EchHttpClient.init(this)
-        android.util.Log.i("CO-ECH", "EchHttpClient init ok, isLoaded=" + com.liar.han1meplus.EchHttpClient.isLoaded)
+        com.co3.ech.ConscryptEch.install()
+        android.util.Log.i("CO-ECH", "Conscrypt ECH init ok, ready=" + com.co3.ech.ConscryptEch.ready)
         // Hook React Native OkHttp
         try {
             val provider = Class.forName("com.facebook.react.modules.network.OkHttpClientProvider")
