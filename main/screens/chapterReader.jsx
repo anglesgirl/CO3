@@ -67,36 +67,13 @@ const removeTransJs = (i) => `
   if (t && t.parentNode) t.parentNode.removeChild(t);
 })();`;
 
-// 长段落切分：端侧吞吐约 15 token/s，一段 800+ 字符要十几秒，期间界面上
-// 几乎看不到动静，用户会以为卡死。按句子边界切成 <=CHUNK 的块，逐块翻译后
-// 拼接，这样每块几秒就能出字，观感连续。
-const TRANS_CHUNK = 320;
-const splitLongText = (text) => {
-  const s0 = String(text || '');
-  if (s0.length <= TRANS_CHUNK) return [s0];
-  const pieces = s0.split(/(?<=[.!?;:。！？；：])\s+/).filter((x) => x && x.trim());
-  const out = [];
-  let cur = '';
-  for (const p of pieces) {
-    if (cur && (cur.length + 1 + p.length) > TRANS_CHUNK) {
-      out.push(cur);
-      cur = p;
-    } else {
-      cur = cur ? `${cur} ${p}` : p;
-    }
-  }
-  if (cur) out.push(cur);
-  // 兜底：万一没有句读符号（超长单句），硬切，避免一块仍然过大
-  const hard = [];
-  for (const c of out) {
-    if (c.length <= TRANS_CHUNK * 2) {
-      hard.push(c);
-    } else {
-      for (let i = 0; i < c.length; i += TRANS_CHUNK) hard.push(c.slice(i, i + TRANS_CHUNK));
-    }
-  }
-  return hard;
-};
+// 【不再按长度切块（2026-09-11 用户明确要求）】
+// 原先为了"避免长时间静默"会把长段落按句读切成 <=320 字符的块分别翻译。
+// 但切块会**切断上下文**（指代、语气、承接关系都断），用户原话：
+// "强行切开容易翻译错乱"。
+// 现在改为：**整段一次翻译**；静默期间该段显示 ⌛，用户据此可知"正在翻译，不是卡死"。
+// 取舍：长段落要等十几秒，但译文质量优先。
+const splitLongText = (text) => [String(text || '')];
 
 // 翻译前：给每段在**下方留出空位**（占位符），用户立刻能看到"这里会出译文"，
 // 而不是盯着没有变化的原文干等。
@@ -487,7 +464,9 @@ const ChapterReader = ({
             try {
               // translateStream 的 resolve 值即该块译文；把它累积下来，
               // 下一块的流式输出就会接在这段已经写好的文字后面。
-              let part = await Hymt.translateStream(chunk, domIdx, 512);
+              // 整段不再切块，maxTokens 必须按长度给足，否则长段会被截断（hit_limit）
+              const maxTok = Math.max(512, Math.min(2048, Math.round(String(chunk).length * 1.2)));
+              let part = await Hymt.translateStream(chunk, domIdx, maxTok);
               // 质量门禁：本机 2bit 模型实测会吐截断/混入他语/重复垃圾。
               // 坏块用单段接口重试一次，仍坏就放弃该段并移除占位 —— 宁可留原文，
               // 也绝不把垃圾译文显示给用户（fail-closed）。
@@ -498,7 +477,7 @@ const ChapterReader = ({
                   out_len: String(part || '').length,
                   out_tail: String(part || '').slice(-30),
                 });
-                part = String((await Hymt.translate(chunk, 512)) || '');
+                part = String((await Hymt.translate(chunk, maxTok)) || '');
                 if (looksBrokenZh(part, chunk)) throw new Error('broken translation');
               }
               segmentPrefixRef.current[domIdx] =
