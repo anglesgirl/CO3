@@ -778,45 +778,58 @@ const ChapterReader = ({
     //   AO3 自身域名与已代理过的地址都不动。
     (function () {
       var AO3 = /(^|\\.)archiveofourown\\.org$/;
-      // Photon 只处理 .gif/.png/.jpg/.webp（官方文档明确的限制），
-      // 视频/音频/动图 PNG 会直接失败 —— 没必要让它们白跑一趟。
-      var OK_EXT = /\\.(gif|png|jpe?g|webp)($|[?#])/i;
-      // 【实测】i0/i2.wp.com 在部分运营商（移动宽带）被屏蔽，只有 i1 可用，
-      // 所以统一固定到 i1、不做 i0/i1/i2 轮换。
+      // 明显不是图片的扩展名直接跳过（wsrv.nl 支持任意图床、无需白名单，
+      // 但没必要对视频/音频/文档白跑一趟）。
+      // 【为什么用黑名单而不是白名单】很多图床链接**没有扩展名**
+      // （如 pbs.twimg.com/media/xxx?format=jpg），白名单会把它们整批漏掉。
+      var NOT_IMG = /\\.(mp4|webm|mkv|mov|mp3|m4a|ogg|wav|flac|pdf|zip|rar|7z|svg)($|[?#])/i;
       var I1 = /^i1\\.wp\\.com$/;
       var IWP = /^i[0-9]\\.wp\\.com$/;
-      function toPhoton(u) {
+      /**
+       * 代理链：按顺序尝试，前一个失败再试下一个。
+       *
+       * 【为什么不只用 Photon】i*.wp.com 是 Automattic 自己的 CDN（192.0.77.2），
+       * 用户实测：**国内移动网络大部分地区 i0/i1/i2 全部被封**，只有少部分地区可通，
+       * 所以它只能当备用，不能当主通道。
+       * wsrv.nl 走 Cloudflare（国内 CF 未墙、只是慢），且无图床白名单，作为主通道。
+       */
+      function proxyChain(u) {
+        var out = [];
         try {
           var a = document.createElement('a');
           a.href = u;
-          if (a.protocol !== 'http:' && a.protocol !== 'https:') return null;
-          if (!a.hostname || AO3.test(a.hostname)) return null;
-          if (I1.test(a.hostname)) return null;          // 已经是 i1，不动
-          if (IWP.test(a.hostname)) {
-            // 原图挂在 i0/i2 等 Photon 子域上 —— 在移动宽带上就是打不开，
-            // 只换子域即可（i0.wp.com/<host>/<path> → i1.wp.com/<host>/<path>）。
-            return 'https://i1.wp.com' + a.pathname + a.search;
+          if (a.protocol !== 'http:' && a.protocol !== 'https:') return out;
+          if (!a.hostname || AO3.test(a.hostname)) return out;
+          if (NOT_IMG.test(a.pathname + a.search)) return out;
+          // 主：wsrv.nl（Cloudflare，无白名单）
+          out.push('https://wsrv.nl/?url=' + encodeURIComponent(u));
+          // 备：Photon，固定 i1；原图在 i0/i2 上时只换子域（不额外套一层）
+          // 注意 IWP 也匹配 i1，所以必须先排除 i1，否则第二个候选等于原图本身
+          if (IWP.test(a.hostname) && !I1.test(a.hostname)) {
+            out.push('https://i1.wp.com' + a.pathname + a.search);
+          } else if (!I1.test(a.hostname) && !/\\.wp\\.com$/.test(a.hostname)) {
+            out.push('https://i1.wp.com/' + a.hostname + a.pathname + a.search);
           }
-          if (/\\.wp\\.com$/.test(a.hostname)) return null;  // 其它 wp.com 图床不二次代理
-          if (!OK_EXT.test(a.pathname + a.search)) return null;
-          return 'https://i1.wp.com/' + a.hostname + a.pathname + a.search;
-        } catch (e) { return null; }
+        } catch (e) {}
+        return out;
       }
       function retry(img) {
-        var src = img.getAttribute('src') || img.src || '';
-        var alt = toPhoton(src);
-        if (!alt) return;
-        img.setAttribute('data-co3-orig', src);
-        img.src = alt;
+        if (!img.getAttribute('data-co3-orig')) {
+          img.setAttribute('data-co3-orig', img.getAttribute('src') || img.src || '');
+        }
+        var orig = img.getAttribute('data-co3-orig');
+        if (!orig) return;
+        var cands = proxyChain(orig);
+        var tried = img.__co3Tried || 0;
+        if (tried >= cands.length) return;      // 代理链已试尽，放弃（显示坏图）
+        img.__co3Tried = tried + 1;
+        img.src = cands[tried];
       }
       function hook(img) {
-        if (!img || img.__co3Photon) return;
-        img.__co3Photon = 1;
-        img.addEventListener('error', function () {
-          if (img.__co3PhotonTried) return;   // 每个图只回退一次，避免来回抖动
-          img.__co3PhotonTried = 1;
-          retry(img);
-        });
+        if (!img || img.__co3Proxy) return;
+        img.__co3Proxy = 1;
+        img.__co3Tried = 0;
+        img.addEventListener('error', function () { retry(img); });
         // 注入可能晚于图片失败 —— error 事件已经错过，用 complete 且 naturalWidth=0 补判
         if (img.complete && img.naturalWidth === 0) retry(img);
       }
