@@ -1,3 +1,4 @@
+import { openEchBrowser } from '../../components/EchBrowser';
 import React, { useState, useEffect, useContext, useCallback } from 'react';
 import {
   View,
@@ -83,13 +84,7 @@ export default function AccountCenter() {
   const openOfficial = async (url) => {
     try {
       if (await InAppBrowser.isAvailable()) {
-        await InAppBrowser.open(url, {
-          showTitle: true,
-          toolbarColor: currentTheme.backgroundColor,
-          enableUrlBarHiding: true,
-          enableDefaultShare: false,
-          forceCloseOnRedirection: false,
-        });
+        await openEchBrowser(url);
       } else {
         await Linking.openURL(url);
       }

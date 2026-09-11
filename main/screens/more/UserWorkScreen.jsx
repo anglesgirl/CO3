@@ -1,3 +1,4 @@
+import { openEchBrowser } from '../../components/EchBrowser';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -172,34 +173,9 @@ export default function UserWorkScreen({ route }) {
         style={{ marginLeft: 'auto' }}
         onPress={() => {
           username
-            ? InAppBrowser.open(`https://archiveofourown.org/users/${username}/works`, {
-              // Android
-              showTitle: true,
-              toolbarColor: currentTheme.backgroundColor,
-              enableUrlBarHiding: true,
-              enableDefaultShare: true,
-              forceCloseOnRedirection: false,
-              // iOS
-              dismissButtonStyle: 'close',
-              preferredBarTintColor: currentTheme.backgroundColor,
-              preferredControlTintColor: 'white',
-            })
+            ? openEchBrowser(`https://archiveofourown.org/users/${username}/works`)
             : getUsername().then(usrname => {
-              InAppBrowser.open(
-                `https://archiveofourown.org/users/${usrname}/works`,
-                {
-                  // Android
-                  showTitle: true,
-                  toolbarColor: currentTheme.backgroundColor,
-                  enableUrlBarHiding: true,
-                  enableDefaultShare: true,
-                  forceCloseOnRedirection: false,
-                  // iOS
-                  dismissButtonStyle: 'close',
-                  preferredBarTintColor: currentTheme.backgroundColor,
-                  preferredControlTintColor: 'white',
-                },
-              );
+              openEchBrowser(`https://archiveofourown.org/users/${usrname}/works`);
             });
         }}
       >

@@ -141,6 +141,8 @@
   "screen_preferences_translate_engine_auto": "Online free (MT)",
   "screen_preferences_translate_engine_device": "On-device AI (HyMT)",
   "common_cancel": "Cancel",
+  "ech_browser_unsupported": "In-app encrypted browsing is unavailable on this platform",
+  "ech_browser_fail_closed": "Blocked from opening in the system browser to avoid leaking the plaintext domain",
   "screen_preferences_translate_download": "Download model (Wi-Fi recommended)",
   "screen_preferences_translate_downloading": "Downloading",
   "screen_preferences_translate_model_ready": "Model ready",

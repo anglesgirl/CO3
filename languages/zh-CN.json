@@ -141,6 +141,8 @@
   "screen_preferences_translate_engine_auto": "在线免费（机翻）",
   "screen_preferences_translate_engine_device": "本机 AI（混元 HyMT）",
   "common_cancel": "取消",
+  "ech_browser_unsupported": "当前平台不支持应用内加密浏览",
+  "ech_browser_fail_closed": "为保护隐私，已阻止改用系统浏览器打开（那会暴露明文域名）",
   "screen_preferences_translate_download": "下载模型（建议 Wi-Fi）",
   "screen_preferences_translate_downloading": "下载中",
   "screen_preferences_translate_model_ready": "模型就绪",

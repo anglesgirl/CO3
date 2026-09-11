@@ -1,3 +1,4 @@
+import { openEchBrowser } from '../components/EchBrowser';
 import React, {
   useCallback,
   useEffect,
@@ -912,19 +913,9 @@ const ChapterInfoScreen = ({ route }) => {
   }, []);
 
   const handleOpenWebView = useCallback(() => {
-    InAppBrowser.open('https://archiveofourown.org/works/' + workId, {
-      // Android
-      showTitle: true,
-      toolbarColor: currentTheme.backgroundColor,
-      enableUrlBarHiding: true,
-      enableDefaultShare: true,
-      forceCloseOnRedirection: false,
-      // iOS
-      dismissButtonStyle: 'close',
-      preferredBarTintColor: currentTheme.backgroundColor,
-      preferredControlTintColor: 'white',
-    });
-    }, [workId]);
+    // AO3 走应用内 ECH 浏览器：交给系统浏览器会绕开 ECH，SNI 明文外泄
+    openEchBrowser('https://archiveofourown.org/works/' + workId);
+  }, [workId]);
 
   const handleBookmark = async () => {
     setMenuVisible(false);

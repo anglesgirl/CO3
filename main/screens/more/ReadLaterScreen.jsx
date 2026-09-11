@@ -1,3 +1,4 @@
+import { openEchBrowser } from '../../components/EchBrowser';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -179,21 +180,7 @@ export default function ReadLaterScreen({ route }) {
         style={{ marginLeft: 'auto' }}
         onPress={() =>
           getRealUsername().then(usrname => {
-            InAppBrowser.open(
-              `https://archiveofourown.org/users/${usrname}/readings?show=to-read`,
-              {
-                // Android
-                showTitle: true,
-                toolbarColor: currentTheme.backgroundColor,
-                enableUrlBarHiding: true,
-                enableDefaultShare: true,
-                forceCloseOnRedirection: false,
-                // iOS
-                dismissButtonStyle: 'close',
-                preferredBarTintColor: currentTheme.backgroundColor,
-                preferredControlTintColor: 'white',
-              },
-            );
+            openEchBrowser(`https://archiveofourown.org/users/${usrname}/readings?show=to-read`);
           })
         }
       >

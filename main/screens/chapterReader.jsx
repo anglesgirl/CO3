@@ -1,3 +1,4 @@
+import { openEchBrowser } from '../components/EchBrowser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { looksBrokenZh } from '../web/translate/deviceTranslate';
 import { diagEvent } from '../utils/diag';
@@ -1093,35 +1094,13 @@ const ChapterReader = ({
           onOpenWindow={ (syntheticEvent) => {
             const { nativeEvent } = syntheticEvent;
             const { targetUrl } = nativeEvent
-            InAppBrowser.open(targetUrl, {
-              // Android
-              showTitle: true,
-              toolbarColor: currentTheme.backgroundColor,
-              enableUrlBarHiding: true,
-              enableDefaultShare: true,
-              forceCloseOnRedirection: false,
-              // iOS
-              dismissButtonStyle: 'close',
-              preferredBarTintColor: currentTheme.backgroundColor,
-              preferredControlTintColor: 'white',
-            });
+            openEchBrowser(targetUrl);
           }}
           onShouldStartLoadWithRequest={(req) => {
             const url = req.url ?? '';
             if (url === 'about:blank' || url.startsWith('about:blank#')) return true;
             if (url.startsWith('http://') || url.startsWith('https://')) {
-              InAppBrowser.open(url, {
-                // Android
-                showTitle: true,
-                toolbarColor: currentTheme.backgroundColor,
-                enableUrlBarHiding: true,
-                enableDefaultShare: true,
-                forceCloseOnRedirection: false,
-                // iOS
-                dismissButtonStyle: 'close',
-                preferredBarTintColor: currentTheme.backgroundColor,
-                preferredControlTintColor: 'white',
-              }).catch((e) => {
+              openEchBrowser(url).catch((e) => {
                 Toast.show({
                   type: "error",
                   text1: t('reader_error_opening_link'),

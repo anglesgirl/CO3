@@ -1,3 +1,4 @@
+import { openEchBrowser } from '../../components/EchBrowser';
 import React, { useContext, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -194,11 +195,11 @@ const LoginScreen = ({ route }) => {
   };
 
   const openForgotPassword = () => {
-    Linking.openURL('https://archiveofourown.org/users/password/new');
+    openEchBrowser('https://archiveofourown.org/users/password/new');
   };
 
   const openGetInvited = () => {
-    Linking.openURL('https://archiveofourown.org/invite_requests');
+    openEchBrowser('https://archiveofourown.org/invite_requests');
   };
 
   if (validating) {

@@ -1,3 +1,4 @@
+import { openEchBrowser } from '../../components/EchBrowser';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -194,18 +195,7 @@ export default function BookmarksScreen({ route }) {
           // 用它拼 URL 必定 404（作者原版的老 bug）。
           const usrname = await getRealUsername();
           if (!usrname) return;
-          InAppBrowser.open(`https://archiveofourown.org/users/${usrname}/bookmarks`, {
-            // Android
-            showTitle: true,
-            toolbarColor: currentTheme.backgroundColor,
-            enableUrlBarHiding: true,
-            enableDefaultShare: true,
-            forceCloseOnRedirection: false,
-            // iOS
-            dismissButtonStyle: 'close',
-            preferredBarTintColor: currentTheme.backgroundColor,
-            preferredControlTintColor: 'white',
-          });
+          openEchBrowser(`https://archiveofourown.org/users/${usrname}/bookmarks`);
         }}
       >
         <Icon name="link" size={24} color={currentTheme.textColor} />

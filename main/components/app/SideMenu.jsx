@@ -1,3 +1,4 @@
+import { openEchBrowser } from '../EchBrowser';
 import React, { useEffect, useState } from 'react';
 import {
   Linking,
@@ -350,7 +351,7 @@ const SideMenu = ({
                       { backgroundColor: '#22c55e' },
                     ]}
                     onPress={() =>
-                      Linking.openURL('https://archiveofourown.org/donate')
+                      openEchBrowser('https://archiveofourown.org/donate')
                     }
                   >
                     <Text style={styles.supportButtonText}>AO3</Text>

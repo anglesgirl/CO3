@@ -27,6 +27,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 
 import SideMenu from './components/app/SideMenu';
+import { EchBrowserHost } from './components/EchBrowser';
 import { database } from './storage/DatabaseManager';
 import { HistoryDAO } from './storage/dao/HistoryDAO';
 import { WorkDAO } from './storage/dao/WorkDAO';
@@ -325,6 +326,9 @@ const AppWrapper = () => {
           <WebviewFetcher />
         </Host>
         <CustomToast currentTheme={currentTheme} />
+        {/* 应用内 ECH 浏览器宿主：AO3 等 ECH 保护域名一律走它打开，
+            绝不交给系统浏览器 —— 否则 TLS 握手绕开 ECH，SNI 明文外泄。 */}
+        <EchBrowserHost />
       </AppContext.Provider>
     </View>
   );
