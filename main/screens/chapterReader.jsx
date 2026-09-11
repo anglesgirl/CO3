@@ -768,13 +768,12 @@ const ChapterReader = ({
   }, [hasPreviousChapter, onPreviousChapter, isIncognitoMode, scrollProgress, workId, chapterID, progressDAO]);
 
   const injectedJavaScript = `
-    // ── 外链图片兜底：加载失败时改用 WordPress Photon（i1.wp.com）代理重试 ──
+    // ── 外链图片兜底：加载失败时改用图片代理（wsrv.nl）重试 ──
     // 用途：文章里引用的站外图常因防盗链（Referer 校验）或被墙而打不开，
-    //      Photon 由其服务端去取原图，能绕开 Referer 限制。
-    // 【只在加载失败时回退，不做无条件替换】实测 Photon 有白名单：
-    //   Wikipedia → 400、imgur → 429、未知域名 → 400；
-    //   无条件替换会把本来能看的图也弄坏。
-    // 安全性：代理请求的 SNI 是 i1.wp.com，不是被墙的原域名；
+    //      由代理服务端去取原图，能绕开 Referer 限制。
+    // 【只在加载失败时回退，不做无条件替换】—— 无条件替换会把本来能看的图也弄坏
+    // （Photon 那类代理还有白名单：Wikipedia→400、imgur→429，这是当初只留 wsrv.nl 的原因之一）。
+    // 安全性：代理请求的 SNI 是 wsrv.nl，不是被墙的原图域名；
     //   AO3 自身域名与已代理过的地址都不动。
     (function () {
       var AO3 = /(^|\\.)archiveofourown\\.org$/;
@@ -783,15 +782,16 @@ const ChapterReader = ({
       // 【为什么用黑名单而不是白名单】很多图床链接**没有扩展名**
       // （如 pbs.twimg.com/media/xxx?format=jpg），白名单会把它们整批漏掉。
       var NOT_IMG = /\\.(mp4|webm|mkv|mov|mp3|m4a|ogg|wav|flac|pdf|zip|rar|7z|svg)($|[?#])/i;
-      var I1 = /^i1\\.wp\\.com$/;
-      var IWP = /^i[0-9]\\.wp\\.com$/;
       /**
-       * 代理链：按顺序尝试，前一个失败再试下一个。
+       * 图片代理链：按顺序尝试，前一个失败再试下一个。
        *
-       * 【为什么不只用 Photon】i*.wp.com 是 Automattic 自己的 CDN（192.0.77.2），
-       * 用户实测：**国内移动网络大部分地区 i0/i1/i2 全部被封**，只有少部分地区可通，
-       * 所以它只能当备用，不能当主通道。
-       * wsrv.nl 走 Cloudflare（国内 CF 未墙、只是慢），且无图床白名单，作为主通道。
+       * 【当前只放 wsrv.nl】它走 Cloudflare（国内 CF 未墙，只是慢），开源图片代理、
+       * **没有图床白名单**（Photon 会拒 Wikipedia/imgur 等）。
+       * 之前放过 Photon（i1.wp.com）作备用，但实测它走 Automattic 自己的 CDN
+       * （192.0.77.2），国内移动网络**大部分地区 i0/i1/i2 全部被封**，备用价值接近零，
+       * 只会多一次无谓请求，因此移除。
+       *
+       * 保留"链"的结构：将来要换、或要加自建代理（如自己的 CF Worker）只改这一处。
        */
       function proxyChain(u) {
         var out = [];
@@ -801,15 +801,9 @@ const ChapterReader = ({
           if (a.protocol !== 'http:' && a.protocol !== 'https:') return out;
           if (!a.hostname || AO3.test(a.hostname)) return out;
           if (NOT_IMG.test(a.pathname + a.search)) return out;
-          // 主：wsrv.nl（Cloudflare，无白名单）
+          // 走 HTTPS：wsrv.nl 支持，且 HTTPS 下 SNI 只是 wsrv.nl（不暴露原图域名），
+          // 而 HTTP 是明文，Host 头与路径都裸奔、也更容易被干扰。
           out.push('https://wsrv.nl/?url=' + encodeURIComponent(u));
-          // 备：Photon，固定 i1；原图在 i0/i2 上时只换子域（不额外套一层）
-          // 注意 IWP 也匹配 i1，所以必须先排除 i1，否则第二个候选等于原图本身
-          if (IWP.test(a.hostname) && !I1.test(a.hostname)) {
-            out.push('https://i1.wp.com' + a.pathname + a.search);
-          } else if (!I1.test(a.hostname) && !/\\.wp\\.com$/.test(a.hostname)) {
-            out.push('https://i1.wp.com/' + a.hostname + a.pathname + a.search);
-          }
         } catch (e) {}
         return out;
       }
