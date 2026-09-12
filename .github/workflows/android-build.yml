@@ -73,8 +73,7 @@ jobs:
           APK_DIR=android/app/build/outputs/apk/release  # highlight
           mv $APK_DIR/app-arm64-v8a-release.apk   CO3-Android-arm64-v8a.apk  # highlight
           mv $APK_DIR/app-armeabi-v7a-release.apk CO3-Android-armeabi-v7a.apk  # highlight
-          mv $APK_DIR/app-x86-release.apk          CO3-Android-x86.apk  # highlight
-          mv $APK_DIR/app-x86_64-release.apk       CO3-Android-x86_64.apk  # highlight
+          ls CO3-Android-*.apk  # highlight
 
       - name: Upload APK artifacts  # highlight
         uses: actions/upload-artifact@v4
