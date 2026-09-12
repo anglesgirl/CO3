@@ -30,8 +30,19 @@ import Echproxy
 @objc(EchProxyModule)
 class EchProxyModule: NSObject, RCTBridgeModule {
 
+  private static var didLogRegistration = false
+
   @objc
-  static func moduleName() -> String! { "EchProxy" }
+  static func moduleName() -> String! {
+    // 这个方法被调用 = ObjC 注册宏（EchProxyBridge.m 的 RCT_EXTERN_REMAP_MODULE）生效了。
+    // iOS 上「ECH 从来没起来」的头号原因就是这里从没被调用 —— JS 侧看到的是
+    // NativeModules.EchProxy === undefined，报不出原因。所以这里必须留一条日志。
+    if !didLogRegistration {
+      didLogRegistration = true
+      EchLogger.log("native_module_registered")
+    }
+    return "EchProxy"
+  }
 
   @objc
   static func requiresMainQueueSetup() -> Bool { false }
@@ -65,10 +76,17 @@ class EchProxyModule: NSObject, RCTBridgeModule {
     reject: @escaping RCTPromiseRejectBlock
   ) {
     ioQueue.async {
+      let t0 = Date()
+      EchLogger.log("native_start_call", [
+        "portArg": port.intValue,
+        "doh": doh,
+        "ips": ipList,
+      ])
       // 代理已经在跑（JS 重载后常见）：直接复用已知端口，不要报
       // "echproxy already running" —— 那会让 JS 永远拿不到 base。
       let known = Self.knownPort()
       if known != 0, Self.isListening(port: known) {
+        EchLogger.log("native_start_reuse_port", ["port": known])
         resolve(known)
         return
       }
@@ -108,8 +126,19 @@ class EchProxyModule: NSObject, RCTBridgeModule {
 
       if ok {
         Self.rememberPort(chosenPort)
+        EchLogger.log("native_start_ok", [
+          "port": Int(chosenPort),
+          "ms": Int(Date().timeIntervalSince(t0) * 1000),
+        ])
+        // 起完立刻把原生状态（含 ECHAccepted= / DoH 解析结果）记下来
+        EchLogger.log("native_status_after_start", ["status": EchproxyLastStatus()])
         resolve(chosenPort)
       } else {
+        EchLogger.log("native_start_fail", [
+          "port": Int(chosenPort),
+          "ms": Int(Date().timeIntervalSince(t0) * 1000),
+          "err": err?.localizedDescription ?? "unknown error",
+        ])
         reject("ECH_START_FAILED", err?.localizedDescription ?? "unknown error", err)
       }
     }
@@ -147,6 +176,7 @@ class EchProxyModule: NSObject, RCTBridgeModule {
       var err: NSError?
       let ok = EchproxyStop(&err)
       Self.rememberPort(0)   // 端口已失效，别再复用
+      EchLogger.log("native_stop", ["ok": ok, "err": err?.localizedDescription ?? ""])
       if ok {
         resolve(true)
       } else {
@@ -190,8 +220,10 @@ class EchProxyModule: NSObject, RCTBridgeModule {
       // on failure it returns an empty string with error set.
       let result = EchproxyFetchTxt(doh, name, &err)
       if let e = err {
+        EchLogger.log("native_fetch_txt_fail", ["doh": doh, "name": name, "err": e.localizedDescription])
         reject("ECH_TXT_FAILED", e.localizedDescription, e)
       } else {
+        EchLogger.log("native_fetch_txt_ok", ["doh": doh, "name": name, "len": result.count])
         resolve(result)
       }
     }
