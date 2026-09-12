@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+
 /**
  * 本机 AI 模型下载管理：魔搭（国内快）优先，HuggingFace 兜底。
  *
@@ -62,7 +64,11 @@ export async function downloadModel(
 ) {
   const { Hymt } = NativeModules;
   if (!Hymt || typeof Hymt.downloadModel !== 'function') {
-    throw new Error('本机模块不可用（需新版 App）');
+    throw new Error(
+      Platform.OS === 'ios'
+        ? '本机 AI 仅 Android 可用'
+        : '本机模块不可用（需安装新版 App）',
+    );
   }
   const spec = DEVICE_MODELS[which] || DEVICE_MODELS[DEFAULT_DEVICE_MODEL];
   const basePath = await Hymt.modelPath();

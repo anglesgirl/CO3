@@ -611,5 +611,6 @@
   "screen_account_center_request_busy": "AO3 is busy right now — please try again in a few minutes",
   "screen_account_center_request_failed": "Submission failed",
   "screen_account_center_request_email": "Email to request for",
-  "screen_account_center_query_email": "Email to look up"
+  "screen_account_center_query_email": "Email to look up",
+  "screen_preferences_translate_hint_ios": "Uses online translation — free, no setup (requires internet). Takes effect after reopening the chapter."
 }

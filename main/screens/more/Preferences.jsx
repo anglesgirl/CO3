@@ -8,6 +8,7 @@ import {
   Text,
   TouchableOpacity,
   View,
+  Platform,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { WebView } from 'react-native-webview';
@@ -615,10 +616,15 @@ const PreferencesScreen = ({ route }) => {
                 label={t('screen_preferences_translate_engine_auto')}
                 value="auto"
               />
-              <CustomDropdown.Item
-                label={t('screen_preferences_translate_engine_device')}
-                value="device"
-              />
+              {/* ⚠️ 「本机 AI」只在 Android 展示：它依赖 Android 专有的端侧运行时
+                  （libai-chat.so + Hymt 原生模块），iOS 上不存在对应实现。
+                  iOS 走在线翻译（见 freeTranslation 的降级链）。 */}
+              {Platform.OS !== 'ios' && (
+                <CustomDropdown.Item
+                  label={t('screen_preferences_translate_engine_device')}
+                  value="device"
+                />
+              )}
             </CustomDropdown>
             {translateEngine === 'device' && (
               <View style={{ marginTop: 12 }}>
