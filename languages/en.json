@@ -598,5 +598,12 @@
   "screen_account_center_send": "Send",
   "screen_account_center_reset_sent": "Request sent — check your inbox (and spam)",
   "screen_account_center_reset_no_account": "No account found for this email",
-  "screen_account_center_reset_failed": "Failed to send, please retry"
+  "screen_account_center_reset_failed": "Failed to send, please retry",
+  "screen_account_center_submit": "Submit",
+  "screen_account_center_register_done": "Registered — check your email for the activation link",
+  "screen_account_center_register_failed": "Registration failed (invalid invite or rejected fields)",
+  "screen_account_center_activate_done": "Activated — you can log in now",
+  "screen_account_center_activate_already": "This account is already activated",
+  "screen_account_center_activate_failed": "Activation failed (link expired or blocked by a challenge)",
+  "screen_account_center_use_browser": "Open in browser instead"
 }

@@ -21,6 +21,7 @@ import {
 import { getRealUsername, fetchAccountIdentity } from '../../web/account/accountIdentity';
 import { queryInviteQueue } from '../../web/account/inviteQueue';
 import { requestPasswordReset } from '../../web/account/passwordReset';
+import { fetchRegisterForm, submitRegister, activateByLink, AO3 } from '../../web/account/inviteFlow';
 import getUrl from '../../web/requestManager';
 import { openEchBrowser, onEchLoginSuccess } from '../../components/EchBrowser';
 
@@ -63,6 +64,14 @@ export default function AccountCenter() {
   const [pwEmail, setPwEmail] = useState('');
   const [pwSending, setPwSending] = useState(false);
   const [pwResult, setPwResult] = useState(null);
+  // 注册：字段与值都来自 AO3 注册页的实际表单（不写死字段名）
+  const [regFields, setRegFields] = useState([]);
+  const [regValues, setRegValues] = useState({});
+  const [regLoading, setRegLoading] = useState(false);
+  const [regSubmitting, setRegSubmitting] = useState(false);
+  const [regResult, setRegResult] = useState(null);
+  const [actLoading, setActLoading] = useState(false);
+  const [actResult, setActResult] = useState(null);
 
   const refresh = useCallback(async () => {
     setValidating(true);
@@ -142,6 +151,84 @@ export default function AccountCenter() {
       setQueryResult({ ok: false, position: null, inQueue: false, message: e.message });
     } finally {
       setQuerying(false);
+    }
+  };
+
+  /** 把用户粘的东西整理成一个可用的邀请链接（支持只粘 token 本身）。 */
+  const normalizeInviteUrl = (raw) => {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    const m = s.match(/invitation_token=([^&\s]+)/);
+    if (m) return `${AO3}/users/new?invitation_token=${m[1]}`;
+    if (!s.startsWith('http')) return `${AO3}/users/new?invitation_token=${s}`;
+    return s;
+  };
+
+  const regFallbackUrl = () => normalizeInviteUrl(inviteLink);
+
+  /**
+   * 应用内拉取注册页 → 按页面真实字段渲染窗体。
+   * 用户要求："不走网页模式，而是app本体，这样没那么大割裂感"；
+   * 只有 app 真的做不到（例如人机验证）才回退浏览器。
+   */
+  const doLoadRegisterForm = async () => {
+    const url = normalizeInviteUrl(inviteLink);
+    if (!url) return Alert.alert(t('screen_account_center_paste_empty'));
+    setRegLoading(true);
+    setRegResult(null);
+    setRegFields([]);
+    try {
+      const r = await fetchRegisterForm(url.replace(/^.*invitation_token=/, ''));
+      if (!r.ok) {
+        setRegResult({ ok: false, message: r.message });
+        return;
+      }
+      setRegFields(r.fields);
+      setRegResult(null);
+    } catch (e) {
+      setRegResult({ ok: false, message: e.message });
+    } finally {
+      setRegLoading(false);
+    }
+  };
+
+  const doSubmitRegister = async () => {
+    setRegSubmitting(true);
+    setRegResult(null);
+    try {
+      const url = normalizeInviteUrl(inviteLink);
+      const form = await fetchRegisterForm(url.replace(/^.*invitation_token=/, ''));
+      if (!form.ok) {
+        setRegResult({ ok: false, message: form.message });
+        return;
+      }
+      const r = await submitRegister({
+        action: form.action,
+        token: form.token,
+        fields: form.fields,
+        values: regValues,
+      });
+      setRegResult(r);
+    } catch (e) {
+      setRegResult({ ok: false, message: e.message });
+    } finally {
+      setRegSubmitting(false);
+    }
+  };
+
+  /** 激活：链接本身是 GET，应用内直接请求（不打开任何浏览器）。 */
+  const doActivate = async () => {
+    const url = activateLink.trim();
+    if (!url) return Alert.alert(t('screen_account_center_paste_empty'));
+    setActLoading(true);
+    setActResult(null);
+    try {
+      const r = await activateByLink(url);
+      setActResult(r);
+    } catch (e) {
+      setActResult({ ok: false, message: e.message });
+    } finally {
+      setActLoading(false);
     }
   };
 
@@ -375,11 +462,9 @@ export default function AccountCenter() {
                 </Text>
               ) : null}
             </View>
-            <Card
-              title={t('screen_account_center_invite')}
-              desc={t('screen_account_center_invite_desc')}
-              onPress={() => open('https://archiveofourown.org/invite_requests')}
-            />
+            {/* 「获取邀请」原来跳网页 /invite_requests —— 下面的「邀请排队」区块
+                已经用 app 本体展示了同一份数据（总人数/发放速度/我的名次），
+                再跳一次网页属于重复，删掉。 */}
 
         <View
           style={[
@@ -411,21 +496,75 @@ export default function AccountCenter() {
               autoCorrect={false}
             />
             <TouchableOpacity
-              onPress={() => {
-                let url = inviteLink.trim();
-                if (!url) return Alert.alert(t('screen_account_center_paste_empty'));
-                const m = url.match(/invitation_token=([^&\s]+)/);
-                if (m) url = `https://archiveofourown.org/users/new?invitation_token=${m[1]}`;
-                else if (!url.startsWith('http')) {
-                  url = `https://archiveofourown.org/users/new?invitation_token=${url}`;
-                }
-                open(url);
-              }}
+              onPress={doLoadRegisterForm}
               style={[styles.btnSmall, { backgroundColor: currentTheme.primaryColor }]}
             >
-              <Text style={styles.btnText}>{t('screen_account_center_open')}</Text>
+              {regLoading ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.btnText}>{t('screen_account_center_open')}</Text>
+              )}
             </TouchableOpacity>
           </View>
+
+          {/* 注册表单：字段按 AO3 页面实际内容动态生成（不写死字段名） */}
+          {regFields.length > 0 ? (
+            <View style={{ marginTop: 10 }}>
+              {regFields.map((f) => (
+                <TextInput
+                  key={f.name}
+                  placeholder={f.label}
+                  placeholderTextColor={currentTheme.placeholderColor}
+                  value={regValues[f.name] || ''}
+                  onChangeText={(v) => setRegValues((s) => ({ ...s, [f.name]: v }))}
+                  secureTextEntry={f.type === 'password'}
+                  style={[
+                    styles.input,
+                    {
+                      borderColor: currentTheme.borderColor,
+                      color: currentTheme.textColor,
+                      marginTop: 8,
+                    },
+                  ]}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              ))}
+              <TouchableOpacity
+                onPress={doSubmitRegister}
+                style={[
+                  styles.btnSmall,
+                  { backgroundColor: currentTheme.primaryColor, marginTop: 10, alignSelf: 'flex-start' },
+                ]}
+              >
+                {regSubmitting ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.btnText}>{t('screen_account_center_submit')}</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {regResult ? (
+            <Text style={{ color: currentTheme.textColor, marginTop: 8, fontSize: 12 }}>
+              {regResult.ok
+                ? t('screen_account_center_register_done')
+                : regResult.detail || t('screen_account_center_register_failed')}
+            </Text>
+          ) : null}
+
+          {/* 兜底：app 提交拿不到结果（人机验证/令牌失效等）时，才提供"改用浏览器打开" */}
+          {regResult && !regResult.ok ? (
+            <TouchableOpacity
+              onPress={() => open(regFallbackUrl())}
+              style={{ marginTop: 8, alignSelf: 'flex-start' }}
+            >
+              <Text style={{ color: currentTheme.primaryColor, fontSize: 12 }}>
+                {t('screen_account_center_use_browser')}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
 
         <View
@@ -458,16 +597,44 @@ export default function AccountCenter() {
               autoCorrect={false}
             />
             <TouchableOpacity
-              onPress={() => {
-                const url = activateLink.trim();
-                if (!url) return Alert.alert(t('screen_account_center_paste_empty'));
-                open(url);
-              }}
+              onPress={doActivate}
               style={[styles.btnSmall, { backgroundColor: currentTheme.primaryColor }]}
             >
-              <Text style={styles.btnText}>{t('screen_account_center_open')}</Text>
+              {actLoading ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.btnText}>{t('screen_account_center_open')}</Text>
+              )}
             </TouchableOpacity>
           </View>
+
+          {/* 激活链接本身就是一个 GET（访问即生效），app 内直接请求即可，
+              不需要窗体，也不需要打开浏览器。 */}
+          {actResult ? (
+            <Text style={{ color: currentTheme.textColor, marginTop: 8, fontSize: 12 }}>
+              {actResult.ok
+                ? actResult.message === 'already'
+                  ? t('screen_account_center_activate_already')
+                  : t('screen_account_center_activate_done')
+                : t('screen_account_center_activate_failed')}
+            </Text>
+          ) : null}
+
+          {/* 兜底：链路里出现人机验证等 app 处理不了的情况，才让用户走浏览器 */}
+          {actResult && !actResult.ok ? (
+            <TouchableOpacity
+              onPress={() => {
+                const u = activateLink.trim();
+                if (!u) return Alert.alert(t('screen_account_center_paste_empty'));
+                open(u);
+              }}
+              style={{ marginTop: 8, alignSelf: 'flex-start' }}
+            >
+              <Text style={{ color: currentTheme.primaryColor, fontSize: 12 }}>
+                {t('screen_account_center_use_browser')}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
 
         <Text style={[styles.section, { color: currentTheme.textColor }]}>

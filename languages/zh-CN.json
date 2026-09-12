@@ -598,5 +598,12 @@
   "screen_account_center_send": "发送",
   "screen_account_center_reset_sent": "已受理：请查收重置邮件（也可能在垃圾箱）",
   "screen_account_center_reset_no_account": "该邮箱没有对应账号",
-  "screen_account_center_reset_failed": "发送失败，请稍后重试"
+  "screen_account_center_reset_failed": "发送失败，请稍后重试",
+  "screen_account_center_submit": "提交",
+  "screen_account_center_register_done": "注册成功，请到邮箱查收激活邮件",
+  "screen_account_center_register_failed": "注册没成功（可能是邀请码无效或字段不合规）",
+  "screen_account_center_activate_done": "激活成功，现在可以登录了",
+  "screen_account_center_activate_already": "这个账号已经激活过了",
+  "screen_account_center_activate_failed": "激活没成功（链接可能已失效或被验证拦截）",
+  "screen_account_center_use_browser": "改用浏览器打开"
 }
