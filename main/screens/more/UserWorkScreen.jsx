@@ -13,7 +13,7 @@ import {
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import BookCard from '../../components/Library/BookCard';
 import LoadingSpinner from '../../components/History/Spinner';
-import { getUsername } from '../../storage/Credentials';
+import { getRealUsername } from '../../web/account/accountIdentity';
 import { fetchUserWorks } from '../../web/user/userWorks';
 import EmptyState from '../../components/History/Empty';
 import { useNavigation } from '@react-navigation/native';
@@ -172,11 +172,13 @@ export default function UserWorkScreen({ route }) {
       <TouchableOpacity
         style={{ marginLeft: 'auto' }}
         onPress={() => {
-          username
-            ? openEchBrowser(`https://archiveofourown.org/users/${username}/works`)
-            : getUsername().then(usrname => {
-              openEchBrowser(`https://archiveofourown.org/users/${usrname}/works`);
-            });
+          // 一律用真实用户名：username(route.params) 与存储值都可能是脏数据 ——
+          // 历史版本取错过人，把陌生作者名写进了存储（真机实测显示成 LoveSimmer），
+          // 拿它拼 /users/<x>/works 会打开别人的作品页。
+          getRealUsername().then((usrname) => {
+            if (!usrname) return;
+            openEchBrowser(`https://archiveofourown.org/users/${usrname}/works`);
+          });
         }}
       >
         <Icon name="link" size={24} color={currentTheme.textColor} />

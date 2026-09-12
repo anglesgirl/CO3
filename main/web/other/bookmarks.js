@@ -37,7 +37,11 @@ export async function fetchBookmarks(page, username, pseud, noWebview = false) {
     let workElements = Array.from(olElements[0].getElementsByTagName("li"))
       .filter(li => li.getAttribute("class")?.includes("bookmark blurb"));
 
-    if (workElements.length === 0) {
+    if (workElements.length === 0 && olElements[1]) {
+      // 【必须判 olElements[1]】AO3 书签页通常有两个 <ol>（你收藏的 + 收藏了你的），
+      // 但地址指错人 / 未登录 / 页面结构变化时可能只有一个 —— 直接取下标 1 会抛
+      // "Cannot read property 'getElementsByTagName' of undefined"，
+      // 在界面上就表现为"加载书签失败"（真机实测过）。
       workElements = Array.from(olElements[1].getElementsByTagName("li"))
         .filter(li => li.getAttribute("class")?.includes("bookmark blurb"));
     }

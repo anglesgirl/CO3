@@ -87,16 +87,26 @@ export async function getRealUsername() {
     stored = null;
   }
 
-  if (stored && !looksLikeEmail(stored)) return stored;
-
-  const identity = await fetchAccountIdentity(true);
+  // 【为什么不能只看"是不是邮箱"】历史版本取错过人 —— 把首页推荐位里**别人的**
+  // /users/<别人>/pseuds/<别人> 当成了当前登录用户，并把那个名字**写进了存储**。
+  // 这种脏数据既不是邮箱、也不是空，用「stored && !looksLikeEmail(stored)」判断
+  // 会被原样返回 → 账号中心/书签/稍后读一直显示的是**别人**
+  //（真机实测：显示成了 LoveSimmer，而当前账号其实是 anglesya）。
+  //
+  // 所以这里改为**与页面权威值核对**：取值来源固定在"只有当前登录用户才有"的链接上
+  //（/users/X/preferences|subscriptions|readings）——见 fetchAccountIdentity。
+  // 拿到权威值就以它为准并回写存储；确实取不到（未登录/网络失败）才退回旧值，
+  // 保证功能不会因为取不到而不可用。
+  // 性能：fetchAccountIdentity 非 force 调用走内存缓存，一次会话只请求一次。
+  const identity = await fetchAccountIdentity().catch(() => null);
   if (identity && identity.username) {
-    try {
-      await setUsernameOnly(identity.username);
-      if (identity.pseud) await setPseudOnly(identity.pseud);
-    } catch (_) {}
+    if (stored !== identity.username || (identity.pseud && stored === identity.username)) {
+      try {
+        await setUsernameOnly(identity.username);
+        if (identity.pseud) await setPseudOnly(identity.pseud);
+      } catch (_) {}
+    }
     return identity.username;
   }
-  // 取不到就退回旧值：宁可让上层试一次，也不要直接让功能不可用
   return stored;
 }
