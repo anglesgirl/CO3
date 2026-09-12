@@ -63,5 +63,23 @@ class MainApplication : Application(), ReactApplication {
     // 渲染第一个 <Image> 时 Fresco.newDraweeControllerBuilder() 为 null → 启动即崩
     // （2026-09-11 真机实测：java.lang.NullPointerException at ReactImageManager.createViewInstance）。
     loadReactNative(this)
+
+    // 【再兜一道】上面那条只保证"不会因为提前加载 native 而跳过 loadReactNative"。
+    // 真机仍在冷启动时偶发同一个崩溃，栈顶是 Fabric 的**预分配**路径：
+    //   PreAllocateViewMountItem.execute → SurfaceMountingManager.preallocateView
+    //   → ReactImageManager.createViewInstance → Fresco.newDraweeControllerBuilder 为 null
+    // 即：首帧预分配视图抢在了 Fresco 初始化之前（loadReactNative 内部才会初始化它）。
+    // 这里显式确认一次：已初始化则完全空操作（不覆盖 RN 自己的 pipeline 配置），
+    // 未初始化才补上；整个判断包在 try 里，任何异常都不影响启动。
+    try {
+      val frescoClass = Class.forName("com.facebook.drawee.backends.pipeline.Fresco")
+      val hasInit = frescoClass.getMethod("hasBeenInitialized").invoke(null) as? Boolean ?: false
+      if (!hasInit) {
+        frescoClass.getMethod("initialize", android.content.Context::class.java).invoke(null, this)
+        android.util.Log.i("CO-ECH", "Fresco was not initialized; initialized in Application")
+      }
+    } catch (t: Throwable) {
+      android.util.Log.w("CO-ECH", "Fresco ensure failed: " + t.message)
+    }
   }
 }
