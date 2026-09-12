@@ -69,6 +69,48 @@ jobs:
           test -f ios/EchProxyBridge/EchProxyBridge.m \
             || { echo "::error::ios/EchProxyBridge/EchProxyBridge.m missing — EchProxy 原生模块不会注册"; exit 1; }
 
+      # ⚠️ 同样必须排在 `pod install` 之前：Podfile 引用了本地 pod HymtBridge，
+      # 而它依赖这里生成的 llama.xcframework。
+      - name: Cache llama.xcframework
+        id: llama-cache
+        uses: actions/cache@v4
+        with:
+          path: ios/HymtBridge/llama.xcframework
+          # 版本号绑定到固定 commit：换了 commit 就得重编，避免用到旧的二进制
+          key: llama-xcframework-${{ runner.os }}-2a3005c-ios-device-v1
+
+      - name: Build llama.cpp iOS framework
+        if: steps.llama-cache.outputs.cache-hit != 'true'
+        run: |
+          # 固定到已在本机验证过的 commit（Q4_K_M 能正常加载并翻译）
+          LLAMA_COMMIT=2a3005c
+          git clone --filter=blob:none https://github.com/ggml-org/llama.cpp.git /tmp/llama.cpp
+          cd /tmp/llama.cpp
+          git fetch --depth 1 origin "$LLAMA_COMMIT"
+          git checkout "$LLAMA_COMMIT"
+          # 只编 iOS 真机切片 —— 跳过模拟器/macOS/tvOS/visionOS，CI 时间省一大半。
+          # （侧载测试只需真机；要是以后要跑模拟器，把 ios-sim 加回来并把 podspec 的
+          #   HEADER_SEARCH_PATHS 一起补上。）
+          ./build-xcframework.sh ios-device
+          mkdir -p "$GITHUB_WORKSPACE/ios/HymtBridge"
+          rm -rf "$GITHUB_WORKSPACE/ios/HymtBridge/llama.xcframework"
+          cp -R build-apple/llama.xcframework "$GITHUB_WORKSPACE/ios/HymtBridge/"
+
+      - name: Verify on-device translation bridge is present
+        run: |
+          # 防回归（与 ECH 那次同样的坑）：少了注册宏 .m，App 照样能编译能链接，
+          # 但运行时 NativeModules.Hymt === undefined → iOS 上"本机 AI"永远不可用。
+          test -f ios/HymtBridge/HymtBridge.m \
+            || { echo "::error::ios/HymtBridge/HymtBridge.m missing — Hymt 原生模块不会注册"; exit 1; }
+          test -d ios/HymtBridge/llama.xcframework \
+            || { echo "::error::llama.xcframework missing — pod install 会失败"; exit 1; }
+          # 确认 xcframework 里确实有 iOS 真机切片
+          test -d ios/HymtBridge/llama.xcframework/ios-arm64 \
+            || { echo "::error::llama.xcframework 缺少 ios-arm64 切片"; exit 1; }
+          grep -q "RCT_EXTERN_REMAP_MODULE(Hymt" ios/HymtBridge/HymtBridge.m \
+            || { echo "::error::HymtBridge.m 里没有 Hymt 模块注册宏"; exit 1; }
+          echo "✅ HymtBridge 注册宏与 llama.xcframework 就位"
+
       - name: Setup Ruby (for CocoaPods)
         uses: ruby/setup-ruby@v1
         with:

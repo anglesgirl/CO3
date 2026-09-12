@@ -612,5 +612,5 @@
   "screen_account_center_request_failed": "提交没成功",
   "screen_account_center_request_email": "要申请的邮箱",
   "screen_account_center_query_email": "要查询的邮箱",
-  "screen_preferences_translate_hint_ios": "使用在线翻译，免费且无需配置（需要联网）。重进章节生效。"
+  "screen_preferences_translate_hint_ios": "在线免费零配置；本机 AI 免额度但需先下载模型（约 1.1GB）。重进章节生效。"
 }

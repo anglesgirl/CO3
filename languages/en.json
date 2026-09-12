@@ -125,7 +125,7 @@
   "screen_preferences_translate_mode_off": "Original only",
   "screen_preferences_translate_mode_bilingual": "Bilingual (original + Chinese)",
   "screen_preferences_translate_mode_translated": "Chinese only",
-  "screen_preferences_translate_hint": "Online free needs no setup; on-device AI is quota-free but requires a ~550MB model download. Reopen chapter to apply.",
+  "screen_preferences_translate_hint": "Online is free and needs no setup; on-device AI saves quota but needs a ~550MB model download. Takes effect on reopening a chapter.",
   "screen_preferences_translate_engine": "Translation engine",
   "screen_preferences_translate_engine_auto": "Online free (MT)",
   "screen_preferences_translate_engine_device": "On-device AI (HyMT)",
@@ -612,5 +612,5 @@
   "screen_account_center_request_failed": "Submission failed",
   "screen_account_center_request_email": "Email to request for",
   "screen_account_center_query_email": "Email to look up",
-  "screen_preferences_translate_hint_ios": "Uses online translation — free, no setup (requires internet). Takes effect after reopening the chapter."
+  "screen_preferences_translate_hint_ios": "Online is free and needs no setup; on-device AI saves quota but needs a ~1.1GB model download. Takes effect on reopening a chapter."
 }

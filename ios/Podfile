@@ -24,6 +24,13 @@ target 'CO3' do
   # iOS 用这套 Go 代理（跨平台复用同一份 Go 代码，见 ech/ 目录）。
   pod 'EchProxyBridge', :path => './EchProxyBridge'
 
+  # 本地桥接 pod：端侧翻译（llama.cpp + HY-MT1.5-1.8B 标准量化 GGUF）。
+  # 依赖 CI 在 `pod install` **之前**生成的 llama.xcframework ——
+  # 本地直接 pod install 而没有先跑构建脚本的话，这里会找不到 xcframework。
+  # iOS 的模型与 Android 不同源：Android 用官方私有量化（2bit/1.25bit，体积省一半），
+  # iOS 用标准 Q4_K_M（llama.cpp 主线不认识私有量化类型）。详见 ios/HymtBridge/HymtLlama.mm。
+  pod 'HymtBridge', :path => './HymtBridge'
+
   use_react_native!(
     :path => config[:reactNativePath],
     # An absolute path to your application root.

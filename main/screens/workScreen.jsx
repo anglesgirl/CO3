@@ -13,6 +13,7 @@ import {
   FlatList,
   Linking,
   Modal,
+  NativeModules,
   Platform,
   Pressable,
   RefreshControl,
@@ -604,17 +605,16 @@ const ChapterInfoScreen = ({ route }) => {
    */
   const handleTranslateLongPress = () => {
     if (translatingMeta) return;
-    // ⚠️ 「本机 AI」只列在 Android：它依赖 Android 专有的端侧运行时
-    //（libai-chat.so + Hymt 原生模块），iOS 上根本没有对应实现。
-    // 在 iOS 上列出来只会让用户点完拿到"本机模块不可用"—— 这不是版本问题，
-    // 是这个平台没有，所以干脆不展示（iOS 走在线翻译，见 freeTranslation 的降级链）。
+    // 「本机 AI」需要有原生 Hymt 模块（Android 用官方 libai-chat.so，iOS 用自编的
+    // llama.cpp + Metal）。这里用**运行时检测**而不是写死平台判断：哪个平台缺实现
+    // 就不显示（避免用户点完拿到"本机模块不可用"这种误导提示），补齐后自动出现。
     const engineOptions = [
       {
         text: t('screen_preferences_translate_engine_auto'),
         onPress: () => runTranslateWithEngine('auto'),
       },
     ];
-    if (Platform.OS !== 'ios') {
+    if (NativeModules.Hymt) {
       engineOptions.push({
         text: t('screen_preferences_translate_engine_device'),
         onPress: () => runTranslateWithEngine('device'),
