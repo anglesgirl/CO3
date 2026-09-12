@@ -442,4 +442,17 @@ export async function echSelfTest() {
 // Warm up the proxy as soon as this module is imported (app startup).
 initEch();
 
+// ky 风格兼容垫片：老调用方（requestManager / fetchComments /
+// fetchAuthenticityToken）都用 `ky.get(url, opts).text()`，这里把 get/post
+// 转到上面的 echFetch（走本地 ECH 代理，fail-closed）。
+// 注意：之前重构时把 `const echKy = ky.create(...)` 整段删了，却留下了
+// `export default echKy`，导致模块加载期 ReferenceError → 启动 0.42s 闪退。
+const echKy = {
+  get: (url, options = {}) => echFetch(url, { ...options, method: 'GET' }),
+  post: (url, options = {}) => echFetch(url, { ...options, method: 'POST' }),
+  put: (url, options = {}) => echFetch(url, { ...options, method: 'PUT' }),
+  delete: (url, options = {}) => echFetch(url, { ...options, method: 'DELETE' }),
+  head: (url, options = {}) => echFetch(url, { ...options, method: 'HEAD' }),
+};
+
 export default echKy;
