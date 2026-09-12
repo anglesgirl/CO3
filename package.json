@@ -12,7 +12,8 @@
     "web": "webpack serve --mode development --config webpack.config.js",
     "build:web": "webpack --mode production --config webpack.config.js",
     "electron": "npm run build:web && electron .",
-    "electron:dev": "webpack serve --mode development --config webpack.config.js"
+    "electron:dev": "webpack serve --mode development --config webpack.config.js",
+    "postinstall": "node scripts/fix-asyncstorage-lazy.js"
   },
   "dependencies": {
     "@expo/vector-icons": "^14.1.0",
