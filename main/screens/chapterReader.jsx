@@ -1,6 +1,6 @@
 import { openEchBrowser } from '../components/EchBrowser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { looksBrokenZh } from '../web/translate/deviceTranslate';
+import { looksBrokenZh, hymtInit } from '../web/translate/deviceTranslate';
 import { diagEvent } from '../utils/diag';
 import {
   Animated,
@@ -459,7 +459,7 @@ const ChapterReader = ({
         let initOk = false;
         try {
           initOk = await Hymt.isReady();
-          if (!initOk) initOk = await Hymt.init();
+          if (!initOk) initOk = await hymtInit(Hymt);
         } catch (e) {
           initOk = false;
         }

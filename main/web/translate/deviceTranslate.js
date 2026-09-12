@@ -14,11 +14,27 @@ import { diagEvent } from '../../utils/diag';
 
 let initDone = false;
 
+/**
+ * ⚠️ 两端的原生方法名**不同**，这里统一：
+ *   Android（HymtModule.kt）：Hymt.init()
+ *   iOS（HymtModule.swift）：Hymt.setup()
+ * 为什么 iOS 不叫 init —— RN 的 RCT_EXTERN_REMAP_METHOD(init, ...) 宏在展开时
+ * 会撞上 ObjC 的 init 家族语法，实测直接报 "expected ')'" / "missing '@end'"
+ * 让整个注册文件编不过。所以 iOS 侧公开名就叫 setup，差异在 JS 这一层抹平。
+ */
+export async function hymtInit(Hymt) {
+  const fn = Hymt.init || Hymt.setup;
+  if (typeof fn !== 'function') {
+    throw new Error('本机模块不完整（缺 init/setup）');
+  }
+  return await fn.call(Hymt);
+}
+
 async function ensureInit() {
   const { Hymt } = NativeModules;
   if (!Hymt) throw new Error('本机模块不可用');
   if (initDone && (await Hymt.isReady())) return;
-  const ok = await Hymt.init();
+  const ok = await hymtInit(Hymt);
   if (!ok) throw new Error('模型加载失败');
   initDone = true;
 }

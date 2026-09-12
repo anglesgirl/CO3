@@ -30,10 +30,13 @@ RCT_EXTERN_METHOD(modelPathWithResolver:(RCTPromiseResolveBlock)resolve
 RCT_EXTERN_METHOD(isReadyWithResolver:(RCTPromiseResolveBlock)resolve
                   withRejecter:(RCTPromiseRejectBlock)reject)
 
-// JS 侧调 Hymt.init()，但 Swift 侧的选择器是 setupWithResolver:（见 HymtModule.swift 的注释：
-// ObjC 把 initWith... 当 init 家族，会引入 ARC 语义问题），所以这里做名字重映射。
-RCT_EXTERN_REMAP_METHOD(init, setupWithResolver:(RCTPromiseResolveBlock)resolve
-                      withRejecter:(RCTPromiseRejectBlock)reject)
+// ⚠️ 这里**不能**用 RCT_EXTERN_REMAP_METHOD(init, ...) 把它映射成 JS 的 init：
+// 宏展开会撞上 ObjC 的 init 家族语法，直接报
+//   "error: expected ')'" / "missing '@end'"（实测过，整个文件编不过）。
+// 所以 iOS 侧公开的方法名就是 setup，由 JS 层（deviceTranslate.js）兼容两端差异：
+// Android 的原生方法叫 init，iOS 叫 setup。
+RCT_EXTERN_METHOD(setupWithResolver:(RCTPromiseResolveBlock)resolve
+                  withRejecter:(RCTPromiseRejectBlock)reject)
 
 // @objc(translate:maxTokens:withResolver:withRejecter:)
 RCT_EXTERN_METHOD(translate:(NSString *)text
