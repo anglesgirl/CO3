@@ -14,7 +14,14 @@
 import Foundation
 import React
 
-@objc(Hymt)
+// ⚠️ ObjC 类名必须是 HymtModule，不能写成 @objc(Hymt)。
+// 因为 HymtBridge.m 里的注册宏是 RCT_EXTERN_REMAP_MODULE(Hymt, HymtModule, ...)：
+//   · 第一个参数 Hymt  = JS 侧看到的模块名（NativeModules.Hymt，这个才要和 JS 对齐）
+//   · 第二个参数 HymtModule = 要找的 ObjC 类符号
+// 若这里写成 @objc(Hymt)，生成的符号是 _OBJC_CLASS_$_Hymt，与宏要找的
+// _OBJC_CLASS_$_HymtModule 对不上，链接期直接报
+//   "Undefined symbols: _OBJC_CLASS_$_HymtModule ... symbol(s) not found"。
+@objc(HymtModule)
 class HymtModule: RCTEventEmitter {
 
     // MARK: - 与 Android 逐字一致的常量
