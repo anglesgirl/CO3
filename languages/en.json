@@ -608,5 +608,6 @@
   "screen_account_center_use_browser": "Open in browser instead",
   "screen_account_center_queue_invited": "Invitation sent ({{date}}) — check your inbox and spam",
   "screen_account_center_queue_not_found": "No record for this email — not in the queue",
-  "screen_account_center_queue_can_resend": "Sent over 24h ago — you can resend it on AO3"
+  "screen_account_center_queue_can_resend": "Sent over 24h ago — you can resend it on AO3",
+  "screen_account_center_queue_eta": "Estimated: {{eta}}"
 }

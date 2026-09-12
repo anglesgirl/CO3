@@ -126,6 +126,14 @@ export async function queryInviteQueue(email) {
   const rateM = flat.match(/sending out\s+([\d,]+)\s+invitations every\s+(\d+)\s+hours/i);
   const rate = rateM ? `${rateM[1]} / ${rateM[2]}h` : null;
 
+  // 状态四：**正在排队**（真机响应原文）
+  //   "You are currently number 263273 on our waiting list!
+  //    At our current rate, you should receive an invitation on or around: September 25, 2026."
+  // 名次由上面的 position 取（<strong> 会被 flatten 换成空格，所以能直接匹配到数字）；
+  // 这里额外解析"预计什么时候轮到"，排队的人最关心的就是这个。
+  const etaM = flat.match(/should receive an invitation on or around:?\s*([^.!]+)/i);
+  const eta = etaM ? etaM[1].trim() : null;
+
   // 状态三：**邀请已经发出**（真机响应原文）
   //   "Your invitation was emailed to this address on 2024-09-06."
   //   "Because your invitation was sent more than 24 hours ago, you can have your invitation resent."
@@ -152,6 +160,7 @@ export async function queryInviteQueue(email) {
     invited,
     invitedOn,
     canResend,
+    eta,
     position,
     total,
     rate,

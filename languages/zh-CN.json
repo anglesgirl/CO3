@@ -608,5 +608,6 @@
   "screen_account_center_use_browser": "改用浏览器打开",
   "screen_account_center_queue_invited": "邀请已发出（{{date}}）—— 请查收邮件，注意垃圾箱",
   "screen_account_center_queue_not_found": "这个邮箱查不到记录，没有在排队",
-  "screen_account_center_queue_can_resend": "该邀请已超过 24 小时，可以在 AO3 上重发"
+  "screen_account_center_queue_can_resend": "该邀请已超过 24 小时，可以在 AO3 上重发",
+  "screen_account_center_queue_eta": "预计发放：{{eta}}"
 }

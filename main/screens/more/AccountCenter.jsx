@@ -708,6 +708,11 @@ export default function AccountCenter() {
                       ? t('screen_account_center_queue_in_list')
                       : t('screen_account_center_queue_not_in_list')}
                   </Text>
+                  {queryResult.eta ? (
+                    <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>
+                      {t('screen_account_center_queue_eta', { eta: queryResult.eta })}
+                    </Text>
+                  ) : null}
                   {queryResult.canResend ? (
                     <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>
                       {t('screen_account_center_queue_can_resend')}
