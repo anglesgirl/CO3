@@ -156,9 +156,9 @@
   "screen_account_center_open": "打开",
   "screen_account_center_paste_empty": "请先粘贴链接",
   "screen_account_center_queue_title": "邀请排队",
-  "screen_account_center_queue_total": "当前排队人数：{{total}}",
+  "screen_account_center_queue_total": "当前等待名单：{{total}} 人",
   "screen_account_center_queue_mine": "我的位置：{{pos}}",
-  "screen_account_center_queue_unknown": "—（未匹配到官方文案，点击刷新）",
+  "screen_account_center_queue_unknown": "未知",
   "screen_account_center_queue_not_queried": "未查询（提交邀请后显示）",
   "screen_account_center_queue_refresh": "刷新排队",
   "screen_account_center_queue_email": "输入申请邮箱查询",
@@ -588,5 +588,6 @@
   "component_rule_edit_regex": "使用正则表达式",
   "component_rule_edit_case_sensitive_label": "区分大小写",
   "component_rule_edit_regex_label": "正则表达式",
-  "screen_account_center_queue_failed": "读取失败，点下方「刷新排队」重试（未登录时读不到）"
+  "screen_account_center_queue_failed": "读取失败，点下方「刷新」重试",
+  "screen_account_center_queue_rate": "发放速度：{{rate}}（官方数据）"
 }

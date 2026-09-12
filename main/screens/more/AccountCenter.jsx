@@ -52,7 +52,7 @@ export default function AccountCenter() {
   const [user, setUser] = useState('');
   const [logged, setLogged] = useState(false);
   const [validating, setValidating] = useState(true);
-  const [queue, setQueue] = useState({ total: null, myPos: null, loading: false, failed: false });
+  const [queue, setQueue] = useState({ total: null, rate: null, loading: false, failed: false });
   const [email, setEmail] = useState('');
   const [inviteLink, setInviteLink] = useState('');
   const [activateLink, setActivateLink] = useState('');
@@ -84,16 +84,22 @@ export default function AccountCenter() {
     try {
       const html = await getUrl('https://archiveofourown.org/invite_requests', false);
       const text = typeof html === 'string' ? html : '';
-      const m1 = text.match(/There are\s+(\d[\d,]*)\s+people\s+in\s+the\s+queue/i);
-      const m3 = text.match(/you\s+are\s+number\s*(\d+)/i);
+      // AO3 的实际文案（2026-09 用真实账号在服务器实测，不是猜的）：
+      //   "There are currently 262463 people on the waiting list."
+      //   "We are sending out 5000 invitations every 6 hours."
+      // 旧正则写的是 "... people in the queue" —— AO3 早已改词成 waiting list，
+      // 所以永远匹配不到，表现为"排队人数获取失败"。
+      // 另外 AO3 **不再提供"你排第几"**（页面里没有 you are number X），
+      // 相应的个人位置展示已去掉，改为显示发放速度。
+      const m1 =
+        text.match(/There are currently\s+([\d,]+)\s+people on the waiting list/i) ||
+        text.match(/There are\s+([\d,]+)\s+people\s+(?:in|on)\s+the\s+(?:queue|waiting list)/i);
+      const m2 = text.match(/sending out\s+([\d,]+)\s+invitations every\s+(\d+)\s+hours/i);
       setQueue({
-        total: m1 ? m1[1] : null,
-        myPos: m3 ? m3[1] : null,
+        total: m1 ? m1[1].replace(/,/g, '') : null,
+        rate: m2 ? `${m2[1]} / ${m2[2]}h` : null,
         loading: false,
-        // 两条文案都没匹配到 = 页面结构/语言变了、或未登录看不到排队信息，
-        // 这与"队伍里 0 人"完全是两回事，要分开显示（用户反馈"底部排队没显示"，
-        // 之前无论哪种情况都只显示一个占位符，看不出到底是失败还是没人排队）。
-        failed: !m1 && !m3,
+        failed: !m1,
       });
     } catch (e) {
       setQueue((s) => ({ ...s, loading: false, failed: true }));
@@ -369,11 +375,11 @@ export default function AccountCenter() {
                       total: queue.total ?? t('screen_account_center_queue_unknown'),
                     })}
               </Text>
-              <Text style={{ color: currentTheme.textColor, marginTop: 6 }}>
-                {t('screen_account_center_queue_mine', {
-                  pos: queue.myPos ?? t('screen_account_center_queue_not_queried'),
-                })}
-              </Text>
+              {queue.rate ? (
+                <Text style={{ color: currentTheme.textColor, marginTop: 6 }}>
+                  {t('screen_account_center_queue_rate', { rate: queue.rate })}
+                </Text>
+              ) : null}
               <TouchableOpacity
                 onPress={fetchQueue}
                 style={[styles.btn, { backgroundColor: currentTheme.primaryColor }]}

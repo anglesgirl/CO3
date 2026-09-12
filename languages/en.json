@@ -156,9 +156,9 @@
   "screen_account_center_open": "Open",
   "screen_account_center_paste_empty": "Please paste a link first",
   "screen_account_center_queue_title": "Invite queue",
-  "screen_account_center_queue_total": "People in queue: {{total}}",
+  "screen_account_center_queue_total": "Waiting list: {{total}} people",
   "screen_account_center_queue_mine": "Your position: {{pos}}",
-  "screen_account_center_queue_unknown": "— (not matched, tap refresh)",
+  "screen_account_center_queue_unknown": "unknown",
   "screen_account_center_queue_not_queried": "not queried (shown after you apply)",
   "screen_account_center_queue_refresh": "Refresh queue",
   "screen_account_center_queue_email": "Enter your email to check",
@@ -588,5 +588,6 @@
   "component_rule_edit_regex": "Use regular expression",
   "component_rule_edit_case_sensitive_label": "Match Case",
   "component_rule_edit_regex_label": "Regex",
-  "screen_account_center_queue_failed": "Failed to read; tap Refresh below to retry (unavailable when logged out)"
+  "screen_account_center_queue_failed": "Failed to read; tap Refresh below to retry",
+  "screen_account_center_queue_rate": "Sending: {{rate}}"
 }
