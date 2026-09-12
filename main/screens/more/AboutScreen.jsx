@@ -49,7 +49,7 @@ export default function AboutScreen({ route }) {
               })
             }
           >
-            <Image style={styles.image} source={require('../../res/CO3.png')} />
+            <Image style={styles.image} source={require('../../res/xiaoya.png')} />
           </TouchableOpacity>
           <View
             style={[
