@@ -280,11 +280,9 @@ export default function AccountCenter() {
         <Text style={[styles.section, { color: currentTheme.textColor }]}>
           {t('screen_account_center_quick')}
         </Text>
-        <Card
-          title={t('screen_account_center_my_bookmarks')}
-          desc={t('screen_account_center_my_bookmarks_desc')}
-          onPress={() => openMine('bookmarks')}
-        />
+        {/* 原「我的书签」入口已移除：外层「更多 → 书签」就是同一个功能，重复；
+            而且这里的实现还出过 bug（用户反馈"快捷方式里的书签有 bug"，直接移除）。
+            只保留稍后阅读（外层没有等价入口）。 */}
         <Card
           title={t('screen_account_center_my_readlater')}
           desc={t('screen_account_center_my_readlater_desc')}
@@ -295,11 +293,17 @@ export default function AccountCenter() {
           desc={t('screen_account_center_forgot_desc')}
           onPress={() => open('https://archiveofourown.org/users/password/new')}
         />
-        <Card
-          title={t('screen_account_center_invite')}
-          desc={t('screen_account_center_invite_desc')}
-          onPress={() => open('https://archiveofourown.org/invite_requests')}
-        />
+        {/* 以下都是"还没有账号/正准备注册"才需要的：获取邀请、用邀请链接注册、
+            激活链接、邀请排队。**已登录时全部隐藏** —— 已经有账号的人看这些毫无意义，
+            还会把页面塞满（用户反馈："在已经登录的情况下，下面那些邀请注册，激活，
+            都是没意义的，未登录才需要"）。 */}
+        {!logged && (
+          <>
+            <Card
+              title={t('screen_account_center_invite')}
+              desc={t('screen_account_center_invite_desc')}
+              onPress={() => open('https://archiveofourown.org/invite_requests')}
+            />
 
         <View
           style={[
@@ -459,6 +463,8 @@ export default function AccountCenter() {
             </>
           )}
         </View>
+          </>
+        )}
 
         <TouchableOpacity onPress={refresh} style={{ marginTop: 20, alignItems: 'center' }}>
           <Text style={{ color: currentTheme.primaryColor }}>
