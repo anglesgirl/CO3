@@ -609,5 +609,12 @@
   "screen_account_center_queue_invited": "邀请已发出（{{date}}）—— 请查收邮件，注意垃圾箱",
   "screen_account_center_queue_not_found": "这个邮箱查不到记录，没有在排队",
   "screen_account_center_queue_can_resend": "该邀请已超过 24 小时，可以在 AO3 上重发",
-  "screen_account_center_queue_eta": "预计发放：{{eta}}"
+  "screen_account_center_queue_eta": "预计发放：{{eta}}",
+  "screen_account_center_request_invite": "申请邀请（加入排队）",
+  "screen_account_center_request_invite_desc": "应用内提交，不跳网页。被官方拒绝（繁忙）时会自动暂停 5 分钟，不会自动重试。",
+  "screen_account_center_request_btn": "提交申请",
+  "screen_account_center_request_wait": "暂停 {{time}}",
+  "screen_account_center_request_done": "已提交，请到邮箱查收邀请邮件",
+  "screen_account_center_request_busy": "官方繁忙，已自动暂停 5 分钟 —— 避免给服务器加压",
+  "screen_account_center_request_failed": "提交没成功"
 }

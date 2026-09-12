@@ -22,6 +22,7 @@ import { getRealUsername, fetchAccountIdentity } from '../../web/account/account
 import { queryInviteQueue } from '../../web/account/inviteQueue';
 import { requestPasswordReset } from '../../web/account/passwordReset';
 import { fetchRegisterForm, submitRegister, activateByLink, AO3 } from '../../web/account/inviteFlow';
+import { submitInviteRequest, getCooldownLeft } from '../../web/account/inviteRequest';
 import getUrl from '../../web/requestManager';
 import { openEchBrowser, onEchLoginSuccess } from '../../components/EchBrowser';
 
@@ -72,6 +73,35 @@ export default function AccountCenter() {
   const [regResult, setRegResult] = useState(null);
   const [actLoading, setActLoading] = useState(false);
   const [actResult, setActResult] = useState(null);
+  // 申请邀请（排队）—— 含"被繁忙后自我暂停"的冷却状态
+  const [reqEmail, setReqEmail] = useState('');
+  const [reqSubmitting, setReqSubmitting] = useState(false);
+  const [reqResult, setReqResult] = useState(null);
+  const [reqCooldownLeft, setReqCooldownLeft] = useState(0);
+
+  /** 毫秒 → "4分32秒"（冷却倒计时用）。 */
+  const formatCountdown = (ms) => {
+    const total = Math.max(0, Math.ceil(Number(ms || 0) / 1000));
+    const m = Math.floor(total / 60);
+    return m > 0 ? `${m}分${total % 60}秒` : `${total}秒`;
+  };
+
+  // 进页面先读一次冷却状态 —— 冷却写在本地存储里，**重启 app 也绕不过去**
+  //（否则用户重启就能立刻再提交，自我限流形同虚设）。
+  useEffect(() => {
+    getCooldownLeft().then((left) => setReqCooldownLeft(left));
+  }, []);
+
+  // 冷却期间每秒递减；归零后按钮自动恢复
+  useEffect(() => {
+    if (reqCooldownLeft <= 0) return undefined;
+    const timer = setInterval(() => {
+      setReqCooldownLeft((prev) => (prev - 1000 > 0 ? prev - 1000 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+    // 只在"从可提交变为冷却中"时建立定时器，避免每秒重建
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reqCooldownLeft > 0]);
 
   const refresh = useCallback(async () => {
     setValidating(true);
@@ -213,6 +243,32 @@ export default function AccountCenter() {
       setRegResult({ ok: false, message: e.message });
     } finally {
       setRegSubmitting(false);
+    }
+  };
+
+  /**
+   * 提交"申请邀请"。**只提交一次，绝不做任何自动重试。**
+   * 用户明确要求："提交被繁忙以后，直接帮官方暂停，需要等至少5分钟以后再提交，
+   * 要不然我们就成了攻击官方的工具了。"
+   * 所以这里既没有 while 也没有递归 —— 何时再试由人决定，不由代码替用户决定。
+   */
+  const doSubmitInviteRequest = async () => {
+    const emailClean = reqEmail.trim();
+    if (!emailClean || !emailClean.includes('@')) {
+      Alert.alert(t('screen_account_center_queue_bad_email'));
+      return;
+    }
+    if (reqCooldownLeft > 0) return; // 冷却期内连请求都不发
+    setReqSubmitting(true);
+    setReqResult(null);
+    try {
+      const r = await submitInviteRequest(emailClean);
+      setReqResult(r);
+      if (r.waitMs) setReqCooldownLeft(r.waitMs);
+    } catch (e) {
+      setReqResult({ ok: false, message: e.message });
+    } finally {
+      setReqSubmitting(false);
     }
   };
 
@@ -634,6 +690,78 @@ export default function AccountCenter() {
                 {t('screen_account_center_use_browser')}
               </Text>
             </TouchableOpacity>
+          ) : null}
+        </View>
+
+        {/* 申请邀请（加入排队）—— 应用内提交，但**严格自我限流**。
+            用户明确要求："提交被繁忙以后，直接帮官方暂停，需要等至少5分钟以后再提交，
+            要不然我们就成了攻击官方的工具了。"
+            所以：只发一次请求、绝不自动重试、被拒后按钮禁用并显示倒计时
+            （冷却写在本地存储里，重启 app 也绕不过去）。 */}
+        <View
+          style={[
+            styles.queueBox,
+            {
+              backgroundColor: currentTheme.cardBackground,
+              borderColor: currentTheme.borderColor,
+              marginBottom: 10,
+            },
+          ]}
+        >
+          <Text style={{ color: currentTheme.textColor, fontWeight: '600' }}>
+            {t('screen_account_center_request_invite')}
+          </Text>
+          <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>
+            {t('screen_account_center_request_invite_desc')}
+          </Text>
+          <View style={{ flexDirection: 'row', marginTop: 10 }}>
+            <TextInput
+              placeholder={t('screen_account_center_queue_email')}
+              placeholderTextColor={currentTheme.placeholderColor}
+              value={reqEmail}
+              onChangeText={setReqEmail}
+              editable={reqCooldownLeft === 0}
+              style={[
+                styles.input,
+                { borderColor: currentTheme.borderColor, color: currentTheme.textColor },
+              ]}
+              autoCapitalize="none"
+              keyboardType="email-address"
+            />
+            <TouchableOpacity
+              onPress={doSubmitInviteRequest}
+              disabled={reqSubmitting || reqCooldownLeft > 0}
+              style={[
+                styles.btn,
+                {
+                  backgroundColor:
+                    reqCooldownLeft > 0 ? currentTheme.borderColor : currentTheme.primaryColor,
+                },
+              ]}
+            >
+              {reqSubmitting ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.btnText}>
+                  {reqCooldownLeft > 0
+                    ? t('screen_account_center_request_wait', { time: formatCountdown(reqCooldownLeft) })
+                    : t('screen_account_center_request_btn')}
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
+          {reqResult ? (
+            <Text style={{ color: currentTheme.textColor, marginTop: 8, fontSize: 12 }}>
+              {reqResult.ok
+                ? t('screen_account_center_request_done')
+                : reqResult.message === 'busy'
+                ? t('screen_account_center_request_busy')
+                : reqResult.message === 'cooldown'
+                ? t('screen_account_center_request_wait', {
+                    time: formatCountdown(reqResult.waitMs || 0),
+                  })
+                : reqResult.detail || t('screen_account_center_request_failed')}
+            </Text>
           ) : null}
         </View>
 
