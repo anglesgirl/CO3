@@ -8,14 +8,14 @@ const HF_BASE = 'https://huggingface.co';
 
 export const DEVICE_MODELS = {
   '2bit': {
-    label: 'HyMT 2bit（574MB，质量优先）',
+    label: '高质量版（574MB）',
     url:
       HF_BASE +
       '/AngelSlim/Hy-MT1.5-1.8B-2bit-GGUF/resolve/main/Hy-MT1.5-1.8B-2bit.gguf',
     file: 'Hy-MT1.5-1.8B-2bit.gguf',
   },
   '1.25bit': {
-    label: 'HyMT 1.25bit（440MB，省空间）',
+    label: '轻量版（440MB）',
     url:
       HF_BASE +
       '/AngelSlim/Hy-MT1.5-1.8B-1.25bit-GGUF/resolve/main/Hy-MT1.5-1.8B-1.25bit.gguf',

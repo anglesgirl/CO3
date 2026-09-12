@@ -45,6 +45,7 @@ import { LibraryDAO } from './storage/dao/LibraryDAO';
 import { ProgressDAO } from './storage/dao/ProgressDAO';
 import { KudoHistoryDAO } from './storage/dao/KudosHistoryDAO';
 import CustomToast from './components/common/CustomToast';
+import FirstRunNotice from './components/FirstRunNotice';
 import {
   SafeAreaProvider,
   useSafeAreaInsets,
@@ -323,6 +324,7 @@ const AppWrapper = () => {
           <WebviewFetcher />
         </Host>
         <CustomToast currentTheme={currentTheme} />
+        <FirstRunNotice currentTheme={currentTheme} />
       </AppContext.Provider>
     </View>
   );
