@@ -74,6 +74,23 @@ jobs:
             || { echo "::error::RCT_EXTERN_REMAP_MODULE(EchProxy, EchProxyModule, ...) not found"; exit 1; }
           grep -q "^import Echproxy" ios/EchProxyBridge/EchProxyModule.swift \
             || { echo "::error::EchProxyModule.swift missing 'import Echproxy'"; exit 1; }
+
+      - name: Verify diagnostic logging is wired
+        # 出问题时要能从我们自己的日志服务看到现场，所以这几处必须在：
+        # 原生上报器、JS 上报器、echKy 里的接线点。
+        run: |
+          set -e
+          test -f ios/EchProxyBridge/EchLogger.swift \
+            || { echo "::error::ios/EchProxyBridge/EchLogger.swift missing"; exit 1; }
+          grep -q "log.anglesgirl.eu.org" ios/EchProxyBridge/EchLogger.swift \
+            || { echo "::error::EchLogger 上报地址不对"; exit 1; }
+          test -f main/utils/remoteLog.js \
+            || { echo "::error::main/utils/remoteLog.js missing"; exit 1; }
+          grep -q "remoteLog" main/web/echKy.js \
+            || { echo "::error::echKy.js 没有接远程日志"; exit 1; }
+          grep -q "proxy_native_status" main/web/echKy.js \
+            || { echo "::error::echKy.js 没有上报原生 ECH 状态（ECHAccepted）"; exit 1; }
+          echo "诊断日志接线检查通过 ✓"
           echo "✅ EchProxy bridge registration + framework import verified"
 
       - name: Setup Ruby (for CocoaPods)
@@ -128,3 +145,42 @@ jobs:
           files: CO3-IOS.ipa
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify build result (Telegram)
+        # 成败都回传，成功的直接把 IPA 发到对话里（用户装包即用，不用去 Release 找）
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BUILD_STATUS: ${{ job.status }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -e
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "缺少 Telegram secret，跳过通知"; exit 0
+          fi
+          RUN_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          SHORT="${GITHUB_SHA:0:7}"
+          send() {
+            curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d chat_id="${TELEGRAM_CHAT_ID}" -d parse_mode=Markdown \
+              --data-urlencode "text=$1" | head -c 400; echo
+          }
+          if [ "$BUILD_STATUS" = "success" ] && [ -f CO3-IOS.ipa ]; then
+            SIZE_MB=$(du -m CO3-IOS.ipa | cut -f1)
+            send "✅ CO3 iOS 构建成功 \`${SHORT}\` (${SIZE_MB}MB，含 ECH 诊断日志)
+          [查看运行](${RUN_URL})"
+            if [ "$SIZE_MB" -lt 50 ]; then
+              curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
+                -F chat_id="${TELEGRAM_CHAT_ID}" \
+                -F caption="CO3 iOS ${SHORT}（未签名 IPA，含 ECH 诊断日志）" \
+                -F document=@"CO3-IOS.ipa" | head -c 400; echo
+            else
+              send "⚠️ IPA ${SIZE_MB}MB 超过机器人 50M 上限，请到 Artifact 下载"
+            fi
+          else
+            send "❌ CO3 iOS 构建失败 \`${SHORT}\` | \`${BUILD_STATUS}\`
+          [查看运行](${RUN_URL})"
+          fi

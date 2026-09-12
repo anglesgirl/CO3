@@ -9,6 +9,7 @@ import ky from 'ky';
 import { NativeModules, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { trackEvent } from '../utils/analytics';
+import { rlog, rlogError } from '../utils/remoteLog';
 
 const AO3_HOSTS = new Set(['archiveofourown.org', 'www.archiveofourown.org']);
 
@@ -22,26 +23,20 @@ export const DEFAULT_DOH_FALLBACKS = [
   'https://dz1598pphb.cloudflare-gateway.com/dns-query',
 ];
 
-// Domain whose TXT record carries remote settings, so end users can pull a
-// working DoH endpoint / edge IPs with one tap instead of understanding DoH.
-// Publish a TXT record on this name, e.g.:
-//   v=co3ech1; doh=https://example.com/dns-query; ip=104.20.8.2,104.20.9.2
-// Set this to your own domain before shipping builds.
-export const DEFAULT_CONFIG_DOMAIN = 'ech-config.anglesgirl.eu.org';
+// 远程 TXT 配置下发（ech-config.anglesgirl.eu.org）已按用户要求**永久移除**：
+// 解析由我们自己的 CF 网关 DoH 直控，零配置，不再有"启动前等远程配置"这道 gate
+//（它曾让首次启动干等最多 8s，且是 iOS「ECH 起不来」的一个嫌疑点）。勿加回。
 
 const DOH_KEY = 'ech_doh';
 const DOH2_KEY = 'ech_doh2';
 const DOH3_KEY = 'ech_doh3';
 const IP_KEY = 'ech_ip';
-const CONFIG_DOMAIN_KEY = 'ech_config_domain';
-// Set once the user edits DoH/IP by hand — remote config must not clobber that.
+// 用户手动改过 DoH/IP 的标记（UI 里仍会用到，别删）
 const MANUAL_KEY = 'ech_manual_override';
-// Last remote values we applied, so we only restart when they actually change.
-const LAST_REMOTE_KEY = 'ech_last_remote';
 
 let echBasePromise = null; // Promise<string|null> — memoised
-// 代理是否已成功启动（startProxy resolve 后 true）。区别于 echBasePromise
-// 非空（那只是"启动流程进行中"）：syncRemoteConfig 只在真正已就绪时重启。
+// 代理是否已成功启动（startProxy resolve 后 true），区别于 echBasePromise 非空
+//（那只是"启动流程进行中"）。
 let echBaseReady = false;
 
 // Returns the configured DoH endpoint. Unset -> default. Empty string means the
@@ -57,6 +52,11 @@ export async function getDoh() {
   } catch {
     return DEFAULT_DOH;
   }
+}
+
+// 只信 https:// 形式的值（用户手填的 DoH 也要过这道校验）
+function isValidDoh(s) {
+  return typeof s === 'string' && /^https:\/\/[^\s]+$/i.test(s);
 }
 
 async function getDohCandidates() {
@@ -99,29 +99,6 @@ function shouldRetryStart() {
   return Date.now() - lastStartAttempt >= START_RETRY_COOLDOWN_MS;
 }
 
-// 远程配置就绪 gate（幂等，仅首次冷启动等待）：
-// 2026-08-15 修复二版 —— 上一版只在 initEch 里等配置，但 worksScreen 的
-// 请求 hook（beforeRequest → getEchBase）会绕过 initEch 抢先 startProxy，
-// 日志实证（16:31:38.420 attempt 1 ip=(dns)）仍是空配置启动 → CF 525。
-// 现在 gate 下沉到 startProxy 内部：**任何入口**启动代理前都必须先等
-// 远程配置（限时 6s，失败/超时不影响启动，行为不劣于原来），保证
-// 第一次启动就用上 CF 优选 IP。
-let configGatePromise = null;
-
-function getConfigGate() {
-  if (!configGatePromise) {
-    configGatePromise = (async () => {
-      try {
-        await Promise.race([
-          syncRemoteConfig(),
-          new Promise((resolve) => setTimeout(resolve, 8000)),
-        ]);
-      } catch {}
-    })();
-  }
-  return configGatePromise;
-}
-
 function startProxy() {
   lastStartAttempt = Date.now();
   startAttempts += 1;
@@ -142,17 +119,25 @@ function startProxy() {
         ok: false,
         error: `native_module_missing:${Platform.OS}`,
       });
+      // ★ 这条是我们最想看到的：桥没注册时 JS 侧唯一能报出来的信号
+      rlog('proxy_module_missing', {
+        platform: Platform.OS,
+        nativeModules: available,
+        echProxy: mod ? 'present-but-no-start' : 'undefined',
+      });
       return null;
     }
     // t0 必须在 try 外面：原来声明在 try 里，catch 块又引用 t0 计算耗时，
     // 一旦 start 抛错就会变成 ReferenceError（把真正的失败原因吃掉）。
     const t0 = Date.now();
+    let doh = '';
+    let ips = '';
     try {
-      // 首次启动前等远程配置 gate（幂等；已 resolve 则立即通过）
-      await getConfigGate();
-      const doh = (await getDohCandidates()).join(',');
-      const ips = await getCustomIPs();
+      // 远程配置 gate 已随远程 TXT 下发一起移除：这里立即启动，不再干等最多 8s。
+      doh = (await getDohCandidates()).join(',');
+      ips = await getCustomIPs();
       console.log(`[ECH] starting proxy (attempt ${startAttempts}, doh=${doh || '(none)'}, ip=${ips || '(dns)'})`);
+      rlog('proxy_start_begin', { attempt: startAttempts, hasDoh: !!doh, hasIp: !!ips, doh, ips });
       const port = await mod.start(0, doh, ips); // 0 = auto-pick a free port
       const base = `http://127.0.0.1:${port}`;
       const ms = Date.now() - t0;
@@ -160,6 +145,10 @@ function startProxy() {
       lastStartError = null;
       echBaseReady = true;
       trackEvent('ech_proxy_start', { ok: true, ms, doh: !!doh, ip: !!ips });
+      rlog('proxy_start_ok', { port, ms, doh, ips });
+      // 启动后立刻把原生状态取回来（含 ECHAccepted= / DoH 解析结果），
+      // 这是判断「ECH 到底有没有生效」的唯一可信依据。
+      getEchStatus().then(status => rlog('proxy_native_status', { phase: 'after_start', status })).catch(() => {});
       return base;
     } catch (e) {
       const ms = Date.now() - t0;
@@ -169,6 +158,9 @@ function startProxy() {
       // 否则一次失败(DoH 抖动/被墙)会让整个 App 会话永久断网。
       echBaseReady = false;
       trackEvent('ech_proxy_start', { ok: false, ms, error: String(e?.message ?? e).slice(0, 120) });
+      rlogError('proxy_start_fail', e, { ms, attempt: startAttempts, doh, ips });
+      // 失败时也把原生状态带回来：能区分「桥没注册」「原生报错」「DoH 拿不到 ECH 配置」
+      getEchStatus().then(status => rlog('proxy_native_status', { phase: 'after_fail', status })).catch(() => {});
       echBasePromise = null;
       return null;
     }
@@ -186,6 +178,10 @@ export function getEchBase() {
     `[ECH] proxy in cooldown (${Math.round((START_RETRY_COOLDOWN_MS - (Date.now() - lastStartAttempt)) / 1000)}s left). ` +
     `last error: ${lastStartError ?? '(unknown)'}`,
   );
+  rlog('proxy_cooldown', {
+    leftSec: Math.round((START_RETRY_COOLDOWN_MS - (Date.now() - lastStartAttempt)) / 1000),
+    lastError: lastStartError ?? 'unknown',
+  });
   return Promise.resolve(null);
 }
 
@@ -203,97 +199,32 @@ export function initEch() {
   // 解析 + ECH 配置 + 连接池）全部热起来 —— 用户点浏览时直接秒出。
   const warm = async () => {
     try {
+      rlog('startup_env', {
+        platform: Platform.OS,
+        osVersion: String(Platform.Version),
+        dohDefault: DEFAULT_DOH,
+      });
       await getEchBase();
       const t0 = Date.now();
       try {
-        await echKy.get('https://archiveofourown.org/', { timeout: 20000 }).text();
-        console.log(`[ECH] warm-up complete in ${Date.now() - t0}ms`);
+        const res = await echKy.get('https://archiveofourown.org/', { timeout: 20000 });
+        const ms = Date.now() - t0;
+        console.log(`[ECH] warm-up complete in ${ms}ms (HTTP ${res.status})`);
+        const status = await getEchStatus();
+        // ★ 一条日志里同时给出「真实请求通了没有」和「原生握手/ECH 状态」
+        rlog('warmup_ok', { ms, http: res.status, status });
       } catch (e) {
+        const ms = Date.now() - t0;
         // 预热失败不阻塞：真实请求仍会正常走（只是慢一次）
-        console.log(`[ECH] warm-up request failed in ${Date.now() - t0}ms: ${e?.message ?? e}`);
+        console.log(`[ECH] warm-up request failed in ${ms}ms: ${e?.message ?? e}`);
+        const status = await getEchStatus().catch(() => 'unavailable');
+        rlogError('warmup_fail', e, { ms, status });
       }
-    } catch {}
+    } catch (e) {
+      rlogError('warmup_outer_fail', e);
+    }
   };
   warm();
-}
-
-// Validates a remote value before we trust it — a broken TXT record should not
-// be able to break every install.
-function isValidDoh(s) {
-  return typeof s === 'string' && /^https:\/\/[^\s]+$/i.test(s);
-}
-function isValidIPList(s) {
-  if (typeof s !== 'string' || !s.trim()) return false;
-  return s
-    .split(',')
-    .map(x => x.trim())
-    .filter(Boolean)
-    .every(x => /^[0-9.]+$/.test(x) || /^[0-9a-f:]+$/i.test(x));
-}
-
-// syncRemoteConfig pulls the operator's TXT record and applies it silently.
-// Skipped entirely when the user has set things by hand. Failures are ignored:
-// we keep whatever settings already work.
-export async function syncRemoteConfig() {
-  let domain = await getConfigDomain();
-  if (domain === 'co3.xn--oiqt18e8e2a.eu.org') {
-    domain = DEFAULT_CONFIG_DOMAIN;
-    await AsyncStorage.setItem(CONFIG_DOMAIN_KEY, domain);
-  }
-  if (!domain) return;
-  if (await hasManualOverride()) {
-    console.log('[ECH] manual override set — skipping remote config');
-    return;
-  }
-
-  let cfg;
-  try {
-    cfg = await fetchRemoteConfig(domain);
-  } catch (e) {
-    console.log('[ECH] remote config unavailable:', e?.message ?? e);
-    return; // keep last known-good settings
-  }
-
-  const next = {
-    doh: isValidDoh(cfg.doh) ? cfg.doh : null,
-    doh2: isValidDoh(cfg.doh2) ? cfg.doh2 : null,
-    doh3: isValidDoh(cfg.doh3) ? cfg.doh3 : null,
-    ip: isValidIPList(cfg.ip) ? cfg.ip : null,
-    tr: isValidDoh(cfg.tr) ? cfg.tr : null, // same https:// URL validation
-  };
-  if (!next.doh && !next.doh2 && !next.doh3 && !next.ip && !next.tr) return;
-
-  // Only restart the proxy if something actually changed.
-  let prev = {};
-  try {
-    prev = JSON.parse((await AsyncStorage.getItem(LAST_REMOTE_KEY)) || '{}');
-  } catch {}
-  if (prev.doh === next.doh && prev.doh2 === next.doh2 && prev.doh3 === next.doh3 && prev.ip === next.ip && prev.tr === next.tr) return;
-
-  if (next.doh) await AsyncStorage.setItem(DOH_KEY, next.doh);
-  if (next.doh2) await AsyncStorage.setItem(DOH2_KEY, next.doh2);
-  if (next.doh3) await AsyncStorage.setItem(DOH3_KEY, next.doh3);
-  if (next.ip) await AsyncStorage.setItem(IP_KEY, next.ip);
-  // Translation endpoint lives in translate.js but ships through the same record.
-  if (next.tr) await AsyncStorage.setItem('translate_endpoint', next.tr);
-  await AsyncStorage.setItem(LAST_REMOTE_KEY, JSON.stringify(next));
-  console.log('[ECH] applied remote config:', JSON.stringify(next));
-  trackEvent('ech_config_applied', {
-    hasDoh: !!next.doh, hasIp: !!next.ip, hasTr: !!next.tr,
-  });
-
-  // Only the proxy settings require a restart.
-  // 2026-08-15: 只在代理【已启动完成】时重启（echBaseReady）。冷启动期间
-  // （startProxy 正在等 gate/还没起来）不重启 —— 首次 startProxy() 自然用上
-  // 刚写入的新配置。原来无条件重启会双重启动 + stop/start 间隙撞上
-  // WebView 兜底请求 → ERR_CONNECTION_REFUSED（2026-08-14 日志实证）。
-  if (
-    echBaseReady &&
-    (next.doh !== prev.doh || next.doh2 !== prev.doh2 ||
-      next.doh3 !== prev.doh3 || next.ip !== prev.ip)
-  ) {
-    await restartProxy();
-  }
 }
 
 // echUrl rewrites an AO3 URL so it goes through the local ECH proxy. Use it for
@@ -471,144 +402,6 @@ export async function getJarInfo() {
   }
 }
 
-// --- remote configuration (TXT record) ------------------------------------
-
-export async function getConfigDomain() {
-  try {
-    const v = await AsyncStorage.getItem(CONFIG_DOMAIN_KEY);
-    return v === null ? DEFAULT_CONFIG_DOMAIN : v;
-  } catch {
-    return DEFAULT_CONFIG_DOMAIN;
-  }
-}
-
-export async function setConfigDomain(domain) {
-  await AsyncStorage.setItem(CONFIG_DOMAIN_KEY, domain ?? '');
-}
-
-// Parses a TXT payload like:
-//   v=co3ech1; doh=https://example.com/dns-query; ip=104.20.8.2,104.20.9.2
-// Returns { doh, ip } with whatever keys were present.
-export function parseRemoteConfig(txt) {
-  const out = {};
-  for (const line of String(txt).split('\n')) {
-    for (const part of line.split(';')) {
-      const i = part.indexOf('=');
-      if (i === -1) continue;
-      const k = part.slice(0, i).trim().toLowerCase();
-      const v = part.slice(i + 1).trim();
-      if (!v) continue;
-      if (k === 'doh') out.doh = v;
-      else if (k === 'doh2') out.doh2 = v;
-      else if (k === 'doh3') out.doh3 = v;
-      else if (k === 'ip' || k === 'ips') out.ip = v;
-      else if (k === 'tr' || k === 'translate') out.tr = v;
-    }
-  }
-  return out;
-}
-
-// Fetches the remote config TXT record. Uses the currently configured DoH (or
-// the built-in default) for the lookup, so it works even with poisoned DNS.
-export async function fetchRemoteConfig(domain) {
-  const mod = NativeModules.EchProxy;
-  if (!mod || typeof mod.fetchTxt !== 'function') {
-    throw new Error('ECH native module unavailable');
-  }
-  const name = (domain ?? '').trim() || (await getConfigDomain());
-  if (!name) throw new Error('No config domain set');
-  const candidates = await getDohCandidates();
-  let txt;
-  let lastError;
-  for (const doh of candidates) {
-    try {
-      // 2026-08-15: 单候选 2.5s 超时 —— 移动宽带上 Cloudflare Gateway
-      // DoH 可能卡 8s+（日志实证），串行无超时会让首次启动干等。
-      // 快失败快切换下一个候选，总耗时 ≈ 候选数 × 2.5s。
-      txt = await Promise.race([
-        mod.fetchTxt(doh, name),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`DoH timeout: ${doh}`)), 2500)),
-      ]);
-      break;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  if (txt == null) throw lastError || new Error('No DoH endpoint available');
-  const cfg = parseRemoteConfig(txt);
-  if (!cfg.doh && !cfg.doh2 && !cfg.doh3 && !cfg.ip && !cfg.tr) {
-    throw new Error(`TXT found but no doh=/doh2=/doh3=/ip=/tr= keys:\n${txt}`);
-  }
-  return { ...cfg, raw: txt };
-}
-
-const echKy = ky.create({
-  // Generous timeout: the first request may have to bootstrap the ECH handshake.
-  timeout: 30000,
-  // AO3 的 session cookie 由 Go 代理的 cookiejar 统一管理。RN fetch 层
-  // (Android OkHttp java.net.CookieManager) 会把 127.0.0.1 的 Set-Cookie 也存
-  // 一份, 登出/清 jar 清不掉它 → 重试登录仍带旧 cookie ("already logged in")。
-  // credentials:'omit' 让 RN 层完全不碰 cookie, 全部交给代理 jar。
-  credentials: 'omit',
-  hooks: {
-    beforeRequest: [
-      async (request) => {
-        const t0 = Date.now();
-        let base;
-        try {
-          base = await getEchBase();
-        } catch (e) {
-          console.log(`[ECH] getEchBase failed in ${Date.now() - t0}ms: ${e?.message ?? e}`);
-          throw e;
-        }
-        let u;
-        try {
-          u = new URL(request.url);
-        } catch {
-          return;
-        }
-        if (u.protocol !== 'https:') return;
-        if (!base) {
-          console.log(`[ECH] proxy unavailable, refusing direct HTTPS to ${u.hostname}`);
-          throw new Error('ECH proxy unavailable; refusing direct HTTPS request');
-        }
-        const rewritten = new Request(base + u.pathname + u.search, request);
-        rewritten.headers.set('X-Ech-Target', u.hostname);
-        console.log(`[ECH] → ${u.hostname}${u.pathname} via proxy ${base} (waited ${Date.now() - t0}ms)`);
-        return rewritten;
-      },
-    ],
-    afterResponse: [
-      async (request, options, response) => {
-        const url = new URL(request.url);
-        console.log(`[ECH] ← ${response.status} ${url.hostname}${url.pathname}`);
-        return response;
-      },
-    ],
-    beforeError: [
-      // 403 诊断：打印响应体前 500 字符，区分 CF challenge / 错误页 / 其他。
-      // 2026-08-15 UA 修复后仍 403 —— 需要响应体才能定位拦截类型。
-      async (error) => {
-        if (error?.response?.status === 403) {
-          try {
-            const body = await error.response.clone().text();
-            const head = body.slice(0, 500);
-            const marker = /challenge-platform|_cf_chl_opt/i.test(head)
-              ? 'CF_CHALLENGE'
-              : /cf-error-details|cf-ray/i.test(head)
-                ? 'CF_ERROR_PAGE'
-                : 'PLAIN';
-            console.log(`[ECH] 403 body (${body.length}b, ${marker}): ${head}`);
-          } catch (e) {
-            console.log(`[ECH] 403 but body unreadable: ${e?.message ?? e}`);
-          }
-        }
-        return error;
-      },
-    ],
-  },
-});
 
 // echSelfTest forces a request through the ECH proxy to archiveofourown.org and
 // returns a human-readable result including the native handshake line
@@ -620,6 +413,7 @@ export async function echSelfTest() {
     trackEvent('ech_self_test', { ok: false, reason: 'proxy_unavailable' });
     // 把真正的原因带出来：桥没注册 / start() 报错 / 冷却中。
     const status = await getEchStatus();
+    rlog('selftest_proxy_unavailable', { doh, reason: lastStartError ?? 'unknown', status });
     return (
       `ECH proxy unavailable.\n` +
       `platform: ${Platform.OS}\n` +
@@ -634,11 +428,13 @@ export async function echSelfTest() {
     const ms = Date.now() - t0;
     const status = await getEchStatus();
     trackEvent('ech_self_test', { ok: true, ms, http: res.status, status: String(status).slice(0, 120) });
+    rlog('selftest_ok', { ms, http: res.status, doh, status });
     return `OK — HTTP ${res.status} in ${ms}ms via ${base}\nDoH: ${doh || '(none)'}\n${status}`;
   } catch (e) {
     const ms = Date.now() - t0;
     const status = await getEchStatus();
     trackEvent('ech_self_test', { ok: false, ms, error: String(e?.message ?? e).slice(0, 120), status: String(status).slice(0, 120) });
+    rlogError('selftest_fail', e, { ms, doh, status });
     return `Request failed after ${ms}ms: ${e?.message ?? e}\nDoH: ${doh || '(none)'}\nStatus: ${status}`;
   }
 }
