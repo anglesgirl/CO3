@@ -1,6 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Linking, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// AsyncStorage 必须惰性 require：409401c 实证，新架构下把它放进启动期
+// 静态 import 链会触发 [runtime not ready] + "AsyncStorage is null" 闪退。
+function storage() {
+  // eslint-disable-next-line global-require
+  return require('@react-native-async-storage/async-storage').default;
+}
 
 /**
  * 首次启动提示：只说两件事 —— 这 App 是免费的，以及作者的博客在哪。
@@ -16,7 +22,7 @@ export default function FirstRunNotice({ currentTheme }) {
     let alive = true;
     (async () => {
       try {
-        const seen = await AsyncStorage.getItem(SEEN_KEY);
+        const seen = await storage().getItem(SEEN_KEY);
         if (alive && !seen) setVisible(true);
       } catch {
         // 读不到就当作已看过，避免每次启动都弹
@@ -30,7 +36,7 @@ export default function FirstRunNotice({ currentTheme }) {
   const dismiss = async () => {
     setVisible(false);
     try {
-      await AsyncStorage.setItem(SEEN_KEY, '1');
+      await storage().setItem(SEEN_KEY, '1');
     } catch {}
   };
 
