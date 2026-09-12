@@ -20,7 +20,7 @@
  *   2) 任何地方：import { openEchBrowser } from '.../components/EchBrowser';
  *      openEchBrowser('https://archiveofourown.org/works/123');
  */
-import React, { useCallback, useContext, useEffect, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -113,6 +113,12 @@ export function EchBrowserHost() {
   const { t } = useTranslation();
   const [url, setUrl] = useState(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // 记录当前地址：LoginSuccess 事件里要判断"这次打开的是不是登录页"
+  //（事件在已登录时会因任何 AO3 页面触发，见下面的监听）
+  const urlRef = useRef(null);
+  useEffect(() => {
+    urlRef.current = url;
+  }, [url]);
 
   useEffect(() => {
     openHostFn = setUrl;
@@ -126,9 +132,17 @@ export function EchBrowserHost() {
     setReloadKey(0);
   }, []);
 
-  // 登录成功 → 自动关闭浏览器并通知调用方刷新（用户不用再手动返回）。
+  // 【必须限定"这次打开的就是登录页"】
+  // 原生 LoginSuccess 的触发条件是"URL 属于 AO3 且 Cookie 里有 user_credentials"
+  // —— 也就是说**已登录用户打开任何 AO3 页面都会触发**。
+  // 无条件自动关闭的后果：点"找回密码"等页面**刚打开就自己退回来**
+  //（用户实测反馈："找回密码的连接应该是错的。点击进去，直接退回" —— 其实不是链接错，
+  //  是这个关闭逻辑误触发）。
   useEffect(() => {
     const sub = DeviceEventEmitter.addListener('LoginSuccess', () => {
+      const current = String(urlRef.current || '');
+      const wasLoginPage = /\/users\/(login|sign_in)/i.test(current);
+      if (!wasLoginPage) return; // 不是登录页 → 忽略，别关掉用户正在看的页面
       setUrl(null);
       setReloadKey(0);
       loginSuccessHandlers.forEach((fn) => {
