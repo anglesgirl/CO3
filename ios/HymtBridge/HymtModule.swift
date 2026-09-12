@@ -43,20 +43,26 @@ class HymtModule: RCTEventEmitter {
     private let queue = DispatchQueue(label: "com.anglesgirl.co3.hymt", qos: .userInitiated)
     private var ready = false
 
+    // ⚠️ 这两个必须 override：RCTEventEmitter 基类已提供实现，
+    // 否则编译报 "overriding declaration requires an 'override' keyword"
     @objc
-    static func moduleName() -> String! { "Hymt" }
+    override static func moduleName() -> String! { "Hymt" }
 
     @objc
-    static func requiresMainQueueSetup() -> Bool { return false }
+    override static func requiresMainQueueSetup() -> Bool { return false }
 
     /// ⚠️ 必须声明支持的事件名，否则 RN 会丢弃 emit（真机上表现为"流式不刷新"）
     override func supportedEvents() -> [String]! {
         return ["hymt_token", "hymt_token_done"]
     }
 
-    // hasListeners 是 RCTEventEmitter 自带的属性，RN 会按它决定是否投递事件
-    override func startObserving() { hasListeners = true }
-    override func stopObserving() { hasListeners = false }
+    // ⚠️ RCTEventEmitter 的 hasListeners 在 Swift 侧**不可见**（编译报
+    // "cannot find 'hasListeners' in scope"），所以自己维护一份状态。
+    // 只在有订阅者时才发事件，省掉无谓的跨桥开销。
+    private var listenersAttached = false
+
+    override func startObserving() { listenersAttached = true }
+    override func stopObserving() { listenersAttached = false }
 
     // MARK: - 模型文件
 
@@ -155,13 +161,17 @@ class HymtModule: RCTEventEmitter {
                 return
             }
             let t0 = Date()
-            var err: NSError?
-            if !self.engine.loadModel(atPath: file.path, error: &err) {
+            // ⚠️ ObjC 的 `- (BOOL)loadModelAtPath:error:` 在 Swift 里被映射成
+            // `func loadModel(atPath:) throws`（NSError** 出参变 throws，BOOL 返回值消失），
+            // 所以要 try/catch，而不是检查返回值 + 传 &err。
+            do {
+                try self.engine.loadModel(atPath: file.path)
+            } catch {
                 Self.log("hymt_init", [
                     "ok": "false", "why": "load",
-                    "err": err?.localizedDescription ?? "unknown",
+                    "err": error.localizedDescription,
                 ])
-                reject("HYMT_LOAD_FAILED", err?.localizedDescription ?? "load failed", err)
+                reject("HYMT_LOAD_FAILED", error.localizedDescription, error as NSError)
                 return
             }
             self.ready = true
@@ -189,7 +199,7 @@ class HymtModule: RCTEventEmitter {
             let mt = maxTokens.intValue > 0 ? maxTokens.intValue : 1024
             let prompt = "将以下文本翻译为\(Self.targetLangName)，注意只需要输出翻译后的结果，不要额外解释： \(text)"
             let t0 = Date()
-            let out = (self.engine.generate(prompt, maxTokens: mt, onToken: nil) ?? "")
+            let out = (self.engine.generate(prompt, maxTokens: Int32(mt), onToken: nil) ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let refusal = Self.refusalMarks.first { out.contains($0) }
             Self.log("hymt_translate", [
@@ -229,7 +239,7 @@ class HymtModule: RCTEventEmitter {
             let mt = maxTokens.intValue > 0 ? maxTokens.intValue : 1024
             let prompt = "将以下文本翻译为\(Self.targetLangName)，注意只需要输出翻译后的结果，不要额外解释： \(joined)"
             let t0 = Date()
-            let out = (self.engine.generate(prompt, maxTokens: mt, onToken: nil) ?? "")
+            let out = (self.engine.generate(prompt, maxTokens: Int32(mt), onToken: nil) ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
 
             let parts = Self.splitBySep(out)
@@ -278,12 +288,12 @@ class HymtModule: RCTEventEmitter {
             // 直接发单 token 会让 JS 侧每 80ms 覆盖成一小段，表现为译文反复跳动。
             var accumulated = ""
             var lastEmit = Date.distantPast
-            let out = self.engine.generate(prompt, maxTokens: mt) { piece in
+            let out = self.engine.generate(prompt, maxTokens: Int32(mt)) { piece in
                 accumulated += piece
                 let now = Date()
                 if now.timeIntervalSince(lastEmit) >= Self.emitInterval {
                     lastEmit = now
-                    if self.hasListeners {
+                    if self.listenersAttached {
                         self.sendEvent(withName: "hymt_token",
                                        body: ["index": idx, "full": accumulated])
                     }
