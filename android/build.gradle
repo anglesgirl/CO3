@@ -15,6 +15,11 @@ buildscript {
         classpath("com.android.tools.build:gradle")
         classpath("com.facebook.react:react-native-gradle-plugin")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin")
+        // Firebase Analytics（统计）。注意：Analytics **不需要 GMS** 也能上报事件
+        //（官方文档：Firebase SDK for Google Analytics 可以在任何设备上发送事件，
+        // 仅"受众特征"这类自动洞察需要 Google Play services）。所以国内无 GMS 机型
+        // 依然能上报，只是数字会比真实略小 —— 看趋势够用，绝对值别当准数。
+        classpath("com.google.gms:google-services:4.4.2")
     }
 }
 

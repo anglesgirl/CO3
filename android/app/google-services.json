@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "853194114797",
+    "project_id": "ao3app-a00a3",
+    "storage_bucket": "ao3app-a00a3.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:853194114797:android:bf80c7f4898db4e34baee4",
+        "android_client_info": {
+          "package_name": "com.anglesgirl.co3"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyArPRaRY1DeXYM94tDBUcXf0Eg2wJ-ZdG8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:853194114797:android:44903d99ebaff5024baee4",
+        "android_client_info": {
+          "package_name": "io.github.forkmaintainers.iceraven"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyArPRaRY1DeXYM94tDBUcXf0Eg2wJ-ZdG8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
