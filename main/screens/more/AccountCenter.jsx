@@ -458,7 +458,7 @@ export default function AccountCenter() {
               <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>
                 {t('screen_account_center_forgot_desc')}
               </Text>
-              <View style={{ flexDirection: 'row', marginTop: 10 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 } }>
                 <TextInput
                   placeholder={t('screen_account_center_email_placeholder')}
                   placeholderTextColor={currentTheme.placeholderColor}
@@ -513,7 +513,7 @@ export default function AccountCenter() {
           <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>
             {t('screen_account_center_paste_invite_desc')}
           </Text>
-          <View style={{ flexDirection: 'row', marginTop: 10 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 } }>
             <TextInput
               placeholder="https://archiveofourown.org/...invitation_token=xxx"
               placeholderTextColor={currentTheme.placeholderColor}
@@ -614,7 +614,7 @@ export default function AccountCenter() {
           <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>
             {t('screen_account_center_paste_activate_desc')}
           </Text>
-          <View style={{ flexDirection: 'row', marginTop: 10 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 } }>
             <TextInput
               placeholder="https://archiveofourown.org/users/confirmation..."
               placeholderTextColor={currentTheme.placeholderColor}
@@ -689,7 +689,7 @@ export default function AccountCenter() {
           <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>
             {t('screen_account_center_request_invite_desc')}
           </Text>
-          <View style={{ flexDirection: 'row', marginTop: 10 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 } }>
             <TextInput
               placeholder={t('screen_account_center_request_email')}
               placeholderTextColor={currentTheme.placeholderColor}
@@ -709,11 +709,13 @@ export default function AccountCenter() {
               style={[
                 // 行内按钮用 btnInline（与输入框同高 44）—— 之前误用了全宽样式 btn
                 //（带 marginTop 12 / 高 46），在横向排列里既错位又差 2px 高度。
+                // ⚠️ 这里**不能加 marginTop**：它在 flexDirection:'row' 里，会把按钮整体下移，
+                // 与输入框错开（用户反馈"按钮和框没有对齐"）。行与行之间的间距由父 View 的
+                // marginTop 负责。
                 styles.btnInline,
                 {
                   backgroundColor:
                     reqCooldownLeft > 0 ? currentTheme.borderColor : currentTheme.primaryColor,
-                  marginTop: 10,
                 },
               ]}
             >
@@ -774,7 +776,7 @@ export default function AccountCenter() {
               >
                 <Text style={styles.btnText}>{t('screen_account_center_queue_refresh')}</Text>
               </TouchableOpacity>
-              <View style={{ flexDirection: 'row', marginTop: 12 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12 } }>
                 <TextInput
                   placeholder={t('screen_account_center_query_email')}
                   placeholderTextColor={currentTheme.placeholderColor}
