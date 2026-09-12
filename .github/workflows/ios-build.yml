@@ -36,6 +36,39 @@ jobs:
       - name: Generate codegen artifacts
         run: npx react-native codegen --platform ios --outputPath .
 
+      # ⚠️ 必须排在 `pod install` **之前**：Podfile 里引用了本地 pod
+      # EchProxyBridge，而它依赖这里生成的 Echproxy.xcframework。
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Build ECH proxy iOS framework (gomobile)
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          cd ech
+          # gomobile bind 需要 x/mobile 作为模块依赖。
+          # 注意：之后**不要**跑 `go mod tidy` —— 它会把这个"源码未直接引用"的
+          # require 清掉，导致下次 bind 失败。
+          go get golang.org/x/mobile/bind@latest
+          mkdir -p ../ios/EchProxyBridge
+          # -target=ios 产出 universal xcframework（模拟器 + 真机）
+          gomobile bind -v -target=ios \
+            -o ../ios/EchProxyBridge/Echproxy.xcframework ./echproxy
+          ls -la ../ios/EchProxyBridge/
+          echo "=== module.modulemap（Swift 里 `import Echproxy` 依赖它）==="
+          find ../ios/EchProxyBridge -name "module.modulemap" -exec sh -c 'echo "--- {}"; cat {}' \;
+
+      - name: Verify native module registration is present
+        run: |
+          # 防回归：Swift 模块必须有 ObjC 注册宏，否则运行时
+          # NativeModules.EchProxy === undefined → ECH 静默不启动 → 全部请求 fail-closed。
+          # （历史上正是因为缺这个宏，iOS 上 ECH 从未启动过。）
+          test -f ios/EchProxyBridge/EchProxyBridge.m \
+            || { echo "::error::ios/EchProxyBridge/EchProxyBridge.m missing — EchProxy 原生模块不会注册"; exit 1; }
+
       - name: Setup Ruby (for CocoaPods)
         uses: ruby/setup-ruby@v1
         with:

@@ -17,6 +17,13 @@ end
 target 'CO3' do
   config = use_native_modules!
 
+  # 本地桥接 pod：把 gomobile 产出的 ECH 代理（Echproxy.xcframework）暴露给 JS。
+  # 该 framework 由 CI（ios-build.yml）在 `pod install` **之前**生成 ——
+  # 本地直接 `pod install` 而没有先跑 gomobile bind 的话，这里会找不到 xcframework。
+  # iOS 侧的 ECH 实现与 Android 不同源：Android 用 Conscrypt(OkHttp)，
+  # iOS 用这套 Go 代理（跨平台复用同一份 Go 代码，见 ech/ 目录）。
+  pod 'EchProxyBridge', :path => './EchProxyBridge'
+
   use_react_native!(
     :path => config[:reactNativePath],
     # An absolute path to your application root.

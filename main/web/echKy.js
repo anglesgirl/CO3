@@ -9,6 +9,7 @@ import ky from 'ky';
 import { NativeModules, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { trackEvent } from '../utils/analytics';
+import { isEchProtectedUrl } from './WebviewFetcher';
 
 const AO3_HOSTS = new Set(['archiveofourown.org', 'www.archiveofourown.org']);
 
@@ -231,69 +232,15 @@ function isValidIPList(s) {
     .every(x => /^[0-9.]+$/.test(x) || /^[0-9a-f:]+$/i.test(x));
 }
 
-// syncRemoteConfig pulls the operator's TXT record and applies it silently.
-// Skipped entirely when the user has set things by hand. Failures are ignored:
-// we keep whatever settings already work.
+// syncRemoteConfig —— **已停用**。
+//
+// 历史上这里会从运营方域名拉 TXT 记录，远程下发 DoH 地址 / 优选 IP / 翻译端点。
+// 用户明确要求：**远程 TXT 下发已永久移除，勿加回**。
+// 因此保留函数签名（调用点还在）但直接返回，不再产生任何网络请求。
+//
+// 需要改配置时走 app 内的设置项（setDoh / setCustomIPs，写入本地存储）。
 export async function syncRemoteConfig() {
-  let domain = await getConfigDomain();
-  if (domain === 'co3.xn--oiqt18e8e2a.eu.org') {
-    domain = DEFAULT_CONFIG_DOMAIN;
-    await AsyncStorage.setItem(CONFIG_DOMAIN_KEY, domain);
-  }
-  if (!domain) return;
-  if (await hasManualOverride()) {
-    console.log('[ECH] manual override set — skipping remote config');
-    return;
-  }
-
-  let cfg;
-  try {
-    cfg = await fetchRemoteConfig(domain);
-  } catch (e) {
-    console.log('[ECH] remote config unavailable:', e?.message ?? e);
-    return; // keep last known-good settings
-  }
-
-  const next = {
-    doh: isValidDoh(cfg.doh) ? cfg.doh : null,
-    doh2: isValidDoh(cfg.doh2) ? cfg.doh2 : null,
-    doh3: isValidDoh(cfg.doh3) ? cfg.doh3 : null,
-    ip: isValidIPList(cfg.ip) ? cfg.ip : null,
-    tr: isValidDoh(cfg.tr) ? cfg.tr : null, // same https:// URL validation
-  };
-  if (!next.doh && !next.doh2 && !next.doh3 && !next.ip && !next.tr) return;
-
-  // Only restart the proxy if something actually changed.
-  let prev = {};
-  try {
-    prev = JSON.parse((await AsyncStorage.getItem(LAST_REMOTE_KEY)) || '{}');
-  } catch {}
-  if (prev.doh === next.doh && prev.doh2 === next.doh2 && prev.doh3 === next.doh3 && prev.ip === next.ip && prev.tr === next.tr) return;
-
-  if (next.doh) await AsyncStorage.setItem(DOH_KEY, next.doh);
-  if (next.doh2) await AsyncStorage.setItem(DOH2_KEY, next.doh2);
-  if (next.doh3) await AsyncStorage.setItem(DOH3_KEY, next.doh3);
-  if (next.ip) await AsyncStorage.setItem(IP_KEY, next.ip);
-  // Translation endpoint lives in translate.js but ships through the same record.
-  if (next.tr) await AsyncStorage.setItem('translate_endpoint', next.tr);
-  await AsyncStorage.setItem(LAST_REMOTE_KEY, JSON.stringify(next));
-  console.log('[ECH] applied remote config:', JSON.stringify(next));
-  trackEvent('ech_config_applied', {
-    hasDoh: !!next.doh, hasIp: !!next.ip, hasTr: !!next.tr,
-  });
-
-  // Only the proxy settings require a restart.
-  // 2026-08-15: 只在代理【已启动完成】时重启（echBaseReady）。冷启动期间
-  // （startProxy 正在等 gate/还没起来）不重启 —— 首次 startProxy() 自然用上
-  // 刚写入的新配置。原来无条件重启会双重启动 + stop/start 间隙撞上
-  // WebView 兜底请求 → ERR_CONNECTION_REFUSED（2026-08-14 日志实证）。
-  if (
-    echBaseReady &&
-    (next.doh !== prev.doh || next.doh2 !== prev.doh2 ||
-      next.doh3 !== prev.doh3 || next.ip !== prev.ip)
-  ) {
-    await restartProxy();
-  }
+  return;
 }
 
 // echUrl rewrites an AO3 URL so it goes through the local ECH proxy. Use it for
@@ -569,6 +516,11 @@ const echKy = ky.create({
           return;
         }
         if (u.protocol !== 'https:') return;
+        // ⚠️ 只代理需要 ECH 的域名（AO3）。
+        // 原因有二：① fail-closed 只该针对受保护域名 —— 否则代理没起来时，
+        // 连站外图片、统计上报这些非敏感请求也会一起被拒，功能整体瘫痪；
+        // ② 非受保护流量没必要绕一圈本地代理，徒增延迟。
+        if (!isEchProtectedUrl(request.url)) return;
         if (!base) {
           console.log(`[ECH] proxy unavailable, refusing direct HTTPS to ${u.hostname}`);
           throw new Error('ECH proxy unavailable; refusing direct HTTPS request');
