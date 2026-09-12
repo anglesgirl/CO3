@@ -53,7 +53,13 @@ export async function requestPasswordReset(email) {
   const params = new URLSearchParams();
   params.append('authenticity_token', token);
   params.append(emailField, String(email).trim());
-  params.append('commit', 'Reset password');
+  // commit 值也从页面取（真机抓包的 cURL 里是 "Reset Password"，大小写写错虽然
+  // Rails 通常不校验，但没必要冒这个险）；取不到再用常见默认值。
+  const commitValue =
+    (formTag.match(/<input[^>]*type="submit"[^>]*value="([^"]+)"/i) || [])[1] ||
+    (formTag.match(/value="(Reset[^"]*)"/i) || [])[1] ||
+    'Reset Password';
+  params.append('commit', commitValue);
 
   const res = await fetch(url, {
     method: 'POST',
