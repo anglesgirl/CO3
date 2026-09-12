@@ -21,10 +21,14 @@ object Diagnostics {
     @Volatile private var initialized = false
     @Volatile private var appContext: Context? = null
 
-    /** 远程诊断日志开关：调试期间默认开，正式版默认关（关于页连点 7 次版本号切换） */
+    /**
+     * 远程诊断日志开关。
+     * **默认关**（正式版策略：不主动上传任何用户数据；关于页连点 7 次版本号可手动开启）。
+     * 调试期需要看日志时，由调用方显式 setEnabled(true)。
+     */
     fun isEnabled(): Boolean {
         val ctx = appContext ?: return false
-        return ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).getBoolean(KEY_ENABLED, true)
+        return ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).getBoolean(KEY_ENABLED, false)
     }
 
     fun setEnabled(enabled: Boolean) {
@@ -36,8 +40,9 @@ object Diagnostics {
         if (initialized) return
         initialized = true
         appContext = context.applicationContext
-        // 调试期间强制开启远程日志（正式版发布前改回）
-        setEnabled(true)
+        // ⚠️ 这里**不再强制开启**远程上报。
+        // 正式版策略：默认关（isEnabled 的默认值为 false），用户可在"关于"页连点 7 次版本号开启。
+        // 之前这里写着 setEnabled(true)，等于无论用户怎么选都会上传 —— 那是调试期的临时行为。
         installCrashReporter()
         event("app_started", mapOf("sdk" to Build.VERSION.SDK_INT, "device" to "${Build.MANUFACTURER} ${Build.MODEL}"))
     }
@@ -47,19 +52,42 @@ object Diagnostics {
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
             runCatching {
                 val trace = error.stackTrace.take(12).joinToString("\n") { it.toString() }
-                val fields = mapOf(
-                    "thread" to thread.name,
-                    "error_type" to error.javaClass.name,
-                    "message" to (error.message ?: "unknown"),
-                    "stack" to trace,
-                    "sdk" to Build.VERSION.SDK_INT.toString()
-                )
-                val worker = Thread { runCatching { uploadBlocking("app_crash", fields) } }
-                worker.isDaemon = true
-                worker.start()
-                worker.join(4000L)
+                // ① 本地崩溃日志**始终保留**（无 GMS/无网络也能事后排查，用户可自行查看）
+                writeLocalCrash(thread.name, error.javaClass.name, error.message ?: "", trace)
+                // ② 远程上报**受开关控制** —— 原来这里直接调 uploadBlocking，
+                //    绕过了 isEnabled()，"默认关"对崩溃上报形同虚设。
+                if (isEnabled()) {
+                    val fields = mapOf(
+                        "thread" to thread.name,
+                        "error_type" to error.javaClass.name,
+                        "message" to (error.message ?: "unknown"),
+                        "stack" to trace,
+                        "sdk" to Build.VERSION.SDK_INT.toString()
+                    )
+                    val worker = Thread { runCatching { uploadBlocking("app_crash", fields) } }
+                    worker.isDaemon = true
+                    worker.start()
+                    worker.join(4000L)
+                }
             }
             prev?.uncaughtException(thread, error)
+        }
+    }
+
+    /** 把崩溃写入应用私有目录（本地保留，不上传）。 */
+    private fun writeLocalCrash(threadName: String, type: String, message: String, trace: String) {
+        runCatching {
+            val ctx = appContext ?: return
+            val f = java.io.File(ctx.filesDir, "crash.log")
+            // 只保留最近若干次，避免无限增长
+            if (f.exists() && f.length() > 64 * 1024) f.delete()
+            f.appendText(
+                buildString {
+                    append(Instant.now().toString()); append(" [").append(threadName).append("]\n")
+                    append(type); append(": "); append(message); append('\n')
+                    append(trace); append("\n\n")
+                }
+            )
         }
     }
 

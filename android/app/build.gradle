@@ -40,11 +40,16 @@ android {
     // 不声明 externalNativeBuild 时，RN 会注入它自己的默认 CMakeLists，
     // appmodules（含 AsyncStorage 等 autolinked TurboModule）正常构建 → 不崩。
     defaultConfig {
-        applicationId "com.co3"
+        // 正式版用独立 applicationId，与内部测试包（com.co3）**共存不冲突**：
+        // 测试机上的旧包不会被覆盖，两者可同时安装、各自保留数据。
+        // 注意：只改 applicationId，不改 namespace（namespace 是源码包名 com.co3），
+        // Android 允许两者不同。
+        applicationId "com.anglesgirl.co3"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 20
-        versionName "B0.0.20"
+        // 正式版标识：加 ECH 标记，与内部测试包（B0.0.xx）区分
+        versionName "1.0.0-ech"
     }
 
     splits {
