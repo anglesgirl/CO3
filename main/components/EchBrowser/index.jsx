@@ -24,6 +24,7 @@ import React, { useCallback, useContext, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  DeviceEventEmitter,
   Linking,
   Modal,
   Platform,
@@ -55,6 +56,26 @@ try {
 
 /** 由 <EchBrowserHost /> 注册进来的打开函数（宿主未挂载时为 null）。 */
 let openHostFn = null;
+
+/**
+ * 登录成功监听器集合。
+ *
+ * 原生 EchWebView 在检测到登录成功（页面跳离登录页且 Cookie 里有
+ * user_credentials）时会 emit `LoginSuccess` —— 之前**没人接这个事件**，
+ * 于是用户登录完只能自己按返回，账号中心也不会自动刷新
+ *（用户反馈："登录成功之后没有正确回来"）。
+ * 现在由宿主统一接管：自动关闭浏览器 + 通知所有注册者刷新。
+ */
+const loginSuccessHandlers = new Set();
+
+/** 注册"登录成功"回调，返回取消函数（组件卸载时务必调用）。 */
+export function onEchLoginSuccess(handler) {
+  if (typeof handler !== 'function') return () => {};
+  loginSuccessHandlers.add(handler);
+  return () => {
+    loginSuccessHandlers.delete(handler);
+  };
+}
 
 /**
  * 打开链接。
@@ -103,6 +124,20 @@ export function EchBrowserHost() {
   const close = useCallback(() => {
     setUrl(null);
     setReloadKey(0);
+  }, []);
+
+  // 登录成功 → 自动关闭浏览器并通知调用方刷新（用户不用再手动返回）。
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener('LoginSuccess', () => {
+      setUrl(null);
+      setReloadKey(0);
+      loginSuccessHandlers.forEach((fn) => {
+        try {
+          fn();
+        } catch (_) {}
+      });
+    });
+    return () => sub.remove();
   }, []);
 
   if (!url) return null;

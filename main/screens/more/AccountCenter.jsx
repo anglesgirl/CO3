@@ -21,7 +21,7 @@ import {
 import { validateCookie } from '../../web/account/login';
 import { getRealUsername, fetchAccountIdentity } from '../../web/account/accountIdentity';
 import getUrl from '../../web/requestManager';
-import { openEchBrowser } from '../../components/EchBrowser';
+import { openEchBrowser, onEchLoginSuccess } from '../../components/EchBrowser';
 
 /**
  * 账号中心。
@@ -85,16 +85,41 @@ export default function AccountCenter() {
     }
   }, []);
 
+  const fetchQueue = useCallback(async () => {
+    setQueue((s) => ({ ...s, loading: true }));
+    try {
+      const html = await getUrl('https://archiveofourown.org/invite_requests', false);
+      const text = typeof html === 'string' ? html : '';
+      const m1 = text.match(/There are\s+(\d[\d,]*)\s+people\s+in\s+the\s+queue/i);
+      const m3 = text.match(/you\s+are\s+number\s*(\d+)/i);
+      setQueue({
+        total: m1 ? m1[1] : null,
+        myPos: m3 ? m3[1] : null,
+        loading: false,
+      });
+    } catch (e) {
+      setQueue((s) => ({ ...s, loading: false }));
+    }
+  }, []);
+
+  // 进页面就刷新登录状态**并加载排队人数**。
+  //（用户反馈"底部排队没显示"：原实现要手动点"刷新排队"才有数据，
+  //  一进来看到的是占位文案，看起来就像功能没做。）
   useEffect(() => {
     refresh();
-  }, [refresh]);
+    fetchQueue();
+  }, [refresh, fetchQueue]);
 
-  // 从登录页/外部浏览器返回时自动刷新登录状态
+  // 从登录页/应用内浏览器返回时自动刷新登录状态
   useFocusEffect(
     useCallback(() => {
       refresh();
     }, [refresh]),
   );
+
+  // 登录成功（原生 EchWebView 的 LoginSuccess 事件）——
+  // 宿主会自动关掉浏览器，这里同步把账号中心刷成已登录状态。
+  useEffect(() => onEchLoginSuccess(() => refresh()), [refresh]);
 
   /** 打开官方登录页：原生 EchWebView 负责劫持登录表单并检测成功，回来时 refresh 同步。 */
   const doLogin = () => {
@@ -113,23 +138,6 @@ export default function AccountCenter() {
       return;
     }
     open(`https://archiveofourown.org/users/${real}/${path}`);
-  };
-
-  const fetchQueue = async () => {
-    setQueue((s) => ({ ...s, loading: true }));
-    try {
-      const html = await getUrl('https://archiveofourown.org/invite_requests', false);
-      const text = typeof html === 'string' ? html : '';
-      const m1 = text.match(/There are\s+(\d[\d,]*)\s+people\s+in\s+the\s+queue/i);
-      const m3 = text.match(/you\s+are\s+number\s*(\d+)/i);
-      setQueue({
-        total: m1 ? m1[1] : null,
-        myPos: m3 ? m3[1] : null,
-        loading: false,
-      });
-    } catch (e) {
-      setQueue((s) => ({ ...s, loading: false }));
-    }
   };
 
   const Card = ({ title, desc, onPress }) => (
