@@ -31,12 +31,20 @@ const AO3 = 'https://archiveofourown.org';
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
 
-/** 去标签，方便在 JS 片段/HTML 里做宽松匹配。 */
+/**
+ * 去标签与 JS 转义。
+ *
+ * ⚠️ **不要删 `<script>…</script>` 里的内容** —— 这个接口的响应**本身就是**
+ * Rails 的 js.erb 片段（形如 `<script>$("#x").html("…")</script>`），
+ * 先删 script 等于把要解析的正文明明白白扔掉，结果是"永远解析不到任何结果"
+ * （回归测试里就是这么暴露出来的：未登记样本 flatten 后变成空串）。
+ * 只把标签换成空格即可。
+ */
 function flatten(text) {
   return String(text || '')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/\\n|\\r|\\t/g, ' ')
+    .replace(/\\"/g, '"')
     .replace(/&nbsp;/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -80,12 +88,20 @@ export async function queryInviteQueue(email) {
   const flat = flatten(text);
 
   // 名次：AO3 措辞变过多次，做宽松匹配，并兼容 JS 片段里的数字
+  // ⚠️ 这里**不能放"看着像名次"的宽匹配**（例如 `>123<`）——
+  // 用户提供的两份真机 HAR 对比：已登记的响应 1058 字节、**未登记的只有 121 字节**，
+  // 而后者里同样会出现数字，宽正则会把"没排队的人"解析出一个**假名次**。
+  // 只认明确的语义句；同时把"明确没找到"的情况单独判出来（见 notFound）。
   const position =
     (flat.match(/you are (?:currently )?(?:number|position|in position)\s*#?\s*([\d,]+)/i) || [])[1] ||
     (flat.match(/your position is\s*#?\s*([\d,]+)/i) || [])[1] ||
     (flat.match(/there are\s+([\d,]+)\s+people (?:ahead of you|before you)/i) || [])[1] ||
-    (flat.match(/>\s*#?([\d,]+)\s*</) || [])[1] ||
     null;
+
+  const notFound =
+    /could\s?n[o']?t\s+find|can'?t\s+find|no (?:invitation )?request (?:was )?found|not (?:currently )?(?:on|in) the (?:waiting )?list|doesn'?t (?:appear|seem) to be/i.test(
+      flat,
+    );
 
   const total =
     (flat.match(/There are currently\s+([\d,]+)\s+people on the waiting list/i) || [])[1] ||
@@ -97,12 +113,14 @@ export async function queryInviteQueue(email) {
 
   const inQueue =
     !!position ||
-    /already (?:on|in) the (?:list|queue)/i.test(flat) ||
-    /you (?:are|'re) (?:on|in) the (?:waiting )?list/i.test(flat);
+    (!notFound &&
+      (/already (?:on|in) the (?:list|queue)/i.test(flat) ||
+        /you (?:are|'re) (?:on|in) the (?:waiting )?list/i.test(flat)));
 
   return {
     ok: status >= 200 && status < 400,
     inQueue,
+    notFound,
     position,
     total,
     rate,
