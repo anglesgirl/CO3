@@ -10,7 +10,7 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { AppContext } from '../../app';
 import {
@@ -337,15 +337,8 @@ export default function AccountCenter() {
     openEchBrowser(url);
   };
 
-  /** 我自己的页面链接一律用真实用户名拼，避免邮箱 404。 */
-  const openMine = async (path) => {
-    const real = await getRealUsername().catch(() => null);
-    if (!real) {
-      Alert.alert(t('screen_account_login_failed'), t('screen_account_center_login_hint'));
-      return;
-    }
-    open(`https://archiveofourown.org/users/${real}/${path}`);
-  };
+  /** 导航：稍后阅读等入口直接走 app 本体页面，不再跳 AO3 网页。 */
+  const navigation = useNavigation();
 
   const Card = ({ title, desc, onPress }) => (
     <TouchableOpacity
@@ -450,11 +443,14 @@ export default function AccountCenter() {
         </Text>
         {/* 原「我的书签」入口已移除：外层「更多 → 书签」就是同一个功能，重复；
             而且这里的实现还出过 bug（用户反馈"快捷方式里的书签有 bug"，直接移除）。
-            只保留稍后阅读（外层没有等价入口）。 */}
+            「稍后阅读」同理保留入口，但**必须走 app 本体的页面**（路由 `ReadLater`）——
+            之前这里调 `openMine('readings?show=to-read')`，点进去是 **AO3 网页**，
+            用户反馈："稍后阅读，进去的是网页这里"。外层本来就有 ReadLaterScreen，
+            而且那个页面自己会取真实用户名，这里直接导航过去即可（也符合"能用自建就用自建"）。 */}
         <Card
           title={t('screen_account_center_my_readlater')}
           desc={t('screen_account_center_my_readlater_desc')}
-          onPress={() => openMine('readings?show=to-read')}
+          onPress={() => navigation.navigate('ReadLater')}
         />
         {/* 「找回密码」已移到未登录区，并改为应用内自建窗体 ——
             已登录时 AO3 访问 /users/password/new 直接 403（不允许重置），
