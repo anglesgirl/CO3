@@ -12,13 +12,13 @@ import {
   View,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
-import login, { validateCookie } from '../../web/account/login';
+import login from '../../web/account/login';
 import {
   deleteCredsPasswd,
   deleteCredsToken,
   getCredsPasswd,
-  getCredsToken,
   getUsername,
+  hasUserCredentials,
   setCredsPasswd,
   setCredsToken,
   setLastLogin,
@@ -61,16 +61,14 @@ const LoginScreen = ({ route }) => {
   const checkLoginStatus = async () => {
     try {
       setValidating(true);
-      const storedToken = await getCredsToken();
-
-      if (storedToken) {
-        const isValid = await validateCookie(storedToken);
-        setIsLoggedIn(isValid);
-      } else {
-        setIsLoggedIn(false);
-      }
+      // 登录态判据 = Cookie 里的 user_credentials；
+      // 旧写法「存储 token 为空即未登录 / 拿 token 手拼 Cookie 去请求」会在
+      // token 丢失（而 Cookie 还在）时误判未登录 —— 用户被引导去登录，
+      // 结果 AO3 回 "You are already logged in to an account"。
+      const ok = await hasUserCredentials();
+      setIsLoggedIn(ok);
     } catch (error) {
-      console.error('Token validation error:', error);
+      console.error('Login status check error:', error);
       setIsLoggedIn(false);
     } finally {
       setValidating(false);

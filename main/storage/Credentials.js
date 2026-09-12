@@ -1,7 +1,36 @@
 import * as Keychain from 'react-native-keychain';
 import CookieManager from '@react-native-cookies/cookies';
+import { NativeModules } from 'react-native';
 
 const TIMESTAMP_SERVICE = 'creds_timestamp';
+
+/**
+ * 是否处于登录态 —— **读 Cookie 里的 user_credentials**，零网络请求。
+ *
+ * 这是 AO3 唯一可靠的真登录标志：
+ *  - 匿名访问也会下发 `_otwarchive_session`，拿它判断会把未登录当成已登录；
+ *  - 而存储里的 token 丢了/过期时，Cookie 里的 `user_credentials` 往往**还在**。
+ *
+ * 真机实测症状（只看存储 token 的写法）：账号中心显示"未登录"并引导去登录，
+ * 用户点进去却被 AO3 告知 "You are already logged in to an account"。
+ *
+ * 优先用原生 CoCookieModule（直接读 CookieManager，HttpOnly 也读得到）；
+ * 原生不可用时退回 @react-native-cookies 读同一份 Cookie。
+ */
+export async function hasUserCredentials() {
+  try {
+    const mod = NativeModules && NativeModules.CoCookieModule;
+    if (mod && typeof mod.hasUserCredentials === 'function') {
+      return !!(await mod.hasUserCredentials());
+    }
+  } catch (_) {}
+  try {
+    const cookies = await CookieManager.get('https://archiveofourown.org/', true);
+    return !!(cookies && cookies.user_credentials);
+  } catch (_) {
+    return false;
+  }
+}
 
 export async function setLastLogin() {
   try {

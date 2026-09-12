@@ -14,11 +14,10 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { AppContext } from '../../app';
 import {
-  getCredsToken,
   deleteCredsToken,
   deleteCredsPasswd,
+  hasUserCredentials,
 } from '../../storage/Credentials';
-import { validateCookie } from '../../web/account/login';
 import { getRealUsername, fetchAccountIdentity } from '../../web/account/accountIdentity';
 import getUrl from '../../web/requestManager';
 import { openEchBrowser, onEchLoginSuccess } from '../../components/EchBrowser';
@@ -53,7 +52,7 @@ export default function AccountCenter() {
   const [user, setUser] = useState('');
   const [logged, setLogged] = useState(false);
   const [validating, setValidating] = useState(true);
-  const [queue, setQueue] = useState({ total: null, myPos: null, loading: false });
+  const [queue, setQueue] = useState({ total: null, myPos: null, loading: false, failed: false });
   const [email, setEmail] = useState('');
   const [inviteLink, setInviteLink] = useState('');
   const [activateLink, setActivateLink] = useState('');
@@ -61,16 +60,11 @@ export default function AccountCenter() {
   const refresh = useCallback(async () => {
     setValidating(true);
     try {
-      const token = await getCredsToken();
-      if (!token) {
-        setLogged(false);
-        setUser('');
-        return;
-      }
-      const ok = await validateCookie(token).catch(() => false);
+      // 登录态判据 = Cookie 里的 user_credentials（见 storage/Credentials.hasUserCredentials 注释）
+      const ok = await hasUserCredentials();
       setLogged(ok);
       if (ok) {
-        // 真实用户名（邮箱登录时会自愈成 username，并顺手把存储改正）
+        // 真实用户名（邮箱/脏数据会在这里自愈成权威值，并顺手把存储改正）
         const real = await getRealUsername().catch(() => null);
         setUser(real || '');
         // 顺带把 pseud 也补上，供书签/稍后读按 pseud 取用
@@ -86,7 +80,7 @@ export default function AccountCenter() {
   }, []);
 
   const fetchQueue = useCallback(async () => {
-    setQueue((s) => ({ ...s, loading: true }));
+    setQueue((s) => ({ ...s, loading: true, failed: false }));
     try {
       const html = await getUrl('https://archiveofourown.org/invite_requests', false);
       const text = typeof html === 'string' ? html : '';
@@ -96,9 +90,13 @@ export default function AccountCenter() {
         total: m1 ? m1[1] : null,
         myPos: m3 ? m3[1] : null,
         loading: false,
+        // 两条文案都没匹配到 = 页面结构/语言变了、或未登录看不到排队信息，
+        // 这与"队伍里 0 人"完全是两回事，要分开显示（用户反馈"底部排队没显示"，
+        // 之前无论哪种情况都只显示一个占位符，看不出到底是失败还是没人排队）。
+        failed: !m1 && !m3,
       });
     } catch (e) {
-      setQueue((s) => ({ ...s, loading: false }));
+      setQueue((s) => ({ ...s, loading: false, failed: true }));
     }
   }, []);
 
@@ -365,9 +363,11 @@ export default function AccountCenter() {
           ) : (
             <>
               <Text style={{ color: currentTheme.textColor }}>
-                {t('screen_account_center_queue_total', {
-                  total: queue.total ?? t('screen_account_center_queue_unknown'),
-                })}
+                {queue.failed
+                  ? t('screen_account_center_queue_failed')
+                  : t('screen_account_center_queue_total', {
+                      total: queue.total ?? t('screen_account_center_queue_unknown'),
+                    })}
               </Text>
               <Text style={{ color: currentTheme.textColor, marginTop: 6 }}>
                 {t('screen_account_center_queue_mine', {
