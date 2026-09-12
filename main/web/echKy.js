@@ -8,7 +8,6 @@
 import ky from 'ky';
 import { NativeModules, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { trackEvent } from '../utils/analytics';
 import { isEchProtectedUrl } from './WebviewFetcher';
 
 const AO3_HOSTS = new Set(['archiveofourown.org', 'www.archiveofourown.org']);
@@ -139,10 +138,6 @@ function startProxy() {
           ? 'iOS: EchProxyBridge.m 的 RCT_EXTERN_REMAP_MODULE 注册没生效。'
           : 'Android: EchProxyPackage 是否加入 getPackages()。');
       console.warn(`[ECH] ${lastStartError}`);
-      trackEvent('ech_proxy_start', {
-        ok: false,
-        error: `native_module_missing:${Platform.OS}`,
-      });
       return null;
     }
     // t0 必须在 try 外面：原来声明在 try 里，catch 块又引用 t0 计算耗时，
@@ -160,7 +155,6 @@ function startProxy() {
       console.log(`[ECH] proxy started on ${base} in ${ms}ms`);
       lastStartError = null;
       echBaseReady = true;
-      trackEvent('ech_proxy_start', { ok: true, ms, doh: !!doh, ip: !!ips });
       return base;
     } catch (e) {
       const ms = Date.now() - t0;
@@ -169,7 +163,6 @@ function startProxy() {
       // 失败不永久 memoise：置空并清掉 promise，让下次请求走 shouldRetryStart 冷却后重试。
       // 否则一次失败(DoH 抖动/被墙)会让整个 App 会话永久断网。
       echBaseReady = false;
-      trackEvent('ech_proxy_start', { ok: false, ms, error: String(e?.message ?? e).slice(0, 120) });
       echBasePromise = null;
       return null;
     }
@@ -569,7 +562,6 @@ export async function echSelfTest() {
   const doh = await getDoh();
   const base = await getEchBase();
   if (!base) {
-    trackEvent('ech_self_test', { ok: false, reason: 'proxy_unavailable' });
     // 把真正的原因带出来：桥没注册 / start() 报错 / 冷却中。
     const status = await getEchStatus();
     return (
@@ -585,12 +577,10 @@ export async function echSelfTest() {
     const res = await echKy.get('https://archiveofourown.org/', { timeout: 30000 });
     const ms = Date.now() - t0;
     const status = await getEchStatus();
-    trackEvent('ech_self_test', { ok: true, ms, http: res.status, status: String(status).slice(0, 120) });
     return `OK — HTTP ${res.status} in ${ms}ms via ${base}\nDoH: ${doh || '(none)'}\n${status}`;
   } catch (e) {
     const ms = Date.now() - t0;
     const status = await getEchStatus();
-    trackEvent('ech_self_test', { ok: false, ms, error: String(e?.message ?? e).slice(0, 120), status: String(status).slice(0, 120) });
     return `Request failed after ${ms}ms: ${e?.message ?? e}\nDoH: ${doh || '(none)'}\nStatus: ${status}`;
   }
 }
