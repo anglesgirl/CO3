@@ -32,19 +32,31 @@ const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
 
 /**
- * 去标签与 JS 转义。
+ * 去标签、还原 JS 转义、**解码 HTML 实体**。
  *
  * ⚠️ **不要删 `<script>…</script>` 里的内容** —— 这个接口的响应**本身就是**
- * Rails 的 js.erb 片段（形如 `<script>$("#x").html("…")</script>`），
- * 先删 script 等于把要解析的正文明明白白扔掉，结果是"永远解析不到任何结果"
- * （回归测试里就是这么暴露出来的：未登记样本 flatten 后变成空串）。
- * 只把标签换成空格即可。
+ * Rails 的 js.erb 片段（形如 `$("#x").html("…")`），删 script 等于把要解析的正文
+ * 整段扔掉，结果是"永远解析不到任何结果"（回归测试里暴露过）。
+ *
+ * ⚠️ **必须解码实体**：真机抓到的原始响应是
+ *   `$("#invite-status").html("<p class=\"notice\">\n  Sorry, we can&#39;t find the email address you entered.\n<\/p>\n");`
+ * 撇号是 `&#39;` 而不是 `'` —— 不解码的话，正则 `can'?t find` **匹配不到**，
+ * "未登记"会被误判成"解析不出结果"。同理要处理 JS 转义的 `\/` 和 `\"`。
  */
 function flatten(text) {
   return String(text || '')
     .replace(/<[^>]+>/g, ' ')
-    .replace(/\\n|\\r|\\t/g, ' ')
+    .replace(/\\\//g, '/')
     .replace(/\\"/g, '"')
+    .replace(/\\n|\\r|\\t/g, ' ')
+    // HTML 实体：数字实体（&#39; / &#x27;）+ 常见命名实体
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
+    .replace(/&#[xX]([0-9a-fA-F]+);/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
     .replace(/&nbsp;/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -98,8 +110,11 @@ export async function queryInviteQueue(email) {
     (flat.match(/there are\s+([\d,]+)\s+people (?:ahead of you|before you)/i) || [])[1] ||
     null;
 
+  // 真机抓到的原文（未登记邮箱的响应，只有 121 字节）：
+  //   "Sorry, we can&#39;t find the email address you entered."
+  // （实体已在 flatten 里解码，所以这里按真实字符写正则）
   const notFound =
-    /could\s?n[o']?t\s+find|can'?t\s+find|no (?:invitation )?request (?:was )?found|not (?:currently )?(?:on|in) the (?:waiting )?list|doesn'?t (?:appear|seem) to be/i.test(
+    /sorry,?\s*we\s+can'?t\s+find|can'?t\s+find\s+the\s+email|no (?:invitation )?request (?:was )?found|not (?:currently )?(?:on|in) the (?:waiting )?list|doesn'?t (?:appear|seem) to be/i.test(
       flat,
     );
 
