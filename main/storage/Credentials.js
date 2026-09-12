@@ -165,8 +165,25 @@ export async function deleteCredsPasswd() {
 export async function deleteCredsToken() {
   try {
     await Keychain.resetGenericPassword({ service: 'creds_token' });
-    await CookieManager.clearAll(); //Why the hell do I need that and why the hell does it remember cookie on its own ???
-    //Is it sentient ? I'm scarred. I never told it to remember cookies so why does it do ?
+    // 【清 Cookie 必须走原生】此前只调 @react-native-cookies 的 clearAll()，真机上
+    // 清不掉 AO3 的登录 Cookie（作者原注释就写着"why does it remember cookie on its own"），
+    // 表现为：点退出后**界面退了但账号没退**，下次进来仍是登录态
+    //（用户实测反馈"点 log out 界面直接退出，账号并不会退出"）。
+    // 原生 CoCookieModule.clearSession 是 removeAllCookies + 对 4 个 host 写
+    // Max-Age=0 过期标记 + flush，专门解决 path="" 的 host-only cookie 删不掉的问题。
+    let cleared = false;
+    try {
+      const mod = NativeModules && NativeModules.CoCookieModule;
+      if (mod && typeof mod.clearSession === 'function') {
+        cleared = !!(await mod.clearSession());
+      }
+    } catch (_) {
+      cleared = false;
+    }
+    if (!cleared) {
+      // 原生不可用时退回 JS 实现（至少尽力而为）
+      await CookieManager.clearAll();
+    }
     console.log('Token credentials deleted.');
   } catch (error) {
     console.error('Failed to delete token credentials:', error);
