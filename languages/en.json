@@ -593,5 +593,10 @@
   "screen_account_center_queue_query_btn": "Query",
   "screen_account_center_queue_position": "Your position: #{{pos}}",
   "screen_account_center_queue_in_list": "You are on the waiting list",
-  "screen_account_center_queue_not_in_list": "This email is not on the waiting list (no position)"
+  "screen_account_center_queue_not_in_list": "This email is not on the waiting list (no position)",
+  "screen_account_center_email_placeholder": "Your account email",
+  "screen_account_center_send": "Send",
+  "screen_account_center_reset_sent": "Request sent — check your inbox (and spam)",
+  "screen_account_center_reset_no_account": "No account found for this email",
+  "screen_account_center_reset_failed": "Failed to send, please retry"
 }

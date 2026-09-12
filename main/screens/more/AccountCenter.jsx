@@ -20,6 +20,7 @@ import {
 } from '../../storage/Credentials';
 import { getRealUsername, fetchAccountIdentity } from '../../web/account/accountIdentity';
 import { queryInviteQueue } from '../../web/account/inviteQueue';
+import { requestPasswordReset } from '../../web/account/passwordReset';
 import getUrl from '../../web/requestManager';
 import { openEchBrowser, onEchLoginSuccess } from '../../components/EchBrowser';
 
@@ -59,6 +60,9 @@ export default function AccountCenter() {
   const [activateLink, setActivateLink] = useState('');
   const [querying, setQuerying] = useState(false);
   const [queryResult, setQueryResult] = useState(null);
+  const [pwEmail, setPwEmail] = useState('');
+  const [pwSending, setPwSending] = useState(false);
+  const [pwResult, setPwResult] = useState(null);
 
   const refresh = useCallback(async () => {
     setValidating(true);
@@ -138,6 +142,27 @@ export default function AccountCenter() {
       setQueryResult({ ok: false, position: null, inQueue: false, message: e.message });
     } finally {
       setQuerying(false);
+    }
+  };
+
+  /**
+   * 应用内发起找回密码（自建窗体，不跳网页）。
+   * 只在未登录时可用 —— 已登录时 AO3 直接 403（不允许已登录状态重置密码）。
+   */
+  const doResetPassword = async () => {
+    if (!pwEmail || !pwEmail.includes('@')) {
+      Alert.alert(t('screen_account_center_queue_bad_email'));
+      return;
+    }
+    setPwSending(true);
+    setPwResult(null);
+    try {
+      const r = await requestPasswordReset(pwEmail);
+      setPwResult(r);
+    } catch (e) {
+      setPwResult({ ok: false, message: e.message });
+    } finally {
+      setPwSending(false);
     }
   };
 
@@ -288,17 +313,68 @@ export default function AccountCenter() {
           desc={t('screen_account_center_my_readlater_desc')}
           onPress={() => openMine('readings?show=to-read')}
         />
-        <Card
-          title={t('screen_account_center_forgot')}
-          desc={t('screen_account_center_forgot_desc')}
-          onPress={() => open('https://archiveofourown.org/users/password/new')}
-        />
+        {/* 「找回密码」已移到未登录区，并改为应用内自建窗体 ——
+            已登录时 AO3 访问 /users/password/new 直接 403（不允许重置），
+            而且用户要求"能用我们自己的窗体就用我们自己的窗体"。 */}
+
         {/* 以下都是"还没有账号/正准备注册"才需要的：获取邀请、用邀请链接注册、
-            激活链接、邀请排队。**已登录时全部隐藏** —— 已经有账号的人看这些毫无意义，
-            还会把页面塞满（用户反馈："在已经登录的情况下，下面那些邀请注册，激活，
-            都是没意义的，未登录才需要"）。 */}
+            激活链接、邀请排队、找回密码。**已登录时全部隐藏** —— 已经有账号的人看这些
+            毫无意义，还会把页面塞满（用户反馈："在已经登录的情况下，下面那些邀请注册，
+            激活，都是没意义的，未登录才需要"）。 */}
         {!logged && (
           <>
+            {/* 找回密码：应用内自建窗体，不跳网页 */}
+            <View
+              style={[
+                styles.queueBox,
+                {
+                  backgroundColor: currentTheme.cardBackground,
+                  borderColor: currentTheme.borderColor,
+                  marginBottom: 10,
+                },
+              ]}
+            >
+              <Text style={{ color: currentTheme.textColor, fontWeight: '600' }}>
+                {t('screen_account_center_forgot')}
+              </Text>
+              <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>
+                {t('screen_account_center_forgot_desc')}
+              </Text>
+              <View style={{ flexDirection: 'row', marginTop: 10 }}>
+                <TextInput
+                  placeholder={t('screen_account_center_email_placeholder')}
+                  placeholderTextColor={currentTheme.placeholderColor}
+                  value={pwEmail}
+                  onChangeText={setPwEmail}
+                  style={[
+                    styles.input,
+                    { borderColor: currentTheme.borderColor, color: currentTheme.textColor },
+                  ]}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="email-address"
+                />
+                <TouchableOpacity
+                  onPress={doResetPassword}
+                  style={[styles.btnSmall, { backgroundColor: currentTheme.primaryColor }]}
+                >
+                  {pwSending ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.btnText}>{t('screen_account_center_send')}</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+              {pwResult ? (
+                <Text style={{ color: currentTheme.textColor, marginTop: 8, fontSize: 12 }}>
+                  {pwResult.ok
+                    ? t('screen_account_center_reset_sent')
+                    : pwResult.message === 'email_not_found'
+                    ? t('screen_account_center_reset_no_account')
+                    : t('screen_account_center_reset_failed')}
+                </Text>
+              ) : null}
+            </View>
             <Card
               title={t('screen_account_center_invite')}
               desc={t('screen_account_center_invite_desc')}
