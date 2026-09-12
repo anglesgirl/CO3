@@ -495,7 +495,7 @@ export default function AccountCenter() {
                 />
                 <TouchableOpacity
                   onPress={doResetPassword}
-                  style={[styles.btnSmall, { backgroundColor: currentTheme.primaryColor }]}
+                  style={[styles.btnInline, { backgroundColor: currentTheme.primaryColor }]}
                 >
                   {pwSending ? (
                     <ActivityIndicator color="#fff" />
@@ -549,7 +549,7 @@ export default function AccountCenter() {
             />
             <TouchableOpacity
               onPress={doLoadRegisterForm}
-              style={[styles.btnSmall, { backgroundColor: currentTheme.primaryColor }]}
+              style={[styles.btnInline, { backgroundColor: currentTheme.primaryColor }]}
             >
               {regLoading ? (
                 <ActivityIndicator color="#fff" />
@@ -585,8 +585,8 @@ export default function AccountCenter() {
               <TouchableOpacity
                 onPress={doSubmitRegister}
                 style={[
-                  styles.btnSmall,
-                  { backgroundColor: currentTheme.primaryColor, marginTop: 10, alignSelf: 'flex-start' },
+                  styles.btnInline,
+                  { backgroundColor: currentTheme.primaryColor, marginTop: 10, alignSelf: 'flex-start', marginLeft: 0 },
                 ]}
               >
                 {regSubmitting ? (
@@ -650,7 +650,7 @@ export default function AccountCenter() {
             />
             <TouchableOpacity
               onPress={doActivate}
-              style={[styles.btnSmall, { backgroundColor: currentTheme.primaryColor }]}
+              style={[styles.btnInline, { backgroundColor: currentTheme.primaryColor }]}
             >
               {actLoading ? (
                 <ActivityIndicator color="#fff" />
@@ -712,7 +712,7 @@ export default function AccountCenter() {
           </Text>
           <View style={{ flexDirection: 'row', marginTop: 10 }}>
             <TextInput
-              placeholder={t('screen_account_center_queue_email')}
+              placeholder={t('screen_account_center_request_email')}
               placeholderTextColor={currentTheme.placeholderColor}
               value={reqEmail}
               onChangeText={setReqEmail}
@@ -728,10 +728,13 @@ export default function AccountCenter() {
               onPress={doSubmitInviteRequest}
               disabled={reqSubmitting || reqCooldownLeft > 0}
               style={[
-                styles.btn,
+                // 行内按钮用 btnInline（与输入框同高 44）—— 之前误用了全宽样式 btn
+                //（带 marginTop 12 / 高 46），在横向排列里既错位又差 2px 高度。
+                styles.btnInline,
                 {
                   backgroundColor:
                     reqCooldownLeft > 0 ? currentTheme.borderColor : currentTheme.primaryColor,
+                  marginTop: 10,
                 },
               ]}
             >
@@ -794,7 +797,7 @@ export default function AccountCenter() {
               </TouchableOpacity>
               <View style={{ flexDirection: 'row', marginTop: 12 }}>
                 <TextInput
-                  placeholder={t('screen_account_center_queue_email')}
+                  placeholder={t('screen_account_center_query_email')}
                   placeholderTextColor={currentTheme.placeholderColor}
                   value={email}
                   onChangeText={setEmail}
@@ -807,12 +810,17 @@ export default function AccountCenter() {
                 />
                 <TouchableOpacity
                   onPress={doQueryQueue}
-                  style={[styles.btn, { backgroundColor: currentTheme.primaryColor }]}
+                  style={[
+                    // 「查询」是辅助动作：用描边样式与上方的实心主按钮区分主次，
+                    // 避免一屏多个高饱和实心蓝块互相抢视线（也是之前显"乱"的原因）。
+                    styles.btnInlineOutline,
+                    { borderColor: currentTheme.primaryColor },
+                  ]}
                 >
                   {querying ? (
-                    <ActivityIndicator color="#fff" />
+                    <ActivityIndicator color={currentTheme.primaryColor} />
                   ) : (
-                    <Text style={styles.btnText}>{t('screen_account_center_queue_query_btn')}</Text>
+                    <Text style={[styles.btnTextOutline, { color: currentTheme.primaryColor }]}>{t('screen_account_center_queue_query_btn')}</Text>
                   )}
                 </TouchableOpacity>
               </View>
@@ -866,13 +874,51 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   header: { fontSize: 22, fontWeight: '700', marginBottom: 12 },
   status: { padding: 14, borderRadius: 10, borderWidth: 1, marginBottom: 16 },
-  section: { fontSize: 15, fontWeight: '600', marginTop: 12, marginBottom: 8 },
-  card: { padding: 14, borderRadius: 10, borderWidth: 1, marginBottom: 10 },
+  section: { fontSize: 15, fontWeight: '600', marginTop: 14, marginBottom: 8 },
+  card: { padding: 16, borderRadius: 12, borderWidth: 1, marginBottom: 12 },
   cardTitle: { fontSize: 15, fontWeight: '600' },
-  cardDesc: { fontSize: 12, marginTop: 4 },
-  queueBox: { padding: 14, borderRadius: 10, borderWidth: 1 },
-  btn: { marginTop: 10, paddingVertical: 10, borderRadius: 8, alignItems: 'center' },
-  btnSmall: { marginLeft: 8, paddingHorizontal: 14, justifyContent: 'center', borderRadius: 8 },
-  btnText: { color: '#fff', fontWeight: '600' },
-  input: { flex: 1, borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, height: 40 },
+  cardDesc: { fontSize: 12, marginTop: 4, lineHeight: 17 },
+  queueBox: { padding: 16, borderRadius: 12, borderWidth: 1 },
+  // 全宽主操作按钮
+  btn: {
+    height: 46,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 12,
+  },
+  // 行内按钮：**必须与输入框同高**（原来是靠内容撑高，比 40px 的输入框矮一截，
+  // 视觉上像"小色块嵌在大输入框里" —— 这是用户反馈"很丑"的主因）。
+  btnInline: {
+    height: 44,
+    minWidth: 78,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 10,
+  },
+  // 行内次要按钮（描边风格）—— 用来区分"查询"这类辅助动作，
+  // 避免一屏多个实心高饱和蓝块互相抢视线。
+  btnInlineOutline: {
+    height: 44,
+    minWidth: 78,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 10,
+    borderWidth: 1,
+  },
+  btnText: { color: '#fff', fontWeight: '600', fontSize: 14 },
+  btnTextOutline: { fontWeight: '600', fontSize: 14 },
+  // 输入框同样 44 高、圆角 10，与按钮对齐
+  input: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    height: 44,
+    fontSize: 14,
+  },
 });

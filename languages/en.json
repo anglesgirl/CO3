@@ -160,11 +160,11 @@
   "screen_account_center_queue_mine": "Your position: {{pos}}",
   "screen_account_center_queue_unknown": "unknown",
   "screen_account_center_queue_not_queried": "not queried (shown after you apply)",
-  "screen_account_center_queue_refresh": "Refresh queue",
+  "screen_account_center_queue_refresh": "Refresh queue data",
   "screen_account_center_queue_email": "Enter your email to check",
   "screen_account_center_queue_bad_email": "Please enter a valid email",
   "screen_account_center_query": "Check",
-  "screen_account_center_refresh_state": "Refresh status",
+  "screen_account_center_refresh_state": "Refresh login status",
   "ech_browser_unsupported": "In-app encrypted browsing is unavailable on this platform",
   "ech_browser_fail_closed": "Blocked from opening in the system browser to avoid leaking the plaintext domain",
   "screen_preferences_translate_download": "Download model (Wi-Fi recommended)",
@@ -616,5 +616,7 @@
   "screen_account_center_request_wait": "Paused {{time}}",
   "screen_account_center_request_done": "Submitted — check your email for the invitation",
   "screen_account_center_request_busy": "AO3 is busy — paused for 5 minutes to avoid adding load",
-  "screen_account_center_request_failed": "Submission failed"
+  "screen_account_center_request_failed": "Submission failed",
+  "screen_account_center_request_email": "Email to request for",
+  "screen_account_center_query_email": "Email to look up"
 }
