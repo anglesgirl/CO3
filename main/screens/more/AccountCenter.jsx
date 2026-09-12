@@ -10,7 +10,7 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { AppContext } from '../../app';
 import {
@@ -337,21 +337,6 @@ export default function AccountCenter() {
     openEchBrowser(url);
   };
 
-  /** 导航：稍后阅读等入口直接走 app 本体页面，不再跳 AO3 网页。 */
-  const navigation = useNavigation();
-
-  const Card = ({ title, desc, onPress }) => (
-    <TouchableOpacity
-      onPress={onPress}
-      style={[
-        styles.card,
-        { backgroundColor: currentTheme.cardBackground, borderColor: currentTheme.borderColor },
-      ]}
-    >
-      <Text style={[styles.cardTitle, { color: currentTheme.textColor }]}>{title}</Text>
-      <Text style={[styles.cardDesc, { color: currentTheme.placeholderColor }]}>{desc}</Text>
-    </TouchableOpacity>
-  );
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: currentTheme.backgroundColor }]}>
@@ -438,20 +423,14 @@ export default function AccountCenter() {
           </TouchableOpacity>
         )}
 
-        <Text style={[styles.section, { color: currentTheme.textColor }]}>
-          {t('screen_account_center_quick')}
-        </Text>
-        {/* 原「我的书签」入口已移除：外层「更多 → 书签」就是同一个功能，重复；
-            而且这里的实现还出过 bug（用户反馈"快捷方式里的书签有 bug"，直接移除）。
-            「稍后阅读」同理保留入口，但**必须走 app 本体的页面**（路由 `ReadLater`）——
-            之前这里调 `openMine('readings?show=to-read')`，点进去是 **AO3 网页**，
-            用户反馈："稍后阅读，进去的是网页这里"。外层本来就有 ReadLaterScreen，
-            而且那个页面自己会取真实用户名，这里直接导航过去即可（也符合"能用自建就用自建"）。 */}
-        <Card
-          title={t('screen_account_center_my_readlater')}
-          desc={t('screen_account_center_my_readlater_desc')}
-          onPress={() => navigation.navigate('ReadLater')}
-        />
+        {/* 「快捷操作」整节已移除 —— 它只有"我的书签 / 稍后阅读"两个跳转，
+            但外层「更多」菜单里本来就有 Bookmarks 与 ReadLater 两个 app 本体页面
+            （More.jsx 里都有入口），属于纯重复。
+            这两个入口是我重建账号中心时按"用户常用"的直觉加的，
+            **当时没有先去查外层导航有没有**，还留下过"外层没有等价入口"这种
+            没查就下的结论 —— 与"先查真实源码再改"的原则相悖，所以整节删掉。
+            账号中心现在只保留它独有、外层没有的功能：
+            登录/登出、找回密码、注册、激活、申请排队、排队查询。 */}
         {/* 「找回密码」已移到未登录区，并改为应用内自建窗体 ——
             已登录时 AO3 访问 /users/password/new 直接 403（不允许重置），
             而且用户要求"能用我们自己的窗体就用我们自己的窗体"。 */}
