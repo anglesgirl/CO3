@@ -213,6 +213,14 @@ export function initEch() {
         const status = await getEchStatus();
         // ★ 一条日志里同时给出「真实请求通了没有」和「原生握手/ECH 状态」
         rlog('warmup_ok', { ms, http: res.status, status });
+        // 非 2xx 时把代理回的错误正文记下来：502 的 body 里就是 Go 的
+        // "upstream error: ..." 原文，能直接看出是 DoH 不通 / ECH 握手失败 / 边缘 IP 被墙。
+        if (!res.ok) {
+          try {
+            const bodyHead = (await res.text()).slice(0, 300);
+            rlog('warmup_bad_body', { http: res.status, bodyHead });
+          } catch {}
+        }
       } catch (e) {
         const ms = Date.now() - t0;
         // 预热失败不阻塞：真实请求仍会正常走（只是慢一次）
