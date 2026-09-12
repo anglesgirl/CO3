@@ -54,7 +54,7 @@ const IOS_MODELS = {
 /** Android：官方私有量化（配官方预编译 libllama.so） */
 const ANDROID_MODELS = {
   '2bit': {
-    label: 'HyMT 2bit（572MB，质量优先）',
+    label: '高质量版（572MB）',
     file: 'Hy-MT1.5-1.8B-2bit.gguf',
     bytes: 600535360,
     urls: [
@@ -65,7 +65,7 @@ const ANDROID_MODELS = {
     ],
   },
   '1.25bit': {
-    label: 'HyMT 1.25bit（440MB，省空间/更快）',
+    label: '轻量版（440MB）',
     file: 'Hy-MT1.5-1.8B-1.25bit.gguf',
     bytes: 461860704,
     urls: [
