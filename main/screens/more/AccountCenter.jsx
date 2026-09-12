@@ -713,12 +713,8 @@ export default function AccountCenter() {
                       {t('screen_account_center_queue_can_resend')}
                     </Text>
                   ) : null}
-                  {queryResult.total ? (
-                    <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>
-                      {t('screen_account_center_queue_total', { total: queryResult.total })
-                        + (queryResult.rate ? ` · ${t('screen_account_center_queue_rate', { rate: queryResult.rate })}` : '')}
-                    </Text>
-                  ) : null}
+                  {/* 注意：不要再显示 total/rate —— 上面的「邀请排队」区块已经有全局的
+                      排队总数与发放速度，这里重复显示会让用户以为是两个不同的数字。 */}
                 </View>
               ) : null}
             </>
