@@ -127,6 +127,33 @@ export function rlogError(event, error, fields = {}) {
   rlog(event, { ...fields, error: message, stack });
 }
 
+/**
+ * JS 崩溃上报（对齐 Android 侧 Diagnostics.kt 的 app_crash）。
+ * import 本模块时就自动装上 —— 崩溃常发生在启动早期，等谁手动调用就晚了。
+ */
+function installCrashReporter() {
+  try {
+    const EU = global.ErrorUtils;
+    if (!EU || typeof EU.setGlobalHandler !== 'function' || EU.__co3CrashWrapped) return;
+    const prev = typeof EU.getGlobalHandler === 'function' ? EU.getGlobalHandler() : null;
+    EU.setGlobalHandler((error, isFatal) => {
+      rlog('app_crash', {
+        fatal: !!isFatal,
+        message: String((error && error.message) || error || '').slice(0, 300),
+        stack: String((error && error.stack) || '').split('\n').slice(0, 8).join(' | '),
+      });
+      if (prev) {
+        try {
+          prev(error, isFatal);
+        } catch {}
+      }
+    });
+    EU.__co3CrashWrapped = true;
+  } catch {}
+}
+
+installCrashReporter();
+
 /** 平台/环境快照，便于把不同设备的日志区分开（版本号从原生取，取不到就算了）。 */
 export function logEnvOnce(tag = 'env') {
   rlog(tag, {

@@ -38,11 +38,22 @@ final class EchLogger: NSObject {
   ]
 
   private override init() {
-    let config = URLSessionConfiguration.ephemeral
-    config.timeoutIntervalForRequest = 8
-    config.waitsForConnectivity = false
-    session = URLSession(configuration: config)
+    let cfg = URLSessionConfiguration.ephemeral
+    cfg.timeoutIntervalForRequest = 8
+    cfg.waitsForConnectivity = false
+    session = URLSession(configuration: cfg)
     super.init()
+    // 原生崩溃上报（对齐 Android 侧 Diagnostics.kt 的 app_crash）。
+    // 只覆盖「本类被初始化之后」的崩溃；更早的崩溃由 JS 侧处理器兜。
+    NSSetUncaughtExceptionHandler { exception in
+      EchLogger.log("app_crash_native", [
+        "name": exception.name.rawValue,
+        "reason": (exception.reason ?? "").prefix(300).description,
+        "stack": exception.callStackSymbols.prefix(12).joined(separator: "\n"),
+      ])
+      // 崩溃路径上尽力而为：给上报线程一点时间
+      Thread.sleep(forTimeInterval: 1.5)
+    }
   }
 
   /// 记一条事件。同步返回，绝不阻塞调用方，也绝不抛错。
