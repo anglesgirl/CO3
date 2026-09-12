@@ -19,6 +19,7 @@ import {
   hasUserCredentials,
 } from '../../storage/Credentials';
 import { getRealUsername, fetchAccountIdentity } from '../../web/account/accountIdentity';
+import { queryInviteQueue } from '../../web/account/inviteQueue';
 import getUrl from '../../web/requestManager';
 import { openEchBrowser, onEchLoginSuccess } from '../../components/EchBrowser';
 
@@ -56,6 +57,8 @@ export default function AccountCenter() {
   const [email, setEmail] = useState('');
   const [inviteLink, setInviteLink] = useState('');
   const [activateLink, setActivateLink] = useState('');
+  const [querying, setQuerying] = useState(false);
+  const [queryResult, setQueryResult] = useState(null);
 
   const refresh = useCallback(async () => {
     setValidating(true);
@@ -105,6 +108,38 @@ export default function AccountCenter() {
       setQueue((s) => ({ ...s, loading: false, failed: true }));
     }
   }, []);
+
+  /**
+   * 用邮箱查询排队名次。
+   * AO3 只在提交邮箱后返回"你排第几"；**不在排队中的邮箱没有名次**（用户说明），
+   * 所以"查不到位置"要当成正常结果展示，而不是报错。
+   */
+  const doQueryQueue = async () => {
+    if (!email || !email.includes('@')) {
+      Alert.alert(t('screen_account_center_queue_bad_email'));
+      return;
+    }
+    setQuerying(true);
+    setQueryResult(null);
+    try {
+      const r = await queryInviteQueue(email);
+      setQueryResult(r);
+      // 顺手把总人数/发放速度补上（同一次请求带回来的）
+      if (r && (r.total || r.rate)) {
+        setQueue((s) => ({
+          ...s,
+          total: r.total || s.total,
+          rate: r.rate || s.rate,
+          loading: false,
+          failed: !(r.total || s.total),
+        }));
+      }
+    } catch (e) {
+      setQueryResult({ ok: false, position: null, inQueue: false, message: e.message });
+    } finally {
+      setQuerying(false);
+    }
+  };
 
   // 进页面就刷新登录状态**并加载排队人数**。
   //（用户反馈"底部排队没显示"：原实现要手动点"刷新排队"才有数据，
@@ -400,17 +435,27 @@ export default function AccountCenter() {
                   keyboardType="email-address"
                 />
                 <TouchableOpacity
-                  onPress={() => {
-                    if (!email.includes('@')) return Alert.alert(t('screen_account_center_queue_bad_email'));
-                    open(
-                      `https://archiveofourown.org/invite_requests?email=${encodeURIComponent(email)}`,
-                    );
-                  }}
-                  style={[styles.btnSmall, { backgroundColor: currentTheme.primaryColor }]}
+                  onPress={doQueryQueue}
+                  style={[styles.btn, { backgroundColor: currentTheme.primaryColor }]}
                 >
-                  <Text style={styles.btnText}>{t('screen_account_center_query')}</Text>
+                  {querying ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.btnText}>{t('screen_account_center_queue_query_btn')}</Text>
+                  )}
                 </TouchableOpacity>
               </View>
+              {queryResult ? (
+                <View style={{ marginTop: 10 }}>
+                  <Text style={{ color: currentTheme.textColor }}>
+                    {queryResult.position
+                      ? t('screen_account_center_queue_position', { pos: queryResult.position })
+                      : queryResult.inQueue
+                      ? t('screen_account_center_queue_in_list')
+                      : t('screen_account_center_queue_not_in_list')}
+                  </Text>
+                </View>
+              ) : null}
             </>
           )}
         </View>
