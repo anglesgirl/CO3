@@ -156,7 +156,7 @@
   "screen_account_center_open": "Open",
   "screen_account_center_paste_empty": "Please paste a link first",
   "screen_account_center_queue_title": "Invite queue",
-  "screen_account_center_queue_total": "Waiting list: {{total}} people",
+  "screen_account_center_queue_total": "{{total}} people waiting",
   "screen_account_center_queue_mine": "Your position: {{pos}}",
   "screen_account_center_queue_unknown": "unknown",
   "screen_account_center_queue_not_queried": "not queried (shown after you apply)",
@@ -589,7 +589,7 @@
   "component_rule_edit_case_sensitive_label": "Match Case",
   "component_rule_edit_regex_label": "Regex",
   "screen_account_center_queue_failed": "Failed to read; tap Refresh below to retry",
-  "screen_account_center_queue_rate": "Sending: {{rate}}",
+  "screen_account_center_queue_rate": "{{rate}} sent",
   "screen_account_center_queue_query_btn": "Query",
   "screen_account_center_queue_position": "Your position: #{{pos}}",
   "screen_account_center_queue_in_list": "You are on the waiting list",
@@ -605,5 +605,8 @@
   "screen_account_center_activate_done": "Activated — you can log in now",
   "screen_account_center_activate_already": "This account is already activated",
   "screen_account_center_activate_failed": "Activation failed (link expired or blocked by a challenge)",
-  "screen_account_center_use_browser": "Open in browser instead"
+  "screen_account_center_use_browser": "Open in browser instead",
+  "screen_account_center_queue_invited": "Invitation sent ({{date}}) — check your inbox and spam",
+  "screen_account_center_queue_not_found": "No record for this email — not in the queue",
+  "screen_account_center_queue_can_resend": "Sent over 24h ago — you can resend it on AO3"
 }

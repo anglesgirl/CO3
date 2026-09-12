@@ -695,12 +695,30 @@ export default function AccountCenter() {
               {queryResult ? (
                 <View style={{ marginTop: 10 }}>
                   <Text style={{ color: currentTheme.textColor }}>
-                    {queryResult.position
+                    {/* 三种状态的顺序很重要：
+                        「邀请已发出」既没有名次、也不是"找不到"，必须优先判 —— 否则会被
+                        误报成"未在排队"（用户已拿到邀请，却被说没排队）。 */}
+                    {queryResult.invited
+                      ? t('screen_account_center_queue_invited', { date: queryResult.invitedOn || '—' })
+                      : queryResult.position
                       ? t('screen_account_center_queue_position', { pos: queryResult.position })
+                      : queryResult.notFound
+                      ? t('screen_account_center_queue_not_found')
                       : queryResult.inQueue
                       ? t('screen_account_center_queue_in_list')
                       : t('screen_account_center_queue_not_in_list')}
                   </Text>
+                  {queryResult.canResend ? (
+                    <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>
+                      {t('screen_account_center_queue_can_resend')}
+                    </Text>
+                  ) : null}
+                  {queryResult.total ? (
+                    <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>
+                      {t('screen_account_center_queue_total', { total: queryResult.total })
+                        + (queryResult.rate ? ` · ${t('screen_account_center_queue_rate', { rate: queryResult.rate })}` : '')}
+                    </Text>
+                  ) : null}
                 </View>
               ) : null}
             </>

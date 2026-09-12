@@ -126,8 +126,21 @@ export async function queryInviteQueue(email) {
   const rateM = flat.match(/sending out\s+([\d,]+)\s+invitations every\s+(\d+)\s+hours/i);
   const rate = rateM ? `${rateM[1]} / ${rateM[2]}h` : null;
 
+  // 状态三：**邀请已经发出**（真机响应原文）
+  //   "Your invitation was emailed to this address on 2024-09-06."
+  //   "Because your invitation was sent more than 24 hours ago, you can have your invitation resent."
+  // ⚠️ 这种状态下**既没有名次、也不是"找不到"** —— 旧实现会把它判成"未在排队"，
+  // 而用户其实已经拿到邀请了，属于明确的错判。
+  const invitedM = flat.match(
+    /your invitation was emailed to this address on\s*([\d]{4}-[\d]{2}-[\d]{2}|[A-Za-z]+ \d{1,2},? \d{4})/i,
+  );
+  const invited = !!invitedM || /your invitation was emailed to this address/i.test(flat);
+  const invitedOn = invitedM ? invitedM[1] : null;
+  const canResend = /you can have your invitation resent|sent more than 24 hours ago/i.test(flat);
+
   const inQueue =
     !!position ||
+    invited ||
     (!notFound &&
       (/already (?:on|in) the (?:list|queue)/i.test(flat) ||
         /you (?:are|'re) (?:on|in) the (?:waiting )?list/i.test(flat)));
@@ -136,6 +149,9 @@ export async function queryInviteQueue(email) {
     ok: status >= 200 && status < 400,
     inQueue,
     notFound,
+    invited,
+    invitedOn,
+    canResend,
     position,
     total,
     rate,
