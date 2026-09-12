@@ -1,28 +1,46 @@
-import getUrl from '../requestManager';
-
 /**
  * 查询邀请排队名次。
  *
- * AO3 的做法（服务器实测页面结构得到，不是猜的）：
- *   在 /invite_requests 上有一个表单
- *     action="/invite_requests" method="post"
- *     字段 invite_request[email]
- *   提交邮箱后由服务器返回"你当前排第几"。
- *   **不在排队中的邮箱不会有名次** —— 这是用户明确说明的，
- *   所以取不到位置时不能当成错误，要按"未在排队"处理。
+ * 【真实请求（用户提供的真机 DevTools HAR，实测）】
+ *   GET /invite_requests/show?email=<邮箱>&email=<邮箱>&commit=Look+me+up
+ *   Accept: * / *;q=0.5, text/javascript, application/javascript, ...
+ *   Referer:      https://archiveofourown.org/invite_requests/status
+ *   X-Requested-With: XMLHttpRequest
+ *   → 200，content-type: text/javascript
+ *     （Rails 的 remote form，返回的是 js.erb 片段，不是整页 HTML）
  *
- * 三个必须遵守的细节：
- *  1. **必须 urlencoded**：`FormData` 会被 RN 发成 multipart，而 AO3 只认
- *     `application/x-www-form-urlencoded`（登录那次就是栽在这个坑上）。
- *  2. **必须带 Origin / Referer**：缺了会被 CSRF 保护拦成 403（服务器侧实测）。
- *  3. **Cookie 不要手写**：由 OkHttp 的 cookieJar（CookieManager）自动注入，
- *     手写反而会拿旧值覆盖正确 cookie。
+ * 【为什么推翻了上一版实现】
+ * 上一版是 **照 /invite_requests 页面上的表单猜的**：
+ *   POST /invite_requests + invite_request[email] + authenticity_token
+ * 方法、路径、字段名**全都不对** —— 典型反面教材：
+ *   - GET 查询根本不需要 CSRF token（多带无意义）；
+ *   - 路径应是 `/invite_requests/show`（`/invite_requests` 只是展示页）；
+ *   - 真正被接受的参数名是 `email`，不是 `invite_request[email]`。
+ * **能抓到真实请求就不要照页面猜** —— 猜错的表现是"接口一直返回不了名次"，
+ * 而且看起来像服务端抽风，极难自查。
+ *
+ * 【细节】
+ *  1. `email` 要**重复传两次**（真机抓包如此，Rails 的 form_tag 参数 + 表单字段同名）；
+ *  2. 必须带 `X-Requested-With: XMLHttpRequest` 与 `Referer`：
+ *     Rails 的 respond_to 靠它决定返回 JS 还是 HTML；
+ *  3. **不在排队中的邮箱没有名次** —— 取不到位置不等于出错，按"未在排队"处理。
  */
 
-const UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
+const AO3 = 'https://archiveofourown.org';
 
-const PAGE = 'https://archiveofourown.org/invite_requests';
+const UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
+
+/** 去标签，方便在 JS 片段/HTML 里做宽松匹配。 */
+function flatten(text) {
+  return String(text || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\\n|\\r|\\t/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 /**
  * 查询某个邮箱在邀请队列中的位置。
@@ -30,62 +48,66 @@ const PAGE = 'https://archiveofourown.org/invite_requests';
  *             rate: string|null, raw: string, message: string }}
  */
 export async function queryInviteQueue(email) {
-  if (!email || !String(email).includes('@')) {
+  const clean = String(email || '').trim();
+  if (!clean || !clean.includes('@')) {
     return { ok: false, inQueue: false, position: null, total: null, rate: null, raw: '', message: 'email_invalid' };
   }
 
-  // 1) 先取页面拿 authenticity_token（POST 必带，缺了会被拒）
-  const page = await getUrl(PAGE, false);
-  const tokenMatch = String(page || '').match(/name="authenticity_token"\s+value="([^"]+)"/);
-  const token = tokenMatch ? tokenMatch[1] : null;
-  if (!token) {
-    return { ok: false, inQueue: false, position: null, total: null, rate: null, raw: '', message: 'no_token' };
+  const q = encodeURIComponent(clean);
+  // email 故意传两次 —— 与真机抓包一致
+  const url = `${AO3}/invite_requests/show?email=${q}&email=${q}&commit=Look+me+up`;
+
+  let text = '';
+  let status = 0;
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      credentials: 'include',
+      headers: {
+        Accept: '*/*;q=0.5, text/javascript, application/javascript, application/ecmascript, application/x-ecmascript',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        Referer: `${AO3}/invite_requests/status`,
+        'X-Requested-With': 'XMLHttpRequest',
+        'User-Agent': UA,
+      },
+    });
+    status = res.status;
+    text = await res.text();
+  } catch (e) {
+    return { ok: false, inQueue: false, position: null, total: null, rate: null, raw: '', message: `net_${e.message}` };
   }
 
-  // 2) 提交查询
-  const params = new URLSearchParams();
-  params.append('authenticity_token', token);
-  params.append('invite_request[email]', String(email).trim());
-  params.append('commit', 'Add me to the list');
+  const flat = flatten(text);
 
-  const res = await fetch(PAGE, {
-    method: 'POST',
-    body: params.toString(),
-    credentials: 'include',
-    headers: {
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Origin: 'https://archiveofourown.org',
-      Referer: PAGE,
-      'User-Agent': UA,
-    },
-  });
-
-  const text = await res.text();
-
-  // 3) 解析（措辞随 AO3 版本变过，做宽松匹配；取不到就把原文关键句带回去供排查）
+  // 名次：AO3 措辞变过多次，做宽松匹配，并兼容 JS 片段里的数字
   const position =
-    (text.match(/you are (?:currently )?(?:number|position)\s*#?\s*([\d,]+)/i) || [])[1] ||
-    (text.match(/your position is\s*#?\s*([\d,]+)/i) || [])[1] ||
-    (text.match(/there are\s+([\d,]+)\s+people (?:ahead of you|before you)/i) || [])[1] ||
+    (flat.match(/you are (?:currently )?(?:number|position|in position)\s*#?\s*([\d,]+)/i) || [])[1] ||
+    (flat.match(/your position is\s*#?\s*([\d,]+)/i) || [])[1] ||
+    (flat.match(/there are\s+([\d,]+)\s+people (?:ahead of you|before you)/i) || [])[1] ||
+    (flat.match(/>\s*#?([\d,]+)\s*</) || [])[1] ||
     null;
 
   const total =
-    (text.match(/There are currently\s+([\d,]+)\s+people on the waiting list/i) || [])[1] ||
-    (text.match(/There are\s+([\d,]+)\s+people\s+(?:in|on)\s+the\s+(?:queue|waiting list)/i) || [])[1] ||
+    (flat.match(/There are currently\s+([\d,]+)\s+people on the waiting list/i) || [])[1] ||
+    (flat.match(/There are\s+([\d,]+)\s+people\s+(?:in|on)\s+the\s+(?:queue|waiting list)/i) || [])[1] ||
     null;
 
-  const rateM = text.match(/sending out\s+([\d,]+)\s+invitations every\s+(\d+)\s+hours/i);
+  const rateM = flat.match(/sending out\s+([\d,]+)\s+invitations every\s+(\d+)\s+hours/i);
   const rate = rateM ? `${rateM[1]} / ${rateM[2]}h` : null;
 
+  const inQueue =
+    !!position ||
+    /already (?:on|in) the (?:list|queue)/i.test(flat) ||
+    /you (?:are|'re) (?:on|in) the (?:waiting )?list/i.test(flat);
+
   return {
-    ok: res.ok,
-    inQueue: !!position || /already (?:on|in) the (?:list|queue)/i.test(text),
+    ok: status >= 200 && status < 400,
+    inQueue,
     position,
     total,
     rate,
-    raw: String(text).replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400),
-    message: res.ok ? 'ok' : `http_${res.status}`,
+    // 解析不到时把片段带回去 —— 方便定位"是不是 AO3 又改了措辞"
+    raw: flat.slice(0, 500),
+    message: status >= 200 && status < 400 ? 'ok' : `http_${status}`,
   };
 }
