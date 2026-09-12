@@ -77,16 +77,18 @@ jobs:
         with:
           path: ios/HymtBridge/llama.xcframework
           # 版本号绑定到固定 commit：换了 commit 就得重编，避免用到旧的二进制
-          key: llama-xcframework-${{ runner.os }}-2a3005c-ios-device-v1
+          key: llama-xcframework-${{ runner.os }}-2a3005c23f60cb38dab70b8ea2ddbd969bcf3e87-ios-device-v1
 
       - name: Build llama.cpp iOS framework
         if: steps.llama-cache.outputs.cache-hit != 'true'
         run: |
           # 固定到已在本机验证过的 commit（Q4_K_M 能正常加载并翻译）
-          LLAMA_COMMIT=2a3005c
+          LLAMA_COMMIT=2a3005c23f60cb38dab70b8ea2ddbd969bcf3e87
           git clone --filter=blob:none https://github.com/ggml-org/llama.cpp.git /tmp/llama.cpp
           cd /tmp/llama.cpp
-          git fetch --depth 1 origin "$LLAMA_COMMIT"
+          # ⚠️ 不要写 `git fetch origin <sha>` —— 远端不接受**短 SHA** 作为 ref，
+          # 会直接报 "fatal: couldn't find remote ref 2a3005c" 并让整步失败。
+          # --filter=blob:none 的 clone 自带完整提交历史，直接 checkout 就行。
           git checkout "$LLAMA_COMMIT"
           # 只编 iOS 真机切片 —— 跳过模拟器/macOS/tvOS/visionOS，CI 时间省一大半。
           # （侧载测试只需真机；要是以后要跑模拟器，把 ios-sim 加回来并把 podspec 的
