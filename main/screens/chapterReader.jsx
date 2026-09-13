@@ -46,7 +46,10 @@ const PROGRESS_SAVE_DEBOUNCE = 1000;
 const EXTRACT_SEGS_JS = `
 (function(){
   try {
-    var ps = Array.prototype.slice.call(document.querySelectorAll('p'));
+    // 【关键修复】排除我们自己注入的译文节点：重进/重翻时它们还在 DOM 里，
+    // 不排除就会被当成原文抓去翻译——中文当源文再翻一次，又写回错位，
+    // 就是截图里那种中法混杂、原文重复。排除后多次提取结果完全一致。
+    var ps = Array.prototype.slice.call(document.querySelectorAll('p:not(.co3-trans)'));
     var items = [];
     var idxs = [];
     for (var i = 0; i < ps.length; i++) {
