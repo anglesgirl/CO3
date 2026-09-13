@@ -72,6 +72,11 @@ export default function AboutScreen({ route }) {
             {t('screen_about_text_2')}
           </Text>
           <LinkButton
+            url="https://anglesya.win/"
+            label={t('screen_about_blog')}
+            theme={currentTheme}
+          />
+          <LinkButton
             url="https://github.com/tbvns/CO3/releases"
             label={t('screen_about_news')}
             theme={currentTheme}
