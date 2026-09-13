@@ -28,6 +28,20 @@ export function cancelDeviceTranslation() {
 }
 
 /**
+ * 抢占跑道：取消正在进行的翻译并领一个新区号。
+ * 调用方在开始一次新翻译前调它；循环里用 isCurrentTurn(myTurn) 自查。
+ */
+export function takeTranslationTurn() {
+  epoch += 1;
+  return epoch;
+}
+
+/** 这次翻译还是不是当前区号（被取代/取消后为 false）。 */
+export function isCurrentTurn(id) {
+  return id === epoch;
+}
+
+/**
  * ⚠️ 两端的原生方法名**不同**，这里统一：
  *   Android（HymtModule.kt）：Hymt.init()
  *   iOS（HymtModule.swift）：Hymt.setup()
@@ -155,9 +169,8 @@ async function translateOneVerified(Hymt, text, alive) {
 export async function translateDevice(texts, onProgress) {
   await ensureInit();
   const { Hymt } = NativeModules;
-  const my = epoch + 1;
-  epoch = my;
-  const alive = () => my === epoch;
+  const my = takeTranslationTurn();
+  const alive = () => isCurrentTurn(my);
   const total = texts.length;
   const out = new Array(total).fill('');
   let done = 0;

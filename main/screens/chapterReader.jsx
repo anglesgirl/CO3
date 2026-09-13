@@ -1,6 +1,12 @@
 import { openEchBrowser } from '../components/EchBrowser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { looksBrokenZh, hymtInit } from '../web/translate/deviceTranslate';
+import {
+  looksBrokenZh,
+  hymtInit,
+  takeTranslationTurn,
+  isCurrentTurn,
+  cancelDeviceTranslation,
+} from '../web/translate/deviceTranslate';
 import { diagEvent } from '../utils/diag';
 import {
   Animated,
@@ -145,6 +151,19 @@ const updateTransJs = (i, text, pending) => `
   t.className = 'co3-trans${pending ? ' co3-pending' : ''}';
   t.textContent = ${JSON.stringify(String(text == null ? '' : text))};
 })();`;
+
+// 单块流式翻译超时（兜底防真楔死；正常慢不误杀）：超时即抛，由调用方按取消/失败处理。
+// 原生单次调用停不掉，超时只能让 JS 不再死等，finally 照常清状态，按钮和进度永不卡死。
+const STREAM_TIMEOUT_MS = 180000;
+function streamWithTimeout(promise, ms = STREAM_TIMEOUT_MS) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('stream timeout')), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
 
 const PullIndicator = ({ progress, theme }) => {
   const size = 60;
@@ -405,6 +424,10 @@ const ChapterReader = ({
     translateCancelledRef.current = false;
     return () => {
       translateCancelledRef.current = true;
+      // 把跑道让出来：进行中的原生调用结束后不再续发，其它文章立即可用引擎
+      try {
+        cancelDeviceTranslation();
+      } catch {}
     };
   }, [chapterID]);
 
@@ -412,6 +435,9 @@ const ChapterReader = ({
     if (!webViewRef.current || translatingRef.current) return;
     translatingRef.current = true;
     setTranslating(true);
+    // 抢占跑道：之前没跑完的翻译（本页或别页）到此为止，不再续发新请求
+    const myTurn = takeTranslationTurn();
+    const alive = () => isCurrentTurn(myTurn) && !translateCancelledRef.current;
     // 点翻译后立刻收起底栏：否则它会遮住正文（用户反馈过）
     setBarsVisible(false);
     try {
@@ -466,9 +492,9 @@ const ChapterReader = ({
         if (!initOk) throw new Error(t('reader_translate_failed'));
 
         for (let k = 0; k < texts.length; k += 1) {
-          // 用户已返回 / 切章 —— 立即停止，别再往（可能已卸载的）WebView 注入译文，
+          // 用户已返回 / 切章 / 被新翻译取代 —— 立即停止，别再往（可能已卸载的）WebView 注入译文，
           // 也不要让后半程的失败被当成"翻译失败"。
-          if (translateCancelledRef.current) break;
+          if (!alive()) break;
           const domIdx = idxs[k];
           // 该段开始翻译：占位显示 ⌛（已完成段落不受影响）。
           // 严格串行：本段（含其所有分块）翻完才进入下一段。
@@ -478,12 +504,16 @@ const ChapterReader = ({
           segmentPrefixRef.current[domIdx] = '';
           let segOk = false;
           for (const chunk of chunks) {
+            // 块之间也查代际：被取代就停，不再往原生队列里加活
+            if (!alive()) break;
             try {
               // translateStream 的 resolve 值即该块译文；把它累积下来，
               // 下一块的流式输出就会接在这段已经写好的文字后面。
               // 整段不再切块，maxTokens 必须按长度给足，否则长段会被截断（hit_limit）
               const maxTok = Math.max(512, Math.min(2048, Math.round(String(chunk).length * 1.2)));
-              let part = await Hymt.translateStream(chunk, domIdx, maxTok);
+              let part = await streamWithTimeout(
+                Hymt.translateStream(chunk, domIdx, maxTok),
+              );
               // 质量门禁：本机 2bit 模型实测会吐截断/混入他语/重复垃圾。
               // 坏块用单段接口重试一次，仍坏就放弃该段并移除占位 —— 宁可留原文，
               // 也绝不把垃圾译文显示给用户（fail-closed）。
@@ -494,7 +524,9 @@ const ChapterReader = ({
                   out_len: String(part || '').length,
                   out_tail: String(part || '').slice(-30),
                 });
-                part = String((await Hymt.translate(chunk, maxTok)) || '');
+                part = String(
+                  (await streamWithTimeout(Hymt.translate(chunk, maxTok))) || '',
+                );
                 if (looksBrokenZh(part, chunk)) throw new Error('broken translation');
               }
               segmentPrefixRef.current[domIdx] =
