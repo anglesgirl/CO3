@@ -19,15 +19,6 @@ const SUPPORT_ITEMS = [
     color: '#22c55e',
     icon: 'favorite',
   },
-  {
-    key: 'co3',
-    labelKey: 'onboard_step4_co3_label',
-    descriptionKey: 'onboard_step4_co3_desc',
-    ctaKey: 'onboard_step4_co3_cta',
-    url: 'https://ko-fi.com/tbvns',
-    color: '#6366f1',
-    icon: 'coffee',
-  },
 ];
 
 export default function Step4({ currentTheme, setScreen, onFinish }) {
