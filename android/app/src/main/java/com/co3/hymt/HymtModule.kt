@@ -449,6 +449,10 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
      * 进度由 JS 侧轮询 [downloadedBytes] 获取。
      * 不走 RNFS：RNFS 的 DownloadManager 写不了 app 私有目录，
      * 前台模式对魔搭（阿里云 WAF）会 Connection reset。
+     *
+     * 断点续传：.part 有残留就带 Range 头续下；服务器回 206 则追加，
+     * 回 200（不支持续传）则截断重下；416（已下完）直接收尾。
+     * 切后台被杀后重试进来，进度从残留处继续，不再从头开始。
      */
     @ReactMethod
     fun downloadModel(url: String, destPath: String, promise: Promise) {
@@ -458,7 +462,14 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                     .connectTimeout(30, TimeUnit.SECONDS)
                     .readTimeout(60, TimeUnit.SECONDS)
                     .build()
-                val request = okhttp3.Request.Builder()
+                val target = File(destPath)
+                target.parentFile?.mkdirs()
+                val tmp = File(target.absolutePath + ".part")
+                // 已有完整文件时，残留 part 是废数据，直接作废重下
+                if (target.exists()) tmp.delete()
+                val existing = if (tmp.exists()) tmp.length() else 0L
+
+                val reqBuilder = okhttp3.Request.Builder()
                     .url(url)
                     .header(
                         "User-Agent",
@@ -466,9 +477,21 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                             "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
                     )
                     .header("Accept", "*/*")
-                    .build()
+                if (existing > 0) reqBuilder.header("Range", "bytes=$existing-")
 
-                client.newCall(request).execute().use { resp ->
+                client.newCall(reqBuilder.build()).execute().use { resp ->
+                    if (resp.code == 416) {
+                        // 已下完（残留 part 即完整文件），直接收尾
+                        if (target.exists()) target.delete()
+                        if (tmp.renameTo(target)) {
+                            promise.resolve(target.absolutePath)
+                        } else {
+                            tmp.copyTo(target, overwrite = true)
+                            tmp.delete()
+                            promise.resolve(target.absolutePath)
+                        }
+                        return@execute
+                    }
                     if (!resp.isSuccessful) {
                         promise.reject("HYMT_DL_FAILED", "HTTP ${resp.code}")
                         return@execute
@@ -478,12 +501,10 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                         promise.reject("HYMT_DL_FAILED", "empty body")
                         return@execute
                     }
-                    val target = File(destPath)
-                    target.parentFile?.mkdirs()
-                    val tmp = File(target.absolutePath + ".part")
 
+                    val append = resp.code == 206 && existing > 0
                     body.byteStream().use { input ->
-                        FileOutputStream(tmp).use { output ->
+                        FileOutputStream(tmp, append).use { output ->
                             val buf = ByteArray(64 * 1024)
                             while (true) {
                                 val n = input.read(buf)
