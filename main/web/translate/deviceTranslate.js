@@ -15,6 +15,19 @@ import { diagEvent } from '../../utils/diag';
 let initDone = false;
 
 /**
+ * 翻译代际：每次开始一次新翻译就 +1。旧翻译在发下一个原生请求前发现
+ * 自己过时了，就停发新请求、直接返回已有部分——原生引擎是单条跑道，
+ * 不拦，后来的翻译要等整章跑完才有反应（就是用户说的"卡住"）。
+ * 注意：进行中的那一次原生调用停不掉，只能不再发新的，所以最坏等一次调用。
+ */
+let epoch = 0;
+
+/** 主动取消当前翻译（切页面时调；不调也能靠新翻译自动取代旧的）。 */
+export function cancelDeviceTranslation() {
+  epoch += 1;
+}
+
+/**
  * ⚠️ 两端的原生方法名**不同**，这里统一：
  *   Android（HymtModule.kt）：Hymt.init()
  *   iOS（HymtModule.swift）：Hymt.setup()
@@ -109,9 +122,10 @@ export function looksBrokenZh(zh, src) {
  * 翻译单段，带质量校验与重试。
  * 返回可信译文；始终不可信则返回 ''（调用方保留原文）。
  */
-async function translateOneVerified(Hymt, text) {
+async function translateOneVerified(Hymt, text, alive) {
   const maxTok = Math.max(192, Math.min(1024, text.length * 3));
   for (let attempt = 0; attempt <= RETRY; attempt += 1) {
+    if (alive && !alive()) return '';
     let zh = '';
     try {
       // 首次用批量接口（内部走同一条生成路径），重试改用单段接口
@@ -141,6 +155,9 @@ async function translateOneVerified(Hymt, text) {
 export async function translateDevice(texts, onProgress) {
   await ensureInit();
   const { Hymt } = NativeModules;
+  const my = epoch + 1;
+  epoch = my;
+  const alive = () => my === epoch;
   const total = texts.length;
   const out = new Array(total).fill('');
   let done = 0;
@@ -150,6 +167,8 @@ export async function translateDevice(texts, onProgress) {
   };
 
   for (let i = 0; i < total; i += BATCH) {
+    // 被新翻译取代了：停发原生请求，直接返回已有部分（调用方照常用）
+    if (!alive()) return out;
     // 收集本批非空段落（空段直接占位，不能进批，否则会打乱段数对应）
     const idx = [];
     const txt = [];
@@ -189,7 +208,7 @@ export async function translateDevice(texts, onProgress) {
             out_tail: cand.slice(-30),
           });
         }
-        out[idx[k]] = await translateOneVerified(Hymt, src);
+        out[idx[k]] = await translateOneVerified(Hymt, src, alive);
       }
       tick();
     }
