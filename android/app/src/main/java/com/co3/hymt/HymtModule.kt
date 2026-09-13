@@ -35,6 +35,21 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
     @Volatile
     private var ready = false
 
+    /**
+     * 翻译代际（JS 侧 takeTranslationTurn / cancelDeviceTranslation 对应）：
+     * 引擎单线程串行，旧翻译占住时新翻译只能排队。切页/开新翻译时调
+     * cancelGeneration，新代际到后旧循环在下一个 token 处主动退出并
+     * reject HYMT_SUPERSEDED，不再占跑道。JS 侧不再死等。
+     */
+    @Volatile
+    private var gen = 0
+
+    @ReactMethod
+    fun cancelGeneration(promise: Promise) {
+        gen += 1
+        promise.resolve(true)
+    }
+
     override fun getName() = "Hymt"
 
     private fun modelFile(): File {
@@ -195,6 +210,7 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                 // 逐 token 取，直到返回 null/空串（软件上限兜底防死循环）
                 var guard = 0
                 val limit = mt * 2 + 16
+                val myGen = gen
                 // 停止条件必须与官方一致：空串即结束。
                 // 反编译官方 InferenceEngineImpl 的生成循环证实:
                 //   generateNextToken() -> 检查 String.length() -> 为 0 跳出。
@@ -202,6 +218,10 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                 // (泰米尔文/星号串)，故改回官方行为。
                 while (guard < limit) {
                     guard++
+                    if (myGen != gen) {
+                        promise.reject("HYMT_SUPERSEDED", "superseded by newer generation")
+                        return@execute
+                    }
                     val tok = e.nextToken()
                     if (tok.isNullOrEmpty()) break
                     sb.append(tok)
@@ -274,8 +294,13 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                 val sb = StringBuilder()
                 var guard = 0
                 val limit = mt * 2 + 16
+                val myGen = gen
                 while (guard < limit) {
                     guard++
+                    if (myGen != gen) {
+                        promise.reject("HYMT_SUPERSEDED", "superseded by newer generation")
+                        return@execute
+                    }
                     val tok = e.nextToken()
                     // 同 translateStream：与官方一致，空串即结束。
                     if (tok.isNullOrEmpty()) break
@@ -369,9 +394,14 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                 var guard = 0
                 val limit = mt * 2 + 16
                 var lastEmit = 0L
+                val myGen = gen
                 // 节流 80ms：注入太频繁会拖慢 JS/WebView，这个间隔已足够顺滑
                 while (guard < limit) {
                     guard++
+                    if (myGen != gen) {
+                        promise.reject("HYMT_SUPERSEDED", "superseded by newer generation")
+                        return@execute
+                    }
                     val tok = e.nextToken()
                     // 同 translateStream：与官方一致，空串即结束。
                     if (tok.isNullOrEmpty()) break

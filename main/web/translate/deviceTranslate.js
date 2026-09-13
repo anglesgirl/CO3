@@ -25,13 +25,32 @@ let epoch = 0;
 /** 主动取消当前翻译（切页面时调；不调也能靠新翻译自动取代旧的）。 */
 export function cancelDeviceTranslation() {
   epoch += 1;
+  nativeCancelGeneration();
+}
+
+/** 原生跑道取消（fire-and-forget；进行中的 token 循环在下一次迭代退出）。 */
+function nativeCancelGeneration() {
+  try {
+    const { Hymt } = NativeModules;
+    if (Hymt && typeof Hymt.cancelGeneration === 'function') {
+      Hymt.cancelGeneration().catch(() => {});
+    }
+  } catch {}
 }
 
 /**
  * 抢占跑道：取消正在进行的翻译并领一个新区号。
  * 调用方在开始一次新翻译前调它；循环里用 isCurrentTurn(myTurn) 自查。
+ * 先 await 原生取消落地，再领号，避免自己的首个调用被自己的取消误杀。
  */
-export function takeTranslationTurn() {
+export async function takeTranslationTurn() {
+  epoch += 1;
+  try {
+    const { Hymt } = NativeModules;
+    if (Hymt && typeof Hymt.cancelGeneration === 'function') {
+      await Hymt.cancelGeneration();
+    }
+  } catch {}
   epoch += 1;
   return epoch;
 }
@@ -169,7 +188,7 @@ async function translateOneVerified(Hymt, text, alive) {
 export async function translateDevice(texts, onProgress) {
   await ensureInit();
   const { Hymt } = NativeModules;
-  const my = takeTranslationTurn();
+  const my = await takeTranslationTurn();
   const alive = () => isCurrentTurn(my);
   const total = texts.length;
   const out = new Array(total).fill('');

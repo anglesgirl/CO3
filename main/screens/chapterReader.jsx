@@ -475,7 +475,7 @@ const ChapterReader = ({
     translatingRef.current = true;
     setTranslating(true);
     // 抢占跑道：之前没跑完的翻译（本页或别页）到此为止，不再续发新请求
-    const myTurn = takeTranslationTurn();
+    const myTurn = await takeTranslationTurn();
     const alive = () => isCurrentTurn(myTurn) && !translateCancelledRef.current;
     // 点翻译后立刻收起底栏：否则它会遮住正文（用户反馈过）
     setBarsVisible(false);
@@ -597,6 +597,8 @@ const ChapterReader = ({
               break;
             }
           }
+          // 被取代了：本段没跑完也不记失败，直接停（不污染失败数和提示）
+          if (!alive()) break;
           if (!segOk) {
             failed += 1;
             webViewRef.current.injectJavaScript(`${removeTransJs(domIdx)}\ntrue;`);
@@ -668,7 +670,8 @@ const ChapterReader = ({
       }
 
       setTranslated(true);
-      if (failed > 0) {
+      // 被取代/已离开的不弹失败提示（进行中的是别人的，不要污染当前页）
+      if (failed > 0 && alive()) {
         Toast.show({
           type: 'error',
           text2: `${t('reader_translate_done_with_fail')} (${failed})`,
@@ -678,9 +681,9 @@ const ChapterReader = ({
         });
       }
     } catch (e) {
-      // 用户主动返回 / 切章导致的失败**不算"翻译失败"**（用户实测反馈：
+      // 用户主动返回 / 切章 / 被取代导致的失败**不算"翻译失败"**（用户实测反馈：
       // 没翻完就退出会弹出"翻译失败"，那是误报）。
-      if (translateCancelledRef.current) return;
+      if (!alive()) return;
       Toast.show({
         type: 'error',
         text2: `${t('reader_translate_failed')}: ${e.message}`,
