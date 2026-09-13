@@ -168,40 +168,6 @@ function streamWithTimeout(promise, ms = STREAM_TIMEOUT_MS) {
   });
 }
 
-// ---- 章节译文缓存：翻好的段落落盘（含半截），重进接着翻，不用重头来 ----
-// key=章节，value={段落hash: 译文}。hash 键能扛段落增删，比按序号存稳。
-const transCacheKey = (wId, cId) => `co3_trans_cache:${wId}:${cId}`;
-function segHash(s) {
-  const t = String(s || '');
-  let h = 5381;
-  for (let i = 0; i < t.length; i += 1) h = ((h << 5) + h + t.charCodeAt(i)) | 0;
-  return (h >>> 0).toString(36);
-}
-// AsyncStorage 本文件顶部已静态引入（第 34 行），直接用即可
-async function loadTransCache(wId, cId) {
-  try {
-    const raw = await AsyncStorage.getItem(transCacheKey(wId, cId));
-    const o = raw ? JSON.parse(raw) : {};
-    return o && typeof o === 'object' ? o : {};
-  } catch {
-    return {};
-  }
-}
-const cacheWriteAt = {};
-async function flushTransCache(wId, cId, map) {
-  try {
-    await AsyncStorage.setItem(transCacheKey(wId, cId), JSON.stringify(map));
-    cacheWriteAt[`${wId}:${cId}`] = Date.now();
-  } catch {}
-}
-function saveTransCacheSoon(wId, cId, map) {
-  // 节流：最多 2 秒写一次盘；结束/卸载时 flush 兜底，保证半截也落盘
-  const k = `${wId}:${cId}`;
-  if (Date.now() - (cacheWriteAt[k] || 0) < 2000) return;
-  cacheWriteAt[k] = Date.now();
-  flushTransCache(wId, cId, map).catch(() => {});
-}
-
 const PullIndicator = ({ progress, theme }) => {
   const size = 60;
   const strokeWidth = 5;
@@ -293,8 +259,6 @@ const ChapterReader = ({
   const translateCancelledRef = useRef(false);
   // 分块翻译时的前缀累积：{ DOM序号: 已翻完的块 }，使同一段的后续块接在已有译文后面
   const segmentPrefixRef = useRef({});
-  // 本轮译文缓存 {wId, cId, map}：卸载时落盘，半截也不丢
-  const transCacheRef = useRef(null);
   const pendingSegsRef = useRef(null);
   const progressSaveTimeoutRef = useRef(null);
   const lastSavedProgressRef = useRef(0);
@@ -467,9 +431,6 @@ const ChapterReader = ({
       try {
         cancelDeviceTranslation();
       } catch {}
-      // 半截译文落盘：重进接着翻
-      const c = transCacheRef.current;
-      if (c) flushTransCache(c.wId, c.cId, c.map).catch(() => {});
     };
   }, [chapterID]);
 
@@ -511,9 +472,6 @@ const ChapterReader = ({
 
       // 2) 先给每段在下方留出空位（只给有内容的段，否则会凭空多出空行）
       webViewRef.current.injectJavaScript(`${placeholdersJs(idxs)}\ntrue;`);
-      // 读缓存：翻好的段（含上次的半截）直接写回，不再调引擎
-      const transCache = await loadTransCache(workId, chapterID);
-      transCacheRef.current = { wId: workId, cId: chapterID, map: transCache };
       setTranslateProgress({ done: 0, total: texts.length });
 
       // 3) 按当前所选引擎分流：
@@ -541,18 +499,6 @@ const ChapterReader = ({
           // 也不要让后半程的失败被当成"翻译失败"。
           if (!alive()) break;
           const domIdx = idxs[k];
-          // 缓存命中：直接写回最终译文，不占引擎
-          const hk = segHash(texts[k]);
-          const hit = transCache[hk];
-          if (hit) {
-            webViewRef.current.injectJavaScript(
-              `${updateTransJs(domIdx, hit, false)}\ntrue;`,
-            );
-            delete segmentPrefixRef.current[domIdx];
-            doneN += 1;
-            setTranslateProgress({ done: doneN, total: texts.length });
-            continue;
-          }
           // 该段开始翻译：占位显示 ⌛（已完成段落不受影响）。
           // 严格串行：本段（含其所有分块）翻完才进入下一段。
           webViewRef.current.injectJavaScript(`${setSegmentPendingJs(domIdx)}\ntrue;`);
@@ -610,9 +556,6 @@ const ChapterReader = ({
             webViewRef.current.injectJavaScript(
               `${updateTransJs(domIdx, segmentPrefixRef.current[domIdx] || '', false)}\ntrue;`,
             );
-            // 落缓存：半截也存，重进接着翻
-            transCache[hk] = segmentPrefixRef.current[domIdx] || '';
-            saveTransCacheSoon(workId, chapterID, transCache);
           }
           delete segmentPrefixRef.current[domIdx];
           doneN += 1;
@@ -625,47 +568,26 @@ const ChapterReader = ({
           if (!alive()) break;
           const tchunk = texts.slice(s0, s0 + BATCH);
           const ichunk = idxs.slice(s0, s0 + BATCH);
-          // 缓存命中的直接写回，只把缺的凑去翻
-          const needT = [];
-          const needI = [];
-          tchunk.forEach((tt, j) => {
-            const h = transCache[segHash(tt)];
-            if (h) {
-              webViewRef.current.injectJavaScript(
-                `${updateTransJs(ichunk[j], h, false)}\ntrue;`,
-              );
-            } else {
-              needT.push(tt);
-              needI.push(ichunk[j]);
-            }
-          });
-          if (needT.length > 0) {
-            let zhNeed = null;
-            try {
-              zhNeed = await translateTextsSmart(needT);
-            } catch (e) {
-              zhNeed = null;
-            }
-            if (zhNeed && zhNeed.length === needT.length) {
-              const js = needT
-                .map((_, j) =>
-                  String(zhNeed[j] || '').trim()
-                    ? updateTransJs(needI[j], zhNeed[j], false)
-                    : removeTransJs(needI[j]),
-                )
-                .join('\n');
-              webViewRef.current.injectJavaScript(`${js}\ntrue;`);
-              needT.forEach((tt, j) => {
-                const z = String(zhNeed[j] || '').trim();
-                if (z) transCache[segHash(tt)] = z;
-              });
-              saveTransCacheSoon(workId, chapterID, transCache);
-            } else {
-              failed += needT.length;
-              needI.forEach((di) => {
-                webViewRef.current.injectJavaScript(`${removeTransJs(di)}\ntrue;`);
-              });
-            }
+          let zh = null;
+          try {
+            zh = await translateTextsSmart(tchunk);
+          } catch (e) {
+            zh = null;
+          }
+          if (zh && zh.length === tchunk.length) {
+            const js = tchunk
+              .map((_, j) =>
+                String(zh[j] || '').trim()
+                  ? updateTransJs(ichunk[j], zh[j], false)
+                  : removeTransJs(ichunk[j]),
+              )
+              .join('\n');
+            webViewRef.current.injectJavaScript(`${js}\ntrue;`);
+          } else {
+            failed += tchunk.length;
+            ichunk.forEach((di) => {
+              webViewRef.current.injectJavaScript(`${removeTransJs(di)}\ntrue;`);
+            });
           }
           doneN += tchunk.length;
           setTranslateProgress({ done: doneN, total: texts.length });
@@ -699,9 +621,6 @@ const ChapterReader = ({
       setTranslating(false);
       // 进度清空 -> 底栏自动恢复显示阅读进度
       setTranslateProgress(null);
-      // 收尾落盘：半截也存，重进接着翻
-      const c = transCacheRef.current;
-      if (c) await flushTransCache(c.wId, c.cId, c.map).catch(() => {});
     }
   }, [t]);
 
