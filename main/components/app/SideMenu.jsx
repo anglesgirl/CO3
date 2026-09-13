@@ -335,38 +335,6 @@ const SideMenu = ({
                 { borderTopColor: currentTheme.borderColor },
               ]}
             >
-              <View style={styles.supportSection}>
-                <Text
-                  style={[
-                    styles.sectionTitle,
-                    { color: currentTheme.textColor },
-                  ]}
-                >
-                  {t('component_side_menu_support')}
-                </Text>
-                <View style={styles.supportContainer}>
-                  <TouchableOpacity
-                    style={[
-                      styles.supportButton,
-                      { backgroundColor: '#22c55e' },
-                    ]}
-                    onPress={() =>
-                      openEchBrowser('https://archiveofourown.org/donate')
-                    }
-                  >
-                    <Text style={styles.supportButtonText}>AO3</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[
-                      styles.supportButton,
-                      { backgroundColor: '#6366f1' },
-                    ]}
-                    onPress={() => Linking.openURL('https://ko-fi.com/tbvns')}
-                  >
-                    <Text style={styles.supportButtonText}>CO3</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
               <Text
                 style={[
                   styles.version,
