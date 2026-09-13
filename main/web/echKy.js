@@ -9,6 +9,7 @@ import ky from 'ky';
 import { NativeModules, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { isEchProtectedUrl } from './WebviewFetcher';
+import { trackEvent } from '../utils/analytics';
 
 const AO3_HOSTS = new Set(['archiveofourown.org', 'www.archiveofourown.org']);
 
@@ -155,11 +156,17 @@ function startProxy() {
       console.log(`[ECH] proxy started on ${base} in ${ms}ms`);
       lastStartError = null;
       echBaseReady = true;
+      trackEvent('ech_proxy_start', { ok: true, ms });
       return base;
     } catch (e) {
       const ms = Date.now() - t0;
       lastStartError = `start() failed after ${ms}ms: ${e?.message ?? e}`;
       console.warn(`[ECH] proxy failed to start in ${ms}ms:`, e?.message ?? e);
+      trackEvent('ech_proxy_start', {
+        ok: false,
+        ms,
+        error: String(e?.message ?? e).slice(0, 120),
+      });
       // 失败不永久 memoise：置空并清掉 promise，让下次请求走 shouldRetryStart 冷却后重试。
       // 否则一次失败(DoH 抖动/被墙)会让整个 App 会话永久断网。
       echBaseReady = false;
@@ -564,6 +571,7 @@ export async function echSelfTest() {
   if (!base) {
     // 把真正的原因带出来：桥没注册 / start() 报错 / 冷却中。
     const status = await getEchStatus();
+    trackEvent('ech_self_test', { ok: false, reason: 'proxy_unavailable' });
     return (
       `ECH proxy unavailable.\n` +
       `platform: ${Platform.OS}\n` +
@@ -577,10 +585,16 @@ export async function echSelfTest() {
     const res = await echKy.get('https://archiveofourown.org/', { timeout: 30000 });
     const ms = Date.now() - t0;
     const status = await getEchStatus();
+    trackEvent('ech_self_test', { ok: true, ms, http: res.status });
     return `OK — HTTP ${res.status} in ${ms}ms via ${base}\nDoH: ${doh || '(none)'}\n${status}`;
   } catch (e) {
     const ms = Date.now() - t0;
     const status = await getEchStatus();
+    trackEvent('ech_self_test', {
+      ok: false,
+      ms,
+      error: String(e?.message ?? e).slice(0, 120),
+    });
     return `Request failed after ${ms}ms: ${e?.message ?? e}\nDoH: ${doh || '(none)'}\nStatus: ${status}`;
   }
 }

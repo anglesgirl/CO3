@@ -107,10 +107,9 @@ dependencies {
     // 版本与 react-native 0.85.3 依赖的 okhttp 4.9.2 严格对齐，避免 4/5 混用
     implementation "com.squareup.okhttp3:okhttp-dnsoverhttps:4.9.2"
 
-    // Firebase Analytics（统计）。
-    // 用 BOM 统一版本，避免与项目里其它 Google/AndroidX 依赖出现版本漂移。
-    implementation platform("com.google.firebase:firebase-bom:33.5.1")
-    implementation "com.google.firebase:firebase-analytics"
+    // Firebase Analytics 改走 @react-native-firebase（npm），版本由它自己管理，
+    // 这里不再手写 platform/analytics（会与 RNFB 的版本打架）。google-services
+    // 插件和 google-services.json 保留（RNFB 初始化要用）。
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
