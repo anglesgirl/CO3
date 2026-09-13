@@ -1,4 +1,3 @@
-import { openEchBrowser } from '../components/EchBrowser';
 import React, {
   useCallback,
   useEffect,
@@ -52,7 +51,6 @@ import { WorkDescription } from '../components/WorkScreen/DescriptionComponent';
 import { useTranslation } from 'react-i18next';
 import { StackActions, useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import InAppBrowser from 'react-native-inappbrowser-reborn';
 
 const NATIVE_DOWNLOAD_FORMATS = ['azw3', 'epub', 'mobi', 'pdf', 'html'];
 
@@ -924,11 +922,6 @@ const ChapterInfoScreen = ({ route }) => {
     setModalVisible(true);
   }, []);
 
-  const handleOpenWebView = useCallback(() => {
-    // AO3 走应用内 ECH 浏览器：交给系统浏览器会绕开 ECH，SNI 明文外泄
-    openEchBrowser('https://archiveofourown.org/works/' + workId);
-  }, [workId]);
-
   const handleBookmark = async () => {
     setMenuVisible(false);
     bookmark(work)
@@ -1402,15 +1395,6 @@ const ChapterInfoScreen = ({ route }) => {
           style={[styles.actionButtonText, { color: currentTheme.textColor }]}
         >
           {t('screen_work_more_info')}
-        </Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity style={styles.actionButton} onPress={handleOpenWebView}>
-        <Icon name="open-in-browser" size={48} color={currentTheme.iconColor} />
-        <Text
-          style={[styles.actionButtonText, { color: currentTheme.textColor }]}
-        >
-          {t('screen_work_open_in_web')}
         </Text>
       </TouchableOpacity>
     </View>
