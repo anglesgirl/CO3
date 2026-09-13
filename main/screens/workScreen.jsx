@@ -49,7 +49,6 @@ import {
 } from '../downloads/DownloadQueue';
 import { deleteDownloaded, isDownloaded } from '../downloads/Downloader';
 import { WorkDescription } from '../components/WorkScreen/DescriptionComponent';
-import RNFS from 'react-native-fs';
 import { useTranslation } from 'react-i18next';
 import { StackActions, useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -1690,32 +1689,20 @@ const ChapterInfoScreen = ({ route }) => {
   }
 
   const handleNativeDownload = async format => {
-    const url = `https://archiveofourown.org/downloads/${workId}/work.${format}`;
-    const safeName = (work?.title || `work_${workId}`).replace(
-      /[/\\?%*:|"<>]/g,
-      '_',
-    );
-    const filename = `${safeName}.${format}`;
-    const destPath = `${RNFS.DownloadDirectoryPath}/${filename}`;
-
+    const name = work?.title || `work_${workId}`;
     setNativeDownloadingFormat(format);
     try {
-      const result = await RNFS.downloadFile({ fromUrl: url, toFile: destPath })
-        .promise;
-      if (result.statusCode === 200) {
+      // 惰性 require：下载模块只在用户点下载时求值，不进启动期静态链。
+      // 下载经 ECH 代理（fail-closed），RNFS.downloadFile 直连 SNI 明文会被 RST。
+      // eslint-disable-next-line global-require
+      const { nativeDownload } = require('../web/download/NativeDownload');
+      const result = await nativeDownload(workId, format, name);
+      if (result && result.success) {
         Toast.show({
           type: 'success',
           text1: t('screen_work_toast_download_complete'),
           text2: t('screen_work_toast_download_complete_sub', {
-            filename: filename,
-          }),
-        });
-      } else {
-        Toast.show({
-          type: 'error',
-          text1: t('screen_work_toast_download_failed'),
-          text2: t('screen_work_toast_download_failed_sub', {
-            statusCode: result.statusCode,
+            filename: `${name}.${format}`,
           }),
         });
       }
