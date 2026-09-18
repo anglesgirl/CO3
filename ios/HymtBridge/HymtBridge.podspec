@@ -40,9 +40,9 @@ Pod::Spec.new do |s|
   s.frameworks = 'Metal', 'MetalKit', 'Accelerate', 'Foundation'
 
   # 本 pod 含 Swift（HymtModule.swift）。静态库模式下 CocoaPods 不会把 Swift 那半边链进来，
-  # 链接期就会报 `_OBJC_CLASS_$_HymtModule` undefined（HymtBridge.m 的 RCT_EXTERN_REMAP_MODULE
-  # 引用的正是它）。声明成静态 framework 即可带上 Swift 模块，同时不动全局链接方式。
-  s.static_framework = true
-
+  # 链接期报 `_OBJC_CLASS_$_HymtModule` undefined（HymtBridge.m 的 RCT_EXTERN_REMAP_MODULE 引用的正是它）。
+  # 解法是全局改用动态 framework（见 ios-build.yml 的 USE_FRAMEWORKS=dynamic）——
+  # 这也与本项目 vendored 的 llama.framework / Echproxy.xcframework 本来就是动态库相自洽；
+  # 单加 s.static_framework 无效（它只在 use_frameworks! 下才起作用）。
   s.dependency 'React-Core'
 end
