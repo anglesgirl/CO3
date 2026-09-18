@@ -21,12 +21,6 @@ end
 # 必须在任何 target 块之前设置。
 $RNFirebaseDisableSPM = true
 
-# FirebaseAnalytics 是以**静态** xcframework 形式分发的，而动态 framework 不能依赖静态二进制，
-# 于是 pod install 会报「transitive dependencies that include statically linked binaries」。
-# RNFirebase 为此提供这个开关：让 RNFB 相关 pod 本身以静态 framework 形式集成，
-# App 侧仍用动态 framework —— 两边的要求就都满足了。
-$RNFirebaseAsStaticFramework = true
-
 target 'CO3' do
   config = use_native_modules!
 

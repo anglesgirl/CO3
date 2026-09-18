@@ -123,11 +123,6 @@ jobs:
         run: bundle exec pod install
         env:
           RCT_NEW_ARCH_ENABLED: 1
-          # 动态 framework：Podfile 早就为这个开关留了位置（use_frameworks! :linkage => ...）。
-          # 必须这样，否则含 Swift 的 pod（HymtBridge 的 HymtModule）在静态库模式下不会链进来，
-          # Archive 阶段报 `_OBJC_CLASS_$_HymtModule` undefined；
-          # 而且本项目 vendored 的 llama.framework 本身就是 dylib，静态库集成方式与之矛盾。
-          USE_FRAMEWORKS: dynamic
         working-directory: ./ios
 
       - name: Archive app (unsigned release)
