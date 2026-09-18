@@ -39,5 +39,10 @@ Pod::Spec.new do |s|
   # Metal / Accelerate：llama.cpp 的 Metal 后端靠它们加速（iOS 统一内存，收益很大）
   s.frameworks = 'Metal', 'MetalKit', 'Accelerate', 'Foundation'
 
+  # 本 pod 含 Swift（HymtModule.swift）。静态库模式下 CocoaPods 不会把 Swift 那半边链进来，
+  # 链接期就会报 `_OBJC_CLASS_$_HymtModule` undefined（HymtBridge.m 的 RCT_EXTERN_REMAP_MODULE
+  # 引用的正是它）。声明成静态 framework 即可带上 Swift 模块，同时不动全局链接方式。
+  s.static_framework = true
+
   s.dependency 'React-Core'
 end
