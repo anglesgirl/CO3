@@ -41,7 +41,9 @@ jobs:
           java-version: '17'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        # v3 内部会装 `tools` 包，而该包已从 SDK 仓库下架（“Failed to find package 'tools'”），
+        # 导致这一步直接失败、连编译都没跑到；v4 不再装它（另一个项目同样用 v4 已验证可用）。
+        uses: android-actions/setup-android@v4
 
       - name: Install Android NDK and CMake
         run: |
