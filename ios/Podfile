@@ -24,6 +24,12 @@ $RNFirebaseDisableSPM = true
 target 'CO3' do
   config = use_native_modules!
 
+  # 静态链接 + Firebase（Swift pod）的经典冲突，pod install 会报：
+  #   「The Swift pod `FirebaseCoreInternal` depends upon `GoogleUtilities`,
+  #     which does not define modules」
+  # 按提示只给这个依赖打开 modular_headers（生成 module map），链接方式保持静态不变。
+  pod 'GoogleUtilities', :modular_headers => true
+
   # 本地桥接 pod：把 gomobile 产出的 ECH 代理（Echproxy.xcframework）暴露给 JS。
   # 该 framework 由 CI（ios-build.yml）在 `pod install` **之前**生成 ——
   # 本地直接 `pod install` 而没有先跑 gomobile bind 的话，这里会找不到 xcframework。
