@@ -14,6 +14,13 @@ if linkage != nil
   use_frameworks! :linkage => linkage.to_sym
 end
 
+# RNFirebase 默认用 SPM 拉 Firebase，而 SPM 产物是 automatic library（非 dynamic），
+# 与静态链接的 Pods 冲突 —— pod install 会直接报
+#   「[react-native-firebase] SPM + static linkage is not supported (target(s): Pods-CO3)」。
+# 按它给的第二种修法关掉 SPM（改由 CocoaPods 拉 firebase-ios-sdk），保留原有静态链接。
+# 必须在任何 target 块之前设置。
+$RNFirebaseDisableSPM = true
+
 target 'CO3' do
   config = use_native_modules!
 
