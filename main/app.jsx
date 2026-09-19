@@ -29,7 +29,8 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
 import SideMenu from './components/app/SideMenu';
 import { EchBrowserHost } from './components/EchBrowser';
 // 启动即上报一次：不等页面请求（否则首次请求之前完全没有日志，出问题只能靠猜）
-import { remoteLog, remoteLogStats } from './utils/remoteLog';
+// installCrashReporter 未导出，但本模块**加载时自己就会装**（崩溃常发生在启动早期）
+import { rlog, remoteLogStats, logEnvOnce } from './utils/remoteLog';
 import { database } from './storage/DatabaseManager';
 import { HistoryDAO } from './storage/dao/HistoryDAO';
 import { WorkDAO } from './storage/dao/WorkDAO';
@@ -484,13 +485,14 @@ const App = () => {
   // 而 JS 上报器原先挂在 requestManager 上，要等首次页面请求才初始化 —— 用户一打开
   // 应用却什么都没上来时，只能靠猜。这里保证"装上、打开，日志自己就来了"。
   useEffect(() => {
-    remoteLog('app_start', {
+    logEnvOnce('app_start_env');   // 平台/系统版本/队列统计，便于区分设备
+    rlog('app_start', {
       platform: Platform.OS,
       osVersion: String(Platform.Version ?? ''),
     });
     const t = setTimeout(() => {
       const s = remoteLogStats();
-      remoteLog('app_start_stats', { queued: s.queued, sent: s.sent, dropped: s.dropped });
+      rlog('app_start_stats', { queued: s.queued, sent: s.sent, dropped: s.dropped });
     }, 6000);
     return () => clearTimeout(t);
   }, []);

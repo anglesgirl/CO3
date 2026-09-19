@@ -76,6 +76,9 @@ jobs:
           cd android
           ./gradlew generateCodegenArtifactsFromSchema
 
+      - name: JS 具名 import 门禁（防止 undefined is not a function 崩启动）
+        run: python3 tools/check_js_imports.py
+
       - name: Setup Rust (H3 native lib)
         uses: dtolnay/rust-toolchain@stable
         with:

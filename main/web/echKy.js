@@ -27,7 +27,8 @@ export const DEFAULT_DOH_FALLBACKS = [
 // working DoH endpoint / edge IPs with one tap instead of understanding DoH.
 // Publish a TXT record on this name, e.g.:
 //   v=co3ech1; doh=https://example.com/dns-query; ip=104.20.8.2,104.20.9.2
-import { remoteLog } from '../utils/remoteLog';
+// 注意：这个模块的真实导出名是 rlog（不是 remoteLog）—— import 名写错会导致启动即崩
+import { rlog } from '../utils/remoteLog';
 
 // Set this to your own domain before shipping builds.
 
@@ -119,7 +120,7 @@ function startProxy() {
         (Platform.OS === 'ios'
           ? 'iOS: EchProxyBridge.m 的 RCT_EXTERN_REMAP_MODULE 注册没生效。'
           : 'Android: EchProxyPackage 是否加入 getPackages()。');
-      remoteLog('proxy_unavailable', { platform: Platform.OS, detail: lastStartError });
+      rlog('proxy_unavailable', { platform: Platform.OS, detail: lastStartError });
       console.warn(`[ECH] ${lastStartError}`);
       return null;
     }
@@ -130,7 +131,7 @@ function startProxy() {
       const doh = (await getDohCandidates()).join(',');
       const ips = await getCustomIPs();
       console.log(`[ECH] starting proxy (attempt ${startAttempts}, doh=${doh || '(none)'}, ip=${ips || '(dns)'})`);
-      remoteLog('proxy_start_begin', {
+      rlog('proxy_start_begin', {
         attempt: startAttempts,
         hasDoh: !!doh,
         hasIp: !!ips,
@@ -144,12 +145,12 @@ function startProxy() {
       lastStartError = null;
       echBaseReady = true;
       trackEvent('ech_proxy_start', { ok: true, ms });
-      remoteLog('proxy_start_ok', { port, ms, hasDoh: !!doh, hasIp: !!ips, doh, ips });
+      rlog('proxy_start_ok', { port, ms, hasDoh: !!doh, hasIp: !!ips, doh, ips });
       try {
         const st = await mod.status();
-        remoteLog('native_status_after_start', { phase: 'after_start', status: String(st ?? '') });
+        rlog('native_status_after_start', { phase: 'after_start', status: String(st ?? '') });
       } catch (e) {
-        remoteLog('native_status_query_fail', { error: String(e?.message ?? e).slice(0, 200) });
+        rlog('native_status_query_fail', { error: String(e?.message ?? e).slice(0, 200) });
       }
       return base;
     } catch (e) {
@@ -165,7 +166,7 @@ function startProxy() {
       // 否则一次失败(DoH 抖动/被墙)会让整个 App 会话永久断网。
       echBaseReady = false;
       echBasePromise = null;
-      remoteLog('proxy_start_fail', { attempt: startAttempts, ms, error: String(e?.message ?? e).slice(0, 300) });
+      rlog('proxy_start_fail', { attempt: startAttempts, ms, error: String(e?.message ?? e).slice(0, 300) });
       return null;
     }
   })();
@@ -187,7 +188,7 @@ export function getEchBase() {
 
 // Eagerly warm up the proxy so it's ready before the first AO3 request.
 export function initEch() {
-  remoteLog('startup_env', {
+  rlog('startup_env', {
     platform: Platform.OS,
     osVersion: String(Platform.Version ?? ''),
     dohDefault: DEFAULT_DOH,
