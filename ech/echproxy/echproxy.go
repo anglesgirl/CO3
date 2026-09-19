@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -1380,6 +1381,119 @@ func FetchTxt(doh, name string) (string, error) {
 
 var echParamRe = regexp.MustCompile(`(?:^|\s)ech="?([A-Za-z0-9+/=]+)"?`)
 
+// domesticDoHIPs 是国内三家的纯 IP DoH 端点。
+//
+// 为什么用纯 IP：不查 DNS、不被污染，证书直接对 IP 生效（实测三家均 200）。
+// 为什么只发 wire：三家都不支持 JSON（阿里/360 回 400 no 'dns' query parameter，腾讯回 UrlParameterError）。
+// 为什么不发 Host 头：阿里带 Host 会直接失败（实测 http=000），用 URL 里的 IP 当 Host 即可。
+// 实测三家返回的 ech 与 CF 官方 cloudflare-ech.com 的活值**逐字节相同**。
+var domesticDoHIPs = []string{
+	"223.5.5.5", "223.6.6.6", // 阿里（含备用）
+	"1.12.12.12", "120.53.53.53", // 腾讯（含备用）
+	"101.198.193.29", "101.198.192.33", // 360（含备用）
+}
+
+// fetchLiveECHWire 随机挑一家国内纯 IP DoH 取 cloudflare-ech.com 的 ECH 活值。
+// 单家 2.5s 超时，失败换下一家 —— 不同时打、也不重复打同一家。
+func fetchLiveECHWire() ([]byte, error) {
+	ips := append([]string(nil), domesticDoHIPs...)
+	rand.Shuffle(len(ips), func(i, j int) { ips[i], ips[j] = ips[j], ips[i] })
+	var lastErr error
+	for _, ip := range ips {
+		b, err := queryECHWire(ip, cloudflareECHHost)
+		if err == nil && len(b) > 0 {
+			log.Printf("echproxy: live ECH via %s (%d bytes)", ip, len(b))
+			return b, nil
+		}
+		lastErr = err
+		log.Printf("echproxy: live ECH via %s failed: %v", ip, err)
+	}
+	if lastErr == nil {
+		lastErr = errors.New("no domestic DoH candidate")
+	}
+	return nil, fmt.Errorf("all domestic DoH failed: %w", lastErr)
+}
+
+// queryECHWire 用纯 IP + wire 查一个域名的 HTTPS(65) 记录并取出 ech。
+// 注意：绝不设置 Host 头（阿里会因此失败）。
+func queryECHWire(ip, name string) ([]byte, error) {
+	q := buildDNSQuery65(name)
+	b64 := base64.RawURLEncoding.EncodeToString(q)
+	url := "https://" + ip + "/dns-query?dns=" + b64
+	client := &http.Client{Timeout: 2500 * time.Millisecond}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("accept", "application/dns-message")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("http %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return nil, err
+	}
+	rdata, err := extractType65RData(body)
+	if err != nil {
+		return nil, err
+	}
+	// 转成 RFC 3597 文本形式后复用已有解析器，避免重复实现 SVCB 解析。
+	return parseSVCBWireECH("\\# " + fmt.Sprintf("%d", len(rdata)) + " " + hex.EncodeToString(rdata))
+}
+
+// buildDNSQuery65 组一个 type=65（HTTPS）的 DNS 查询报文。
+func buildDNSQuery65(name string) []byte {
+	buf := []byte{0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0}
+	for _, label := range strings.Split(name, ".") {
+		buf = append(buf, byte(len(label)))
+		buf = append(buf, []byte(label)...)
+	}
+	buf = append(buf, 0, 0x00, 65, 0x00, 0x01)
+	return buf
+}
+
+// extractType65RData 从 DNS 应答报文里取出第一条 type=65 记录的 rdata。
+func extractType65RData(msg []byte) ([]byte, error) {
+	if len(msg) < 12 {
+		return nil, errors.New("short dns message")
+	}
+	i := 12
+	for i < len(msg) && msg[i] != 0 {
+		i += int(msg[i]) + 1
+	}
+	i += 5 // 跳过根标签 + qtype(2) + qclass(2)
+	ancount := int(msg[6])<<8 | int(msg[7])
+	for n := 0; n < ancount; n++ {
+		if i+12 > len(msg) {
+			return nil, errors.New("truncated answer")
+		}
+		if msg[i]&0xC0 == 0xC0 {
+			i += 2
+		} else {
+			for i < len(msg) && msg[i] != 0 {
+				i += int(msg[i]) + 1
+			}
+			i++
+		}
+		typ := int(msg[i])<<8 | int(msg[i+1])
+		rdlen := int(msg[i+8])<<8 | int(msg[i+9])
+		rdata := i + 10
+		if rdata+rdlen > len(msg) {
+			return nil, errors.New("truncated rdata")
+		}
+		if typ == 65 && rdlen > 4 {
+			return msg[rdata : rdata+rdlen], nil
+		}
+		i = rdata + rdlen
+	}
+	return nil, errors.New("no HTTPS(65) record")
+}
+
 // fetchECHViaDoH queries HTTPS (type 65) and accepts both textual SVCB output
 // and RFC 3597 wire-format output returned by different DoH providers.
 func fetchECHViaDoH(host, endpoint string) ([]byte, error) {
@@ -1498,6 +1612,17 @@ func loadECHConfigWithFallbacks(host, doh string) ([]byte, string) {
 	}
 
 	// 2. Cloudflare 官方 ECH 公钥(适用所有 CF 站点)。
+	// 2a. 国内三家纯 IP DoH 取官方活值：**不依赖 doh 设置** ——
+	// 它不查系统 DNS、也不需要用户配 DoH，所以"关掉 DoH 只停普通解析"这条边界在这里成立：
+	// ECH 取数照旧，否则受保护域全部 fail-closed = 整个 App 没网络（Han1meViewer 上实测过这个坑）。
+	if b, err := fetchLiveECHWire(); err == nil && len(b) > 0 {
+		storePublicECHCache(cp, host, b)
+		return b, "domestic-pure-ip"
+	} else {
+		log.Printf("echproxy: domestic pure-ip ECH failed, falling back to gateway: %v", err)
+	}
+
+	// 2b. 回退：经用户/内置的 DoH 网关取（原有链路，保留）。
 	if doh != "" {
 		if b, err := fetchECHViaDoH(cloudflareECHHost, doh); err == nil && len(b) > 0 {
 			storePublicECHCache(cp, host, b)
