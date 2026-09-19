@@ -56,6 +56,8 @@ class MainApplication : Application(), ReactApplication {
         android.util.Log.w("CO-ECH", "OkHttp hook failed: " + t.message)
     }
     com.co3.Diagnostics.initialize(this)
+    // ECH 配置落盘存储（冷启动直接复用上次的活值，不再等网关查询）
+    com.co3.ech.EchState.attach(this)
     ProcessLifecycleOwner.get().lifecycle.addObserver(AppForegroundTracker)
     // ⚠️ 【绝不可在此行之前加载任何 native 库】
     // loadReactNative 里才初始化 SoLoader 与 Fresco。若在它之前调用 native 库（例如 Conscrypt），
@@ -63,6 +65,20 @@ class MainApplication : Application(), ReactApplication {
     // 渲染第一个 <Image> 时 Fresco.newDraweeControllerBuilder() 为 null → 启动即崩
     // （2026-09-11 真机实测：java.lang.NullPointerException at ReactImageManager.createViewInstance）。
     loadReactNative(this)
+
+    // ECH 预热（必须在 loadReactNative 之后：OkHttp/DoH 是纯 JVM，但绝不冒险把网络与
+    // 其他初始化塞到它前面）。后台线程跑，不阻塞启动；目的只是把 AO3 的
+    // ECH 配置与干净 IP 提前取好并落盘，用户点进去时首屏不必再等这一段。
+    Thread {
+      runCatching {
+        com.co3.ech.EchDoh.resolve(com.co3.ech.EchDoh.WARMUP_HOST).firstOrNull()?.hostAddress?.let {
+          android.util.Log.i("CO-ECH", "warmup resolve ok: $it")
+        }
+        com.co3.ech.EchDoh.echConfigList(com.co3.ech.EchDoh.WARMUP_HOST)?.let {
+          android.util.Log.i("CO-ECH", "warmup ech ok: ${it.size} bytes")
+        }
+      }.onFailure { android.util.Log.w("CO-ECH", "warmup failed: ${it.message}") }
+    }.start()
 
     // 【再兜一道】上面那条只保证"不会因为提前加载 native 而跳过 loadReactNative"。
     // 真机仍在冷启动时偶发同一个崩溃，栈顶是 Fabric 的**预分配**路径：

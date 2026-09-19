@@ -73,6 +73,9 @@ object EchDoh {
      */
     private const val LIVE_SOURCE_HOST = "cloudflare-ech.com"
 
+    /** 启动预热的目标域名（本 App 的主站）。 */
+    const val WARMUP_HOST = "archiveofourown.org"
+
     /**
      * 取 ECHConfigList（RFC 9460 的 wire 格式，含 2 字节长度前缀，可直接喂 Conscrypt）。
      * @return null 表示该域名没有 ECH 配置或 DoH 拿不到 —— 调用方据此 fail-closed
@@ -80,6 +83,12 @@ object EchDoh {
     fun echConfigList(host: String): ByteArray? {
         val now = System.currentTimeMillis()
         echCache[host]?.let { if (it.expireAt > now) return it.wire }
+        // 落盘复用：冷启动不再等网关查询（首屏最明显的一段等待就在这）
+        EchState.load(host)?.let {
+            echCache[host] = EchEntry(it, now + MIN_TTL_MS)
+            Log.i(TAG, "ech config for $host: ${it.size} bytes（源=落盘）")
+            return it
+        }
         val failedAt = echFailed[host]
         if (failedAt != null && now - failedAt < FAIL_COOLDOWN_MS) return null
 
@@ -99,6 +108,7 @@ object EchDoh {
         }
         val (wire, ttlMs) = hit
         echCache[host] = EchEntry(wire, now + ttlMs)
+        EchState.save(host, wire, ttlMs)
         echFailed.remove(host)
         Log.i(TAG, "ech config for $host: ${wire.size} bytes（源=$first）")
         return wire
@@ -126,6 +136,7 @@ object EchDoh {
      */
     fun invalidateEch(host: String) {
         echCache.remove(host)
+        EchState.drop(host)
         echFailed.remove(host)
         echCache.remove(LIVE_SOURCE_HOST)
         if (host != LIVE_SOURCE_HOST) ownFirst.add(host)
