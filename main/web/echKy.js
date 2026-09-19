@@ -30,21 +30,16 @@ export const DEFAULT_DOH_FALLBACKS = [
 import { remoteLog } from '../utils/remoteLog';
 
 // Set this to your own domain before shipping builds.
-export const DEFAULT_CONFIG_DOMAIN = 'ech-config.anglesgirl.eu.org';
 
 const DOH_KEY = 'ech_doh';
 const DOH2_KEY = 'ech_doh2';
 const DOH3_KEY = 'ech_doh3';
 const IP_KEY = 'ech_ip';
-const CONFIG_DOMAIN_KEY = 'ech_config_domain';
 // Set once the user edits DoH/IP by hand — remote config must not clobber that.
-const MANUAL_KEY = 'ech_manual_override';
 // Last remote values we applied, so we only restart when they actually change.
-const LAST_REMOTE_KEY = 'ech_last_remote';
 
 let echBasePromise = null; // Promise<string|null> — memoised
 // 代理是否已成功启动（startProxy resolve 后 true）。区别于 echBasePromise
-// 非空（那只是"启动流程进行中"）：syncRemoteConfig 只在真正已就绪时重启。
 let echBaseReady = false;
 
 // Returns the configured DoH endpoint. Unset -> default. Empty string means the
@@ -102,28 +97,12 @@ function shouldRetryStart() {
   return Date.now() - lastStartAttempt >= START_RETRY_COOLDOWN_MS;
 }
 
-// 远程配置就绪 gate（幂等，仅首次冷启动等待）：
-// 2026-08-15 修复二版 —— 上一版只在 initEch 里等配置，但 worksScreen 的
-// 请求 hook（beforeRequest → getEchBase）会绕过 initEch 抢先 startProxy，
-// 日志实证（16:31:38.420 attempt 1 ip=(dns)）仍是空配置启动 → CF 525。
-// 现在 gate 下沉到 startProxy 内部：**任何入口**启动代理前都必须先等
-// 远程配置（限时 6s，失败/超时不影响启动，行为不劣于原来），保证
-// 第一次启动就用上 CF 优选 IP。
-let configGatePromise = null;
+// ⚠️ 这里以前有个「远程配置就绪 gate」：启动代理前先等远程 TXT 下发
+// （历史上限时 6–8s），好让首次启动就用上远程下发的优选 IP。
+// 远程 TXT 下发**已永久移除**（用户明确要求，勿加回），gate 随之删除 ——
+// 代理启动不再等待任何网络请求，直接用本地存储/内置配置起，启动更快。
+// 需要改 DoH/IP 时走 app 内设置项（setDoh / setCustomIPs）。
 
-function getConfigGate() {
-  if (!configGatePromise) {
-    configGatePromise = (async () => {
-      try {
-        await Promise.race([
-          syncRemoteConfig(),
-          new Promise((resolve) => setTimeout(resolve, 8000)),
-        ]);
-      } catch {}
-    })();
-  }
-  return configGatePromise;
-}
 
 function startProxy() {
   lastStartAttempt = Date.now();
@@ -148,8 +127,6 @@ function startProxy() {
     // 一旦 start 抛错就会变成 ReferenceError（把真正的失败原因吃掉）。
     const t0 = Date.now();
     try {
-      // 首次启动前等远程配置 gate（幂等；已 resolve 则立即通过）
-      await getConfigGate();
       const doh = (await getDohCandidates()).join(',');
       const ips = await getCustomIPs();
       console.log(`[ECH] starting proxy (attempt ${startAttempts}, doh=${doh || '(none)'}, ip=${ips || '(dns)'})`);
@@ -255,16 +232,9 @@ function isValidIPList(s) {
     .every(x => /^[0-9.]+$/.test(x) || /^[0-9a-f:]+$/i.test(x));
 }
 
-// syncRemoteConfig —— **已停用**。
-//
-// 历史上这里会从运营方域名拉 TXT 记录，远程下发 DoH 地址 / 优选 IP / 翻译端点。
-// 用户明确要求：**远程 TXT 下发已永久移除，勿加回**。
-// 因此保留函数签名（调用点还在）但直接返回，不再产生任何网络请求。
-//
-// 需要改配置时走 app 内的设置项（setDoh / setCustomIPs，写入本地存储）。
-export async function syncRemoteConfig() {
-  return;
-}
+// ⚠️ 远程 TXT 下发已**永久移除**（用户明确要求，**勿加回**）：不要重新引入
+// 「启动时从运营方域名拉 TXT / JSON 下发 DoH、优选 IP、翻译端点」这类逻辑。
+// 需要改配置时一律走 app 内设置项（setDoh / setCustomIPs，写入本地存储）。
 
 // echUrl rewrites an AO3 URL so it goes through the local ECH proxy. Use it for
 // raw fetch() calls (form POSTs, cookie-sensitive requests) that can't use the
@@ -403,30 +373,18 @@ export async function clearSessionCookies() {
 // `manual` marks it as a user edit, which stops remote config from overriding it.
 export async function setDoh(doh, manual = true) {
   await AsyncStorage.setItem(DOH_KEY, doh ?? '');
-  if (manual) await AsyncStorage.setItem(MANUAL_KEY, '1');
   return restartProxy();
 }
 
 // Set preferred edge IPs (comma-separated) and restart. Pass '' to use DNS.
 export async function setCustomIPs(ips, manual = true) {
   await AsyncStorage.setItem(IP_KEY, ips ?? '');
-  if (manual) await AsyncStorage.setItem(MANUAL_KEY, '1');
   return restartProxy();
 }
 
 // Whether the user has hand-edited the DoH/IP settings.
-export async function hasManualOverride() {
-  try {
-    return (await AsyncStorage.getItem(MANUAL_KEY)) === '1';
-  } catch {
-    return false;
-  }
-}
 
 // Clear the manual flag so remote config takes over again.
-export async function clearManualOverride() {
-  await AsyncStorage.removeItem(MANUAL_KEY);
-}
 
 // 读取代理 cookiejar 的完整内容(文本)。交互式登录窗口用它轮询
 // 检测登录是否成功(_otwarchive_session 出现在清空后的 jar 里)。
@@ -441,77 +399,15 @@ export async function getJarInfo() {
   }
 }
 
-// --- remote configuration (TXT record) ------------------------------------
 
-export async function getConfigDomain() {
-  try {
-    const v = await AsyncStorage.getItem(CONFIG_DOMAIN_KEY);
-    return v === null ? DEFAULT_CONFIG_DOMAIN : v;
-  } catch {
-    return DEFAULT_CONFIG_DOMAIN;
-  }
-}
 
-export async function setConfigDomain(domain) {
-  await AsyncStorage.setItem(CONFIG_DOMAIN_KEY, domain ?? '');
-}
 
 // Parses a TXT payload like:
 //   v=co3ech1; doh=https://example.com/dns-query; ip=104.20.8.2,104.20.9.2
 // Returns { doh, ip } with whatever keys were present.
-export function parseRemoteConfig(txt) {
-  const out = {};
-  for (const line of String(txt).split('\n')) {
-    for (const part of line.split(';')) {
-      const i = part.indexOf('=');
-      if (i === -1) continue;
-      const k = part.slice(0, i).trim().toLowerCase();
-      const v = part.slice(i + 1).trim();
-      if (!v) continue;
-      if (k === 'doh') out.doh = v;
-      else if (k === 'doh2') out.doh2 = v;
-      else if (k === 'doh3') out.doh3 = v;
-      else if (k === 'ip' || k === 'ips') out.ip = v;
-      else if (k === 'tr' || k === 'translate') out.tr = v;
-    }
-  }
-  return out;
-}
 
 // Fetches the remote config TXT record. Uses the currently configured DoH (or
 // the built-in default) for the lookup, so it works even with poisoned DNS.
-export async function fetchRemoteConfig(domain) {
-  const mod = NativeModules.EchProxy;
-  if (!mod || typeof mod.fetchTxt !== 'function') {
-    throw new Error('ECH native module unavailable');
-  }
-  const name = (domain ?? '').trim() || (await getConfigDomain());
-  if (!name) throw new Error('No config domain set');
-  const candidates = await getDohCandidates();
-  let txt;
-  let lastError;
-  for (const doh of candidates) {
-    try {
-      // 2026-08-15: 单候选 2.5s 超时 —— 移动宽带上 Cloudflare Gateway
-      // DoH 可能卡 8s+（日志实证），串行无超时会让首次启动干等。
-      // 快失败快切换下一个候选，总耗时 ≈ 候选数 × 2.5s。
-      txt = await Promise.race([
-        mod.fetchTxt(doh, name),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`DoH timeout: ${doh}`)), 2500)),
-      ]);
-      break;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  if (txt == null) throw lastError || new Error('No DoH endpoint available');
-  const cfg = parseRemoteConfig(txt);
-  if (!cfg.doh && !cfg.doh2 && !cfg.doh3 && !cfg.ip && !cfg.tr) {
-    throw new Error(`TXT found but no doh=/doh2=/doh3=/ip=/tr= keys:\n${txt}`);
-  }
-  return { ...cfg, raw: txt };
-}
 
 const echKy = ky.create({
   // Generous timeout: the first request may have to bootstrap the ECH handshake.
