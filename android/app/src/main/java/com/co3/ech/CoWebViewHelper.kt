@@ -18,6 +18,34 @@ import java.io.ByteArrayInputStream
  */
 object CoWebViewHelper {
 
+    /** H3 只接管可缓存、不带会话的静态资源（图片/样式/脚本/字体）。 */
+    private val STATIC_EXT = setOf(
+        "jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "ico", "svg",
+        "css", "js", "mjs", "woff", "woff2", "ttf",
+    )
+
+    private fun isStaticAsset(uri: android.net.Uri): Boolean {
+        val ext = (uri.path ?: return false).substringAfterLast('.', "").lowercase()
+        return ext in STATIC_EXT
+    }
+
+    private fun mimeFor(uri: android.net.Uri): String = when (
+        (uri.path ?: "").substringAfterLast('.', "").lowercase()
+    ) {
+        "jpg", "jpeg" -> "image/jpeg"
+        "png" -> "image/png"
+        "gif" -> "image/gif"
+        "webp" -> "image/webp"
+        "avif" -> "image/avif"
+        "svg" -> "image/svg+xml"
+        "css" -> "text/css"
+        "js", "mjs" -> "application/javascript"
+        "woff" -> "font/woff"
+        "woff2" -> "font/woff2"
+        "ttf" -> "font/ttf"
+        else -> "application/octet-stream"
+    }
+
     fun intercept(request: WebResourceRequest): WebResourceResponse? {
         val host = request.url.host ?: return null
         val method = request.method ?: "GET"
@@ -30,6 +58,20 @@ object CoWebViewHelper {
         }
         // 非 GET 不拦截（WebView 的 POST body 取不到）
         if (method != "GET") return null
+
+        // H3 优先（用户定调：**默认所有域名都先试 H3**）。失败时 CoEchH3 会把这个域名记入负缓存
+        // （24h），本次请求立刻回落到下面的 H2（TCP+ECH）链路 —— 用户无感。
+        // 只接管「静态、不带会话」的资源：HTML/POST/Cookie 相关请求必须走 TCP+ECH，
+        // 因为 H3 这条不发送 Cookie，会把已登录状态读成未登录。
+        if (isStaticAsset(request.url)) {
+            val h3 = runCatching { CoEchH3.fetchResourceToFile(request.url.toString()) }.getOrNull()
+            if (h3 != null && h3.exists() && h3.length() > 0) {
+                Diagnostics.event("webview_h3_hit", mapOf("host" to host, "len" to h3.length().toString()))
+                return WebResourceResponse(
+                    mimeFor(request.url), null, 200, "OK", emptyMap(), java.io.FileInputStream(h3),
+                )
+            }
+        }
         // 惰性确保：ready 为 false 时主动初始化一次（幂等、不抛异常）。
         // 注意拦截器不在启动路径上，这里首次调用时 SoLoader/Fresco 早已就绪。
         if (!ConscryptEch.ready && !ConscryptEch.install()) {

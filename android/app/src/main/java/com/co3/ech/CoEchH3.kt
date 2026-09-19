@@ -48,11 +48,22 @@ object CoEchH3 {
     /** 负缓存时长：服务端可能后来才启用 H3，过期后自动重试一次。 */
     private const val H3_FAIL_TTL_MS = 24 * 60 * 60 * 1000L
 
+    @Volatile
+    private var appContext: Context? = null
+
+    /** 在 Application.onCreate（loadReactNative 之后）调用一次。 */
+    fun attach(context: Context) {
+        appContext = context.applicationContext
+    }
+
+    private fun ctx(): Context? = appContext
+
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(H3_STATE_PREFS, Context.MODE_PRIVATE)
 
     /** 是否该先试 H3：只要没被负缓存拦下就算可用（不写死白名单）。 */
-    fun shouldTryH3(context: Context, host: String): Boolean {
+    fun shouldTryH3(host: String): Boolean {
+        val context = ctx() ?: return false
         val until = runCatching { prefs(context).getLong("bad:$host", 0L) }.getOrDefault(0L)
         return System.currentTimeMillis() >= until
     }
@@ -121,14 +132,15 @@ object CoEchH3 {
      * 对外入口：受保护域名走 H3+ECH 拉取并落盘。
      * 非 H3 适用（负缓存命中）/ 解析失败 / 握手失败一律返回 null —— 调用方走 H2(TCP+ECH)。
      */
-    fun fetchResourceToFile(context: Context, url: String): File? {
+    fun fetchResourceToFile(url: String): File? {
+        val context = ctx() ?: return null
         val uri = try {
             java.net.URI(url)
         } catch (_: Throwable) {
             return null
         }
         val host = uri.host ?: return null
-        if (!shouldTryH3(context, host)) return null
+        if (!shouldTryH3(host)) return null
 
         val ip = runCatching { EchDoh.resolve(host).firstOrNull()?.hostAddress }.getOrNull()
             ?: run { rememberH3(context, host, false, "DoH 未解析出 IP"); return null }

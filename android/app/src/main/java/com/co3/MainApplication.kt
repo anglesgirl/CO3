@@ -58,6 +58,7 @@ class MainApplication : Application(), ReactApplication {
     com.co3.Diagnostics.initialize(this)
     // ECH 配置落盘存储（冷启动直接复用上次的活值，不再等网关查询）
     com.co3.ech.EchState.attach(this)
+    com.co3.ech.CoEchH3.attach(this)
     ProcessLifecycleOwner.get().lifecycle.addObserver(AppForegroundTracker)
     // ⚠️ 【绝不可在此行之前加载任何 native 库】
     // loadReactNative 里才初始化 SoLoader 与 Fresco。若在它之前调用 native 库（例如 Conscrypt），
