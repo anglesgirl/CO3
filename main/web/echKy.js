@@ -27,6 +27,8 @@ export const DEFAULT_DOH_FALLBACKS = [
 // working DoH endpoint / edge IPs with one tap instead of understanding DoH.
 // Publish a TXT record on this name, e.g.:
 //   v=co3ech1; doh=https://example.com/dns-query; ip=104.20.8.2,104.20.9.2
+import { remoteLog } from '../utils/remoteLog';
+
 // Set this to your own domain before shipping builds.
 export const DEFAULT_CONFIG_DOMAIN = 'ech-config.anglesgirl.eu.org';
 
@@ -138,6 +140,7 @@ function startProxy() {
         (Platform.OS === 'ios'
           ? 'iOS: EchProxyBridge.m 的 RCT_EXTERN_REMAP_MODULE 注册没生效。'
           : 'Android: EchProxyPackage 是否加入 getPackages()。');
+      remoteLog('proxy_unavailable', { platform: Platform.OS, detail: lastStartError });
       console.warn(`[ECH] ${lastStartError}`);
       return null;
     }
@@ -150,6 +153,13 @@ function startProxy() {
       const doh = (await getDohCandidates()).join(',');
       const ips = await getCustomIPs();
       console.log(`[ECH] starting proxy (attempt ${startAttempts}, doh=${doh || '(none)'}, ip=${ips || '(dns)'})`);
+      remoteLog('proxy_start_begin', {
+        attempt: startAttempts,
+        hasDoh: !!doh,
+        hasIp: !!ips,
+        doh,
+        ips,
+      });
       const port = await mod.start(0, doh, ips); // 0 = auto-pick a free port
       const base = `http://127.0.0.1:${port}`;
       const ms = Date.now() - t0;
@@ -157,6 +167,13 @@ function startProxy() {
       lastStartError = null;
       echBaseReady = true;
       trackEvent('ech_proxy_start', { ok: true, ms });
+      remoteLog('proxy_start_ok', { port, ms, hasDoh: !!doh, hasIp: !!ips, doh, ips });
+      try {
+        const st = await mod.status();
+        remoteLog('native_status_after_start', { phase: 'after_start', status: String(st ?? '') });
+      } catch (e) {
+        remoteLog('native_status_query_fail', { error: String(e?.message ?? e).slice(0, 200) });
+      }
       return base;
     } catch (e) {
       const ms = Date.now() - t0;
@@ -171,6 +188,7 @@ function startProxy() {
       // 否则一次失败(DoH 抖动/被墙)会让整个 App 会话永久断网。
       echBaseReady = false;
       echBasePromise = null;
+      remoteLog('proxy_start_fail', { attempt: startAttempts, ms, error: String(e?.message ?? e).slice(0, 300) });
       return null;
     }
   })();
@@ -192,6 +210,11 @@ export function getEchBase() {
 
 // Eagerly warm up the proxy so it's ready before the first AO3 request.
 export function initEch() {
+  remoteLog('startup_env', {
+    platform: Platform.OS,
+    osVersion: String(Platform.Version ?? ''),
+    dohDefault: DEFAULT_DOH,
+  });
   // 只在没有进行中的启动时才触发，避免 App 启动瞬间多处 import 同时
   // 调用造成并发 start()（原生侧会抛 "echproxy already running"，
   // JS 侧则丢掉端口 → 之后 30s 冷却里全部请求 fail-closed。
