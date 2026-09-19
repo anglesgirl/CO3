@@ -28,7 +28,9 @@ object Diagnostics {
      */
     fun isEnabled(): Boolean {
         val ctx = appContext ?: return false
-        return ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).getBoolean(KEY_ENABLED, false)
+        // 默认**开启**：用户要求"测试时不用手动发日志"，而 ECH/H3/原生状态这些关键事件只有原生侧能报。
+        // 接收端会自动剔除 token/cookie/password 等敏感键，用户仍可在设置里关掉。
+        return ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).getBoolean(KEY_ENABLED, true)
     }
 
     fun setEnabled(enabled: Boolean) {

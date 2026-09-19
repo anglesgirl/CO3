@@ -28,6 +28,8 @@ import Icon from 'react-native-vector-icons/MaterialIcons';
 
 import SideMenu from './components/app/SideMenu';
 import { EchBrowserHost } from './components/EchBrowser';
+// 启动即上报一次：不等页面请求（否则首次请求之前完全没有日志，出问题只能靠猜）
+import { remoteLog, remoteLogStats } from './utils/remoteLog';
 import { database } from './storage/DatabaseManager';
 import { HistoryDAO } from './storage/dao/HistoryDAO';
 import { WorkDAO } from './storage/dao/WorkDAO';
@@ -478,6 +480,20 @@ const BottomNavigation = ({
 };
 
 const App = () => {
+  // 启动即上报一次。理由：ECH/H3 这类问题**只有启动瞬间的现场最值钱**，
+  // 而 JS 上报器原先挂在 requestManager 上，要等首次页面请求才初始化 —— 用户一打开
+  // 应用却什么都没上来时，只能靠猜。这里保证"装上、打开，日志自己就来了"。
+  useEffect(() => {
+    remoteLog('app_start', {
+      platform: Platform.OS,
+      osVersion: String(Platform.Version ?? ''),
+    });
+    const t = setTimeout(() => {
+      const s = remoteLogStats();
+      remoteLog('app_start_stats', { queued: s.queued, sent: s.sent, dropped: s.dropped });
+    }, 6000);
+    return () => clearTimeout(t);
+  }, []);
   const {
     currentTheme,
     searchTerm,
