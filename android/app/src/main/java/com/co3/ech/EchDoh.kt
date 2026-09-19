@@ -77,6 +77,122 @@ object EchDoh {
     const val WARMUP_HOST = "archiveofourown.org"
 
     /**
+     * 取 ECH 活值的候选：**国内三家的纯 IP 端点**。
+     *
+     * 为什么用纯 IP：不查 DNS、不被污染、证书直接对 IP 生效（实测均 200）。
+     * 为什么不用 `Host` 头：阿里带 `Host` 会直接失败（实测 http=000），
+     * 三家在"不带 Host + `?dns=`"下都正常 —— 所以一律用 URL 里的 IP 当 Host。
+     * 为什么只认 wire：三家都不支持 JSON（阿里/360 回 400 no 'dns' query parameter，
+     * 腾讯回 UrlParameterError），只能发二进制 dns-message。
+     *
+     * 策略：**随机挑一家试，失败换下一家**（不同时打、也不重复打同一家）。
+     */
+    private val ECH_DOH_IPS = listOf(
+        "223.5.5.5",        // 阿里
+        "223.6.6.6",        // 阿里备
+        "1.12.12.12",       // 腾讯
+        "120.53.53.53",     // 腾讯备
+        "101.198.193.29",   // 360
+        "101.198.192.33",   // 360 备
+    )
+
+    /** 单家超时：快失败快换下一家，避免首次启动干等。 */
+    private const val ECH_ONE_TIMEOUT_MS = 2500L
+    /** ECH 配置缓存下限：记录的 TTL 只有 ~198s，但公钥实测能稳定数天；
+     *  缓存久一点才能真正省掉冷启动那次查询；万一被轮换，握手被拒会走 invalidateEch 自愈。 */
+    private const val ECH_CACHE_MIN_MS = 60 * 60 * 1000L
+    private const val ECH_CACHE_MAX_MS = 5 * 60 * 60 * 1000L
+
+    /** 从随机一家纯 IP DoH 取官方活值（wire 格式，解析 SVCB 的 key=5）。 */
+    private fun fetchLiveEch(): Pair<ByteArray, Long>? {
+        val order = ECH_DOH_IPS.shuffled()
+        for (ip in order) {
+            val hit = runCatching { queryEchWire(ip, LIVE_SOURCE_HOST) }.getOrNull()
+            if (hit != null) {
+                Log.i(TAG, "live ech via $ip: ${hit.first.size} bytes, ttl=${hit.second}ms")
+                return hit
+            }
+            Log.i(TAG, "live ech via $ip failed, next")
+        }
+        return null
+    }
+
+    /** 建 DNS 查询（type 65 = HTTPS）。 */
+    private fun buildQuery(name: String): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        out.write(byteArrayOf(0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+        name.split('.').forEach { lb -> out.write(lb.length); out.write(lb.toByteArray()) }
+        out.write(0)
+        out.write(byteArrayOf(0x00, 65, 0x00, 0x01))
+        return out.toByteArray()
+    }
+
+    /** 纯 IP + wire 的 DoH 查询；返回 ech（含 2 字节长度前缀）+ 缓存时长。 */
+    private fun queryEchWire(ip: String, name: String): Pair<ByteArray, Long>? {
+        val b64 = android.util.Base64.encodeToString(
+            buildQuery(name), android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE,
+        ).trimEnd('=')
+        val req = okhttp3.Request.Builder()
+            .url("https://$ip/dns-query?dns=$b64")
+            .header("accept", "application/dns-message")
+            .build()
+        // 注意：绝不加 Host 头（阿里带 Host 会失败）；URL 的 host 就是 IP，证书对 IP 生效
+        val wire = bootstrapClient.newBuilder()
+            .connectTimeout(ECH_ONE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .readTimeout(ECH_ONE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .callTimeout(ECH_ONE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            .build()
+            .newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                resp.body?.bytes() ?: return null
+            }
+        return parseSvcbEch(wire)
+    }
+
+    /**
+     * 解析 DNS 应答，找 type=65 的 HTTPS 记录，走 SvcParams 取 key=5（ech）。
+     * 返回的字节**含 2 字节长度前缀**，可直接喂 Conscrypt（实测：值以 0x00 0x45 开头，0x45=69）。
+     */
+    private fun parseSvcbEch(msg: ByteArray): Pair<ByteArray, Long>? {
+        if (msg.size < 12) return null
+        var i = 12
+        // 跳过 question
+        while (i < msg.size && msg[i].toInt() != 0) i += (msg[i].toInt() and 0xFF) + 1
+        i += 5
+        val ancount = ((msg[6].toInt() and 0xFF) shl 8) or (msg[7].toInt() and 0xFF)
+        for (n in 0 until ancount) {
+            if (i + 12 > msg.size) return null
+            if ((msg[i].toInt() and 0xC0) == 0xC0) i += 2
+            else { while (i < msg.size && msg[i].toInt() != 0) i += (msg[i].toInt() and 0xFF) + 1; i += 1 }
+            val type = ((msg[i].toInt() and 0xFF) shl 8) or (msg[i + 1].toInt() and 0xFF)
+            val ttl = (((msg[i + 4].toInt() and 0xFF).toLong() shl 24) or
+                ((msg[i + 5].toInt() and 0xFF).toLong() shl 16) or
+                ((msg[i + 6].toInt() and 0xFF).toLong() shl 8) or
+                (msg[i + 7].toInt() and 0xFF).toLong())
+            val rdlen = ((msg[i + 8].toInt() and 0xFF) shl 8) or (msg[i + 9].toInt() and 0xFF)
+            val rdata = i + 10
+            if (type == 65 && rdlen > 4 && rdata + rdlen <= msg.size) {
+                // SVCB: priority(2) + target(域名) + SvcParams
+                var j = rdata + 2
+                while (j < rdata + rdlen && msg[j].toInt() != 0) j += (msg[j].toInt() and 0xFF) + 1
+                j += 1
+                while (j + 4 <= rdata + rdlen) {
+                    val key = ((msg[j].toInt() and 0xFF) shl 8) or (msg[j + 1].toInt() and 0xFF)
+                    val len = ((msg[j + 2].toInt() and 0xFF) shl 8) or (msg[j + 3].toInt() and 0xFF)
+                    if (key == 5 && len > 0) {
+                        val ech = msg.copyOfRange(j + 4, j + 4 + len)
+                        val ttlMs = (ttl * 1000).coerceIn(ECH_CACHE_MIN_MS, ECH_CACHE_MAX_MS - 1) + 1
+                        return ech to ttlMs
+                    }
+                    j += 4 + len
+                }
+            }
+            i = rdata + rdlen
+        }
+        return null
+    }
+
+    /**
      * 取 ECHConfigList（RFC 9460 的 wire 格式，含 2 字节长度前缀，可直接喂 Conscrypt）。
      * @return null 表示该域名没有 ECH 配置或 DoH 拿不到 —— 调用方据此 fail-closed
      */
@@ -96,7 +212,9 @@ object EchDoh {
         val first = if (host != LIVE_SOURCE_HOST && !ownFirst.contains(host)) LIVE_SOURCE_HOST else host
         val second = if (first == host) LIVE_SOURCE_HOST else host
         val hit = try {
-            listOf(first, second).distinct().firstNotNullOfOrNull { name -> fetchConfig(name, now) }
+            // 活值优先：国内三家纯 IP（随机一家，失败换下一家）；失败才回退网关的 JSON 链路
+            if (first == LIVE_SOURCE_HOST) fetchLiveEch() ?: fetchConfig(first, now)
+            else fetchConfig(first, now) ?: (if (second == LIVE_SOURCE_HOST) fetchLiveEch() else fetchConfig(second, now))
         } catch (t: Throwable) {
             Log.w(TAG, "ech query failed for $host: ${t.message}")
             null
