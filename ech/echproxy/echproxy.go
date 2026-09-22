@@ -1290,12 +1290,15 @@ func gatewayIPsForDial() []string {
 	if len(resolved) == 0 {
 		resolved = resolveDoHHostIPs(doh)
 	}
-	// 解析出的地址优先，再补上内置段作冗余：国内 DoH 对网关域名解析出的是
-	// 162.159.36.x，而**同一台设备上 Han1meViewer 用 172.64.229.x 一直是好的**。
-	// 两个段都作为候选按顺序试，任一条通即可 —— 是加冗余，不是替换。
+	// 候选顺序（越靠前越先试）：
+	//   ① 用户自选的优选 IP（TXT 下发、实测最快）—— 排最前，"优选"才有意义
+	//   ② 网关自带 / 解析出的地址
+	//   ③ 内置兜底段
+	candidates := append(preferredIPs(), resolved...)
+	candidates = append(candidates, builtinDoHHostIPs...)
 	seen := map[string]bool{}
-	ips := make([]string, 0, len(resolved)+len(builtinDoHHostIPs))
-	for _, ip := range append(append([]string(nil), resolved...), builtinDoHHostIPs...) {
+	ips := make([]string, 0, len(candidates))
+	for _, ip := range candidates {
 		if ip != "" && !seen[ip] {
 			seen[ip] = true
 			ips = append(ips, ip)
@@ -1710,6 +1713,71 @@ func resolveHostViaDomesticDoH(host string) []string {
 // 这是「网关可换」那一环 —— 换网关只改这条 TXT，App 不用重新发版。
 // 只用国内种子 DoH 去读（纯 IP 直连，天然免疫污染）。
 const configTxtDomain = "doh.xn--pn1aul.eu.org"
+
+// configIPDomain 的 TXT 里发布**用户自己实测最快的 IP**（自选，不是网关自带那批）。
+//
+// 为什么要独立一条：网关自带/官方解析出的地址不一定快（实测 162.159.36.x 就是一例），
+// 而同一个网关域名在多个 CF 段都能服务（实测 172.64.229.x 段同样 200）。
+// 所以「用哪个 IP」应该由实测过的人决定，并且能随时改 —— 改 TXT 即可，不用发版。
+// 这些 IP 会排在 bootstrap 候选的**最前面**（用户实测快 > 解析结果 > 内置兜底）。
+const configIPDomain = "ip.xn--pn1aul.eu.org"
+
+// fetchPreferredIPs 读优选 IP 配置域名的 TXT，收下所有合法 IP 字面量。
+// 解析做宽：一行一个 / 逗号分隔 / 带 key= 都能用，非法项直接丢掉。
+func fetchPreferredIPs() []string {
+	ips := append([]string(nil), domesticDoHIPs...)
+	rand.Shuffle(len(ips), func(i, j int) { ips[i], ips[j] = ips[j], ips[i] })
+	for _, ip := range ips {
+		txts, err := queryTxtWire(ip, configIPDomain)
+		if err != nil {
+			noteLog("优选 IP via %s 失败: %v", ip, err)
+			continue
+		}
+		var found []string
+		seen := map[string]bool{}
+		for _, t := range txts {
+			for _, seg := range strings.FieldsFunc(t, func(r rune) bool {
+				return r == ',' || r == ';' || r == ' ' || r == '\n' || r == '\t'
+			}) {
+				seg = strings.TrimSpace(seg)
+				if idx := strings.Index(seg, "="); idx >= 0 {
+					seg = strings.TrimSpace(seg[idx+1:])
+				}
+				if seg != "" && net.ParseIP(seg) != nil && !seen[seg] {
+					seen[seg] = true
+					found = append(found, seg)
+				}
+			}
+		}
+		if len(found) > 0 {
+			noteLog("优选 IP via %s -> %v", ip, found)
+			return found
+		}
+		noteLog("优选 IP via %s 无有效 IP(%d 条 TXT)", ip, len(txts))
+	}
+	return nil
+}
+
+// preferredIPsCache 缓存优选 IP（带 TTL），避免每次拨号都查。
+var (
+	prefIPsMu    sync.Mutex
+	prefIPsCache []string
+	prefIPsAt    time.Time
+)
+
+const prefIPsTTL = 30 * time.Minute
+
+func preferredIPs() []string {
+	prefIPsMu.Lock()
+	defer prefIPsMu.Unlock()
+	if prefIPsAt.After(time.Time{}) && time.Since(prefIPsAt) < prefIPsTTL {
+		return append([]string(nil), prefIPsCache...)
+	}
+	v := fetchPreferredIPs()
+	prefIPsCache = v
+	prefIPsAt = time.Now()
+	return append([]string(nil), v...)
+}
 
 // extractTxtStrings 解析 DNS 应答里的 TXT(16) 记录（rdata 是若干 character-string，需拼接）。
 func extractTxtStrings(msg []byte) []string {

@@ -41,6 +41,16 @@ object EchDoh {
      *   · key=value          —— `doh=https://…` / `doh2=https://…,https://…`
      */
     private const val CONFIG_TXT_DOMAIN = "doh.xn--pn1aul.eu.org"
+    /**
+     * 优选 IP 的配置域名：TXT 里发布**用户自己实测最快的 IP**（自选，不是网关自带的那批）。
+     *
+     * 为什么要独立一条：网关自带/官方解析出的地址不一定快（实测 `162.159.36.x` 就是一例），
+     * 而 CF 的边缘 IP 同一个网关域名在多个段都能服务（实测 `172.64.229.x` 段同样 200）。
+     * 所以「用哪个 IP」应该由**实测过的人**决定，并且能随时改 —— 改 TXT 即可，不用发版。
+     *
+     * 这些 IP 会排在 bootstrap 候选的**最前面**（用户实测快 > 解析结果 > 内置兜底）。
+     */
+    private const val CONFIG_IP_DOMAIN = "ip.xn--pn1aul.eu.org"
     private const val GATEWAY_POOL_TTL_MS = 30 * 60 * 1000L
     private const val GATEWAY_IP_TTL_MS = 30 * 60 * 1000L
 
@@ -199,6 +209,43 @@ object EchDoh {
         return emptyList()
     }
 
+    @Volatile private var prefIpsCache: Pair<List<String>, Long>? = null
+
+    /**
+     * 读优选 IP 配置域名（[CONFIG_IP_DOMAIN]）的 TXT → 用户自选的 IP 列表。
+     *
+     * 解析做宽：整条 TXT 里凡是合法的 IP 字面量都收，非法项直接丢掉 ——
+     * 这样用户写「一行一个」「逗号分隔」「带 key=」都能用。
+     */
+    private fun fetchPreferredIps(): List<String> {
+        for (ip in ECH_DOH_IPS.shuffled()) {
+            val wire = dohWire(ip, CONFIG_IP_DOMAIN, 16) ?: continue
+            val found = parseTxt(wire)
+                .flatMap { it.split(',', ';', ' ', '\n', '\t') }
+                .map { it.trim().substringAfter('=').trim() }
+                .filter { isIpLiteral(it) }
+                .distinct()
+            if (found.isNotEmpty()) {
+                Diagnostics.trace(
+                    "doh.prefip.ok",
+                    mapOf("via" to ip, "n" to found.size, "ips" to found.joinToString(","))
+                )
+                return found
+            }
+            Diagnostics.trace("doh.prefip.miss", mapOf("via" to ip))
+        }
+        return emptyList()
+    }
+
+    /** 优选 IP（带 TTL 缓存）；读不到就是空列表 —— 那就退回到解析/内置兜底。 */
+    private fun preferredIps(): List<String> {
+        val now = System.currentTimeMillis()
+        prefIpsCache?.let { (v, exp) -> if (exp > now) return v }
+        val v = fetchPreferredIps()
+        prefIpsCache = v to (now + GATEWAY_POOL_TTL_MS)
+        return v
+    }
+
     @Volatile private var poolCache: Pair<List<GatewaySpec>, Long>? = null
 
     /** 网关池（带 TTL 缓存）；TXT 读不到就用内置默认。 */
@@ -245,9 +292,11 @@ object EchDoh {
                 }
                 resolved
             }
-            // 自带/解析出的地址优先，再补上 [DOH_FALLBACK_IPS] 作冗余（历史多次证明
-            // 某个段忽然不通很常见；多一条候选不亏，OkHttp 会按顺序试）。
-            val ips = (base + DOH_FALLBACK_IPS).distinct()
+            // bootstrap 候选顺序（越靠前越先试）：
+            //   ① 用户自选的优选 IP（TXT 下发、实测最快）—— 排最前，"优选"才有意义
+            //   ② 网关自带 / 解析出的地址
+            //   ③ 内置兜底段
+            val ips = (preferredIps() + base + DOH_FALLBACK_IPS).distinct()
             val g = Gateway(spec.url, host, ips)
             gatewayCache = g to (now + GATEWAY_IP_TTL_MS)
             Diagnostics.trace("doh.gateway.ok", mapOf("url" to spec.url, "ips" to ips.joinToString(",")))
