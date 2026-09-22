@@ -1280,12 +1280,22 @@ func gatewayIPsForDial() []string {
 	hostsMu.Lock()
 	doh := activeDoH
 	hostsMu.Unlock()
-	ips := resolveDoHHostIPs(doh)
-	if len(ips) == 0 {
-		ips = append([]string(nil), builtinDoHHostIPs...)
+	resolved := resolveDoHHostIPs(doh)
+	// 解析出的地址优先，再补上内置段作冗余：国内 DoH 对网关域名解析出的是
+	// 162.159.36.x，而**同一台设备上 Han1meViewer 用 172.64.229.x 一直是好的**。
+	// 两个段都作为候选按顺序试，任一条通即可 —— 是加冗余，不是替换。
+	seen := map[string]bool{}
+	ips := make([]string, 0, len(resolved)+len(builtinDoHHostIPs))
+	for _, ip := range append(append([]string(nil), resolved...), builtinDoHHostIPs...) {
+		if ip != "" && !seen[ip] {
+			seen[ip] = true
+			ips = append(ips, ip)
+		}
+	}
+	if len(resolved) == 0 {
 		noteLog("网关地址解析失败,回落内置快照 %v", ips)
 	} else {
-		noteLog("网关地址已解析(国内种子 DoH) %v", ips)
+		noteLog("网关地址已解析(国内种子 DoH) %v,并补入内置段作冗余", resolved)
 	}
 	gatewayIPsCache = ips
 	gatewayIPsAt = time.Now()

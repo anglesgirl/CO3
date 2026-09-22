@@ -63,8 +63,10 @@ object EchDoh {
     )
 
     private val bootstrapClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(8, TimeUnit.SECONDS)
+        // 4s：对齐 Han1meViewer 在同一台设备上已验证的配置（它用 4s 一直正常）。
+        // 8s 的代价是失败时要干等 16s（A/AAAA 各一次），重试/重取逻辑全被拖住。
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(4, TimeUnit.SECONDS)
         .build()
 
     /**
@@ -185,11 +187,16 @@ object EchDoh {
         gatewayCache?.let { (g, exp) -> if (exp > now) return g }
         for (url in gatewayPool()) {
             val host = runCatching { url.toHttpUrl().host }.getOrNull() ?: continue
-            val ips = resolveHostIps(host)
-            if (ips.isEmpty()) {
+            val resolved = resolveHostIps(host)
+            if (resolved.isEmpty()) {
                 Diagnostics.trace("doh.gateway.unusable", mapOf("url" to url))
                 continue
             }
+            // 解析出的地址优先，再补上 [DOH_FALLBACK_IPS] 作冗余：
+            // 国内 DoH 对网关域名解析出的是 162.159.36.x，而**同一台设备上
+            // Han1meViewer 用 172.64.229.x 一直是好的** —— 两个段都放进去让
+            // OkHttp 按顺序试，任一条通就能用。这不是replace，是加冗余。
+            val ips = (resolved + DOH_FALLBACK_IPS).distinct()
             val g = Gateway(url, host, ips)
             gatewayCache = g to (now + GATEWAY_IP_TTL_MS)
             Diagnostics.trace("doh.gateway.ok", mapOf("url" to url, "ips" to ips.joinToString(",")))
