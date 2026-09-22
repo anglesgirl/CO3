@@ -1196,6 +1196,14 @@ func dohDialContext() func(ctx context.Context, network, addr string) (net.Conn,
 	custom := append([]string(nil), customIPs...)
 	mu.Unlock()
 	if len(custom) == 0 {
+		// 远端配置（TXT 下发 ip=）已为冷启动提速移除，启动时不再有种子 IP。
+		// 此处绝不能返回 nil —— 那会让 DoH 查询退化成走系统 DNS 解析网关域名，
+		// 国内会被污染/超时，实测表现为 iOS 冷启动「找不到网络」：
+		//   dial archiveofourown.org failed: %!w(<nil>)  →  HTTP 502
+		// 回落到内置网关 anycast 快照，与 JS 侧 DEFAULT_DOH 的硬编码默认对称。
+		custom = append([]string(nil), builtinDoHHostIPs...)
+	}
+	if len(custom) == 0 {
 		return nil
 	}
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {

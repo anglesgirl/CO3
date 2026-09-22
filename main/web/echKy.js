@@ -23,6 +23,15 @@ export const DEFAULT_DOH_FALLBACKS = [
   'https://dz1598pphb.cloudflare-gateway.com/dns-query',
 ];
 
+// 内置 CF Gateway 边缘地址。162.159.36.5 / .20 是 *.cloudflare-gateway.com
+// 的 anycast 地址，也正是网关自己解析出来的那两个 —— 与 DEFAULT_DOH 对称：
+// DoH 端点有硬编码默认，网关地址同样要有，否则 DoH 查询会退化成走系统 DNS
+// 解析网关域名（国内会被污染/超时，实测 iOS 冷启动即"找不到网络"）。
+//
+// 历史上这两个值由远端 TXT 配置（ech-config.anglesgirl.eu.org 的 ip=）下发；
+// 远端为冷启动提速被移除后，读取端 IP_KEY 就再没人写入，导致 hasIp 恒为 false。
+export const DEFAULT_EDGE_IPS = '162.159.36.5,162.159.36.20';
+
 // Domain whose TXT record carries remote settings, so end users can pull a
 // working DoH endpoint / edge IPs with one tap instead of understanding DoH.
 // Publish a TXT record on this name, e.g.:
@@ -68,13 +77,18 @@ async function getDohCandidates() {
   )];
 }
 
-// Optional comma-separated list of preferred Cloudflare edge IPs. Empty = use DNS.
+// Optional comma-separated list of preferred Cloudflare edge IPs.
 // Custom IPs only change which edge we connect to; SNI/ECH stay the same.
+// 用户在设置页手配的优先；未配置时回落到内置网关地址（DEFAULT_EDGE_IPS）。
+// 注意：绝不能返回空串 —— 空串会让原生侧 DoH 查询退化为走系统 DNS 解析
+// 网关域名，国内会被污染/超时，表现为冷启动「找不到网络」。
 export async function getCustomIPs() {
   try {
-    return (await AsyncStorage.getItem(IP_KEY)) ?? '';
+    const v = await AsyncStorage.getItem(IP_KEY);
+    if (v && v.trim()) return v.trim();
+    return DEFAULT_EDGE_IPS;
   } catch {
-    return '';
+    return DEFAULT_EDGE_IPS;
   }
 }
 

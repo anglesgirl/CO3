@@ -41,7 +41,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.26.8'   # >=1.26.5: CVE-2026-42505 (ECH 隐私泄漏)
 
       - name: Build ECH proxy iOS framework (gomobile)
         run: |
