@@ -320,8 +320,6 @@ object EchDoh {
         val ttlMs: Long,
     )
 
-    private val httpsRecordCache = ConcurrentHashMap<String, Pair<HttpsRecord, Long>>()
-
     /** 从随机一家纯 IP DoH 取官方活值（wire 格式，解析 SVCB 的 key=5）。 */
     private fun fetchLiveEch(): Pair<ByteArray, Long>? {
         return fetchLiveRecord(LIVE_SOURCE_HOST)?.let { rec ->
@@ -553,31 +551,17 @@ object EchDoh {
                   "ownFirst" to ownFirst.contains(host))
         )
         val hit = try {
-            // ① 优先用**目标域名自己的** HTTPS 记录：实测它同时带 ech(71B) 与
-            //    ipv4hint/ipv6hint，一次查询就把「配置」和「IP」都解决了。
-            //    （AO3 的 ech 与 cloudflare-ech.com 的活值本就同源，不存在"必须借用"的问题）
-            val ownRec = httpsRecord(host)
-            val ownEch = ownRec?.ech
-            if (ownEch != null) {
-                Diagnostics.trace(
-                    "ech.fetch.own",
-                    mapOf(
-                        "host" to host, "bytes" to ownEch.size,
-                        "v4" to ownRec.ipv4.joinToString(","), "v6n" to ownRec.ipv6.size,
-                    )
-                )
-                ownEch to ownRec.ttlMs
-            } else {
-                // ② 借用路径：某些域名自己的记录里没有 ech（例：未挂 CF custom hostname），
-                //    此时才去 cloudflare-ech.com 取官方活值。这条路径没有地址提示，
-                //    resolve() 会退回自有网关。
-                Diagnostics.trace(
-                    "ech.fetch.borrow",
-                    mapOf("host" to host, "first" to first, "second" to second)
-                )
-                if (first == LIVE_SOURCE_HOST) fetchLiveEch() ?: fetchConfig(first, now)
-                else fetchConfig(first, now) ?: (if (second == LIVE_SOURCE_HOST) fetchLiveEch() else fetchConfig(second, now))
-            }
+            // ⚠️ **不**用「目标域名自己的 HTTPS 记录」取 ECH。
+            // 国内 DoH 查被墙域名会拿到投毒应答 —— 同一次应答里 echBytes=0、
+            // 地址是 Twitter/Facebook 的段（实证见 resolve() 的注释）。
+            //
+            // ECH 一律向 cloudflare-ech.com 借权威活值（该域名没被墙，国内 DoH 拿到的是真答案）。
+            Diagnostics.trace(
+                "ech.fetch.borrow",
+                mapOf("host" to host, "first" to first, "second" to second)
+            )
+            if (first == LIVE_SOURCE_HOST) fetchLiveEch() ?: fetchConfig(first, now)
+            else fetchConfig(first, now) ?: (if (second == LIVE_SOURCE_HOST) fetchLiveEch() else fetchConfig(second, now))
         } catch (t: Throwable) {
             Log.w(TAG, "ech query failed for $host: ${t.message}")
             Diagnostics.trace(
@@ -641,10 +625,6 @@ object EchDoh {
         EchState.drop(host)
         echFailed.remove(host)
         echCache.remove(LIVE_SOURCE_HOST)
-        // 新加的 HTTPS 记录缓存（ech + 地址提示）同样必须清 —— 它就是「配置+IP」的来源，
-        // 留着不清等于下次仍然拿旧记录，跟没清一样。
-        invalidateHttpsRecord(host)
-        invalidateHttpsRecord(LIVE_SOURCE_HOST)
         // 旧实现这里是 ownFirst.add(host)，让该域名**永久**偏向"自己的记录"——
         // 但那份记录可能同样是旧的，等于换个地方继续撞墙，而且再也回不到权威源。
         // 改为清除：下次仍然优先权威源。
@@ -663,56 +643,37 @@ object EchDoh {
     // ---------------- DNS ----------------
 
     /**
-     * 取某域名的完整 HTTPS 记录（带缓存）。
-     * resolve 与 echConfigList 共用这一份，避免同一个域名打两次 DoH。
-     */
-    private fun httpsRecord(host: String): HttpsRecord? {
-        val now = System.currentTimeMillis()
-        httpsRecordCache[host]?.let { (rec, expireAt) -> if (expireAt > now) return rec }
-        val rec = fetchLiveRecord(host) ?: return null
-        httpsRecordCache[host] = rec to (now + rec.ttlMs)
-        return rec
-    }
-
-    private fun invalidateHttpsRecord(host: String) {
-        httpsRecordCache.remove(host)
-    }
-
-    /**
      * 用 DoH 解析域名，失败返回空列表。
      *
-     * **优先用 HTTPS 记录里的 ipv4hint/ipv6hint** —— 它与 ECH 配置来自同一次查询、
-     * 同一批国内可达的纯 IP（实测 158ms 成功）。
+     * **只走自有网关** —— 这是用户定的分工：
+     *   · 国内种子 DoH → 只查**没被墙的**东西（cloudflare-ech.com 的 ECH、网关地址、配置 TXT）
+     *   · 自有网关     → 解析**被墙的目标域名**（防污染，这是它存在的唯一理由）
      *
-     * 为什么改掉原实现：原实现一律走 `dohResolver`（OkHttp DnsOverHttps → 自有网关，
-     * 钉 162.159.36.x）。实测用户网络下那条路连不上 —— 日志里每次卡 17~21 秒后
-     * `0 个地址 → fail-closed`，而**同一时刻** ech.fetch 走国内三家 158ms 就成功了。
-     * 于是 ECH 配置拿得到、IP 却解析不出来，整个链路仍然 fail-closed。
-     *
-     * 自有网关退为兜底：它仍有价值（能拿到不受污染的结果），但不能是唯一路径。
+     * 曾经在这条路上加过「用国内 DoH 的 HTTPS 地址提示抄近路」，已删除 ——
+     * 实测国内 DoH 查 archiveofourown.org 返回 Twitter/Facebook 段的**投毒地址**，
+     * 且同一次应答里 echBytes=0。拿它去握手比慢一点糟得多。
      */
     fun resolve(host: String): List<InetAddress> {
-        // ① HTTPS 记录的地址提示（与 ECH 同源、同一次查询、国内可达）
-        runCatching {
-            val rec = httpsRecord(host)
-            if (rec != null) {
-                val addrs = (rec.ipv4 + rec.ipv6)
-                    .mapNotNull { ip -> runCatching { InetAddress.getByName(ip) }.getOrNull() }
-                    .filter { !it.isAnyLocalAddress && !it.isLoopbackAddress }
-                if (addrs.isNotEmpty()) {
-                    Diagnostics.trace(
-                        "net.resolve.hint",
-                        mapOf(
-                            "host" to host, "n" to addrs.size,
-                            "ips" to addrs.joinToString(",") { it.hostAddress ?: "?" }
-                        )
-                    )
-                    return addrs
-                }
-            }
-        }
+        // ⚠️ 这里**不再**用国内 DoH 的 HTTPS 地址提示抄近路 —— 实测那是投毒地址。
+        //
+        // 2026-09-22 真机日志（14:20 那次）抓到确证：
+        //   国内 DoH 查 archiveofourown.org 返回
+        //     199.16.158.12                    → AS13414 = Twitter/X 的段
+        //     2a03:2880:f111:83:face:b00c:...  → AS32934 = Facebook/Meta 的段
+        //   而 AO3 真实地址是 104.20.8.2 / 104.20.9.2（Cloudflare）。
+        //   而且同一次应答里 echBytes=0（连 ech 都是假的）。
+        //
+        // 机制：DoH 查询的 URL 里带着 base64 编码的域名，GFW 能解出来并注入假应答。
+        // 这跟「阿里本身有没有污染」无关 —— 从境外查同一台阿里拿到的是干净结果。
+        //
+        // 所以职责必须分清：
+        //   · 国内种子 DoH —— 只查**没被墙的**东西：cloudflare-ech.com 的 ECH、
+        //     网关地址、配置 TXT。（这些域名不在封禁列表，拿到的就是真答案）
+        //   · 自有网关     —— 解析**被墙的目标域名**（防污染，这是它存在的理由）
+        //
+        // 把目标域名交给国内 DoH，等于亲手把投毒结果喂给握手。
 
-        // ② 兜底：自有网关（防污染）。bootstrap IP 由种子层动态解析而来。
+        // 自有网关（防污染）。bootstrap IP 由种子层动态解析而来。
         return try {
             val addrs = dohResolver().lookup(host)
             Log.i(TAG, "doh resolve $host -> ${addrs.joinToString { it.hostAddress ?: "?" }}")
