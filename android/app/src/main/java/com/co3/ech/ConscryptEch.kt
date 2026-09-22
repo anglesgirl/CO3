@@ -1,6 +1,7 @@
 package com.co3.ech
 
 import android.util.Log
+import com.co3.Diagnostics
 import okhttp3.Dns
 import okhttp3.Interceptor
 import okhttp3.Response
@@ -87,9 +88,14 @@ object ConscryptEch {
             socketFactory
             ready = true
             Log.i(TAG, "Conscrypt ECH 就绪，version=${Conscrypt.version()}")
+            Diagnostics.trace("boot.conscrypt.ok", mapOf("version" to Conscrypt.version()))
             true
         }.getOrElse { t ->
             Log.e(TAG, "Conscrypt ECH 初始化失败: ${t.javaClass.simpleName} ${t.message}")
+            Diagnostics.trace(
+                "boot.conscrypt.fail",
+                mapOf("err" to "${t.javaClass.simpleName}: ${t.message}")
+            )
             false
         }
     }
@@ -134,13 +140,38 @@ object ConscryptEch {
 
         private fun prepare(s: Socket, host: String?): Socket {
             if (host == null || s !is SSLSocket || !EchHosts.isProtected(host)) return s
+            val t0 = System.currentTimeMillis()
             val cfg = EchDoh.echConfigList(host)
-                ?: throw IOException("ECH 配置不可用（fail-closed）：拒绝以明文访问 $host")
+            if (cfg == null) {
+                Diagnostics.trace(
+                    "tls.ech.noConfig",
+                    mapOf(
+                        "host" to host,
+                        "ms" to (System.currentTimeMillis() - t0),
+                        "note" to "拿不到 ECHConfigList → fail-closed 拒绝明文（UI 显示 ECH_FAIL_CLOSED）"
+                    )
+                )
+                throw IOException("ECH 配置不可用（fail-closed）：拒绝以明文访问 $host")
+            }
             try {
                 Conscrypt.setEchConfigList(s, cfg)
             } catch (t: Throwable) {
+                Diagnostics.trace(
+                    "tls.ech.setFail",
+                    mapOf(
+                        "host" to host, "bytes" to cfg.size,
+                        "err" to "${t.javaClass.simpleName}: ${t.message}"
+                    )
+                )
                 throw IOException("setEchConfigList 失败（fail-closed）: ${t.message}")
             }
+            Diagnostics.trace(
+                "tls.ech.inject",
+                mapOf(
+                    "host" to host, "bytes" to cfg.size,
+                    "ms" to (System.currentTimeMillis() - t0)
+                )
+            )
             return s
         }
 
@@ -168,8 +199,24 @@ object ConscryptEch {
 class EchDns(private val system: Dns = Dns.SYSTEM) : Dns {
     override fun lookup(hostname: String): List<InetAddress> {
         if (!EchHosts.isProtected(hostname)) return system.lookup(hostname)
+        val t0 = System.currentTimeMillis()
+        Diagnostics.trace("net.doh.begin", mapOf("host" to hostname))
         val addrs = EchDoh.resolve(hostname)
-        if (addrs.isEmpty()) throw UnknownHostException("DoH 解析失败（fail-closed）：$hostname")
+        val ms = System.currentTimeMillis() - t0
+        if (addrs.isEmpty()) {
+            Diagnostics.trace(
+                "net.doh.fail",
+                mapOf("host" to hostname, "ms" to ms, "note" to "0 个地址 → fail-closed")
+            )
+            throw UnknownHostException("DoH 解析失败（fail-closed）：$hostname")
+        }
+        Diagnostics.trace(
+            "net.doh.ok",
+            mapOf(
+                "host" to hostname, "n" to addrs.size, "ms" to ms,
+                "ips" to addrs.joinToString(",") { it.hostAddress ?: "?" }
+            )
+        )
         return addrs
     }
 }
@@ -188,6 +235,14 @@ class EchRetryInterceptor : Interceptor {
                 .any { it.javaClass.simpleName.contains("EchRejected", ignoreCase = true) }
             if (echRejected && EchHosts.isProtected(host)) {
                 Log.w("CO-ECH", "ECH 被拒，清缓存以便用 retryConfigs 重试: $host")
+                Diagnostics.trace(
+                    "tls.ech.rejected",
+                    mapOf(
+                        "host" to host,
+                        "err" to "${t.javaClass.simpleName}: ${t.message}",
+                        "note" to "服务器拒绝 ECH（多为密钥轮换/配置过期），已清缓存准备重试"
+                    )
+                )
                 EchDoh.invalidateEch(host)
             }
             throw t

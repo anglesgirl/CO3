@@ -66,7 +66,14 @@ object Diagnostics {
                         "stack" to trace,
                         "sdk" to Build.VERSION.SDK_INT.toString()
                     )
-                    val worker = Thread { runCatching { uploadBlocking("app_crash", fields) } }
+                    val worker = Thread {
+                        runCatching {
+                            // 先冲全流程缓冲 —— 崩溃前那几步（DoH/ECH/TLS）往往就是病因，
+                            // 这条 HttpURLConnection 通道不经 ECH，ECH 挂了也能送出去。
+                            runCatching { flushBlocking() }
+                            uploadBlocking("app_crash", fields)
+                        }
+                    }
                     worker.isDaemon = true
                     worker.start()
                     worker.join(4000L)
@@ -98,6 +105,140 @@ object Diagnostics {
         if (!isEnabled()) return
         val safe = fields.mapNotNull { (k, v) -> if (v == null) null else k to v.toString().take(512) }.toMap()
         scope.launch { runCatching { upload(name, safe) } }
+    }
+
+    // ==================== 全流程追踪（trace） ====================
+    //
+    // 为什么不能沿用 event() 的「一条事件发一次请求」：
+    //   1. 启动时几十个事件 = 几十个 HTTP 请求，每个 5s 超时、彼此排队；
+    //   2. **没有本地留存** —— App 崩溃/被杀时，恰恰最需要的那批事件全丢；
+    //   3. 并发 upload 无顺序保证，时序错乱后无法还原链路。
+    //
+    // 现在：事件同步写入有序缓冲（极快、不阻塞调用方），再按批 flush；
+    // 崩溃时同步 flush 一次。上报走 HttpURLConnection（系统 TLS），
+    // **刻意不经 ECH** —— ECH 坏掉时这条路仍然通，正是它的价值所在。
+    private val bufferLock = Any()
+    private val buffer = ArrayList<String>(640)
+    private const val BUFFER_MAX = 800
+    @Volatile private var lastFlushAt = 0L
+    private const val FLUSH_INTERVAL_MS = 4000L
+    private const val FLUSH_MIN_EVENTS = 20
+    private const val CHUNK_CHARS = 6000   // 单条事件体的字符预算
+
+    /**
+     * 记录一步全流程追踪。
+     *
+     * step 命名约定「阶段.动作」，便于事后按前缀过滤还原链路：
+     *   boot.*  启动与初始化      net.*   DoH 解析
+     *   ech.*   ECH 配置获取      tls.*   TLS 连接与 ECH 注入
+     *   http.*  请求与响应        h3.*    HTTP/3 尝试
+     *   wv.*    WebView 拦截
+     *
+     * 例：net.doh.begin / net.doh.ok / ech.config.miss / tls.ech.inject.fail
+     */
+    fun trace(step: String, fields: Map<String, Any?> = emptyMap()) {
+        if (!isEnabled()) return
+        val line = buildString {
+            append(Instant.now().toString()); append(' '); append(step)
+            if (fields.isNotEmpty()) {
+                append(' ')
+                append(
+                    fields.entries.joinToString(" ") { (k, v) ->
+                        "$k=${(v?.toString() ?: "null").replace('\n', ' ').take(200)}"
+                    }
+                )
+            }
+        }
+        android.util.Log.i("CO-TRACE", line)
+        synchronized(bufferLock) {
+            if (buffer.size >= BUFFER_MAX) buffer.removeAt(0) // 环形：牺牲最旧的
+            buffer.add(line)
+        }
+        maybeFlush()
+    }
+
+    private fun maybeFlush() {
+        val now = System.currentTimeMillis()
+        val size = synchronized(bufferLock) { buffer.size }
+        if (size < FLUSH_MIN_EVENTS && now - lastFlushAt < FLUSH_INTERVAL_MS) return
+        flushAsync()
+    }
+
+    fun flushAsync() {
+        if (!isEnabled()) return
+        scope.launch { runCatching { flushBlocking() } }
+    }
+
+    /**
+     * 把缓冲整批发出去。切成若干块（避免单请求体过大），每块一条 native_trace 事件。
+     * 失败则把未发出去的部分放回缓冲（下次重试），但不超过上限，防止无限堆积。
+     */
+    fun flushBlocking() {
+        val batch: List<String>
+        synchronized(bufferLock) {
+            if (buffer.isEmpty()) return
+            batch = ArrayList(buffer)
+            buffer.clear()
+            lastFlushAt = System.currentTimeMillis()
+        }
+        val chunks = chunkLines(batch)
+        var sentUpTo = 0
+        try {
+            chunks.forEachIndexed { i, c ->
+                uploadBatch(batch.size, i, chunks.size, c)
+                sentUpTo = i + 1
+            }
+        } catch (t: Throwable) {
+            // 把没成功的部分放回，等下次 flush 重试
+            val unsent = ArrayList<String>()
+            for (i in sentUpTo until chunks.size) unsent.addAll(chunkLines(splitChunk(chunks[i])))
+            if (unsent.isNotEmpty()) {
+                synchronized(bufferLock) {
+                    val room = BUFFER_MAX - buffer.size
+                    if (room > 0) buffer.addAll(0, unsent.takeLast(room))
+                }
+            }
+            android.util.Log.w("CO-TRACE", "flush failed: ${t.message}")
+        }
+    }
+
+    private fun chunkLines(lines: List<String>): List<String> {
+        val out = ArrayList<String>()
+        val sb = StringBuilder()
+        for (l in lines) {
+            if (sb.isNotEmpty() && sb.length + l.length + 1 > CHUNK_CHARS) {
+                out.add(sb.toString()); sb.setLength(0)
+            }
+            if (sb.isNotEmpty()) sb.append('\n')
+            sb.append(l)
+        }
+        if (sb.isNotEmpty()) out.add(sb.toString())
+        return out
+    }
+
+    private fun splitChunk(chunk: String): List<String> = chunk.split('\n')
+
+    private fun uploadBatch(total: Int, index: Int, chunks: Int, lines: String) {
+        val body = JSONObject().apply {
+            put("app", appId)
+            put("event", "native_trace")
+            put("timestamp", Instant.now().toString())
+            put("fields", JSONObject().apply {
+                put("total", total.toString())
+                put("chunk", "${index + 1}/$chunks")
+                put("lines", lines)
+            })
+        }.toString().toByteArray(Charsets.UTF_8)
+        postBody(body)
+    }
+
+    private fun postBody(body: ByteArray, timeoutMs: Int = 6000) {
+        val c = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"; connectTimeout = timeoutMs; readTimeout = timeoutMs; doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Content-Length", body.size.toString())
+        }
+        try { c.outputStream.use { it.write(body) }; c.inputStream.close() } finally { c.disconnect() }
     }
 
     private suspend fun upload(name: String, fields: Map<String, String>) = withContext(Dispatchers.IO) { uploadBlocking(name, fields) }

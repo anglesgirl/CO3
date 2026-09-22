@@ -70,15 +70,58 @@ class MainApplication : Application(), ReactApplication {
     // ECH 预热（必须在 loadReactNative 之后：OkHttp/DoH 是纯 JVM，但绝不冒险把网络与
     // 其他初始化塞到它前面）。后台线程跑，不阻塞启动；目的只是把 AO3 的
     // ECH 配置与干净 IP 提前取好并落盘，用户点进去时首屏不必再等这一段。
+    //
+    // 启动前先报告落盘状态：这能直接看出冷启动会用"旧值"还是"新值"。
+    // 密钥轮换后若这里显示 hasSaved=true 且未过期，那就是拿旧密钥去握手 —— 必然失败，
+    // 而旧值的 TTL 最短也被拉到 1 小时（ECH_CACHE_MIN_MS），所以这一条是排查
+    // 「ECH_FAIL_CLOSED」最先该看的地方。
+    runCatching {
+      val warmHost = com.co3.ech.EchDoh.WARMUP_HOST
+      val saved = com.co3.ech.EchState.load(warmHost)
+      com.co3.Diagnostics.trace(
+        "boot.echState",
+        mapOf(
+          "host" to warmHost,
+          "hasSaved" to (saved != null),
+          "bytes" to (saved?.size ?: 0),
+          "note" to "hasSaved=true 表示冷启动将复用落盘的 ECH 配置（可能已是轮换前的旧密钥）"
+        )
+      )
+    }
     Thread {
       runCatching {
-        com.co3.ech.EchDoh.resolve(com.co3.ech.EchDoh.WARMUP_HOST).firstOrNull()?.hostAddress?.let {
-          android.util.Log.i("CO-ECH", "warmup resolve ok: $it")
-        }
-        com.co3.ech.EchDoh.echConfigList(com.co3.ech.EchDoh.WARMUP_HOST)?.let {
-          android.util.Log.i("CO-ECH", "warmup ech ok: ${it.size} bytes")
-        }
-      }.onFailure { android.util.Log.w("CO-ECH", "warmup failed: ${it.message}") }
+        val t0 = System.currentTimeMillis()
+        val ip = com.co3.ech.EchDoh.resolve(com.co3.ech.EchDoh.WARMUP_HOST)
+          .firstOrNull()?.hostAddress
+        android.util.Log.i("CO-ECH", "warmup resolve ok: $ip")
+        com.co3.Diagnostics.trace(
+          "boot.prewarm.dns",
+          mapOf(
+            "ok" to (ip != null), "ip" to (ip ?: "-"),
+            "ms" to (System.currentTimeMillis() - t0)
+          )
+        )
+
+        val t1 = System.currentTimeMillis()
+        val cfg = com.co3.ech.EchDoh.echConfigList(com.co3.ech.EchDoh.WARMUP_HOST)
+        android.util.Log.i("CO-ECH", "warmup ech ok: ${cfg?.size} bytes")
+        com.co3.Diagnostics.trace(
+          "boot.prewarm.ech",
+          mapOf(
+            "ok" to (cfg != null), "bytes" to (cfg?.size ?: 0),
+            "ms" to (System.currentTimeMillis() - t1)
+          )
+        )
+      }.onFailure {
+        android.util.Log.w("CO-ECH", "warmup failed: ${it.message}")
+        com.co3.Diagnostics.trace(
+          "boot.prewarm.fail",
+          mapOf("err" to "${it.javaClass.simpleName}: ${it.message}")
+        )
+      }
+      // 预热完立刻把启动这批日志送出去 —— 冷启动那几步恰恰是最需要看清的，
+      // 不能等"攒够 20 条或 4 秒"，否则用户复现一次问题却什么都没留下。
+      com.co3.Diagnostics.flushAsync()
     }.start()
 
     // 【再兜一道】上面那条只保证"不会因为提前加载 native 而跳过 loadReactNative"。

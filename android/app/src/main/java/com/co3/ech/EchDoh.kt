@@ -1,6 +1,7 @@
 package com.co3.ech
 
 import android.util.Log
+import com.co3.Diagnostics
 import okhttp3.Dns
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -198,29 +199,64 @@ object EchDoh {
      */
     fun echConfigList(host: String): ByteArray? {
         val now = System.currentTimeMillis()
-        echCache[host]?.let { if (it.expireAt > now) return it.wire }
+        echCache[host]?.let {
+            if (it.expireAt > now) {
+                Diagnostics.trace(
+                    "ech.cache.hit",
+                    mapOf("host" to host, "bytes" to it.wire.size, "ttlLeftMs" to (it.expireAt - now))
+                )
+                return it.wire
+            }
+        }
         // 落盘复用：冷启动不再等网关查询（首屏最明显的一段等待就在这）
         EchState.load(host)?.let {
             echCache[host] = EchEntry(it, now + MIN_TTL_MS)
             Log.i(TAG, "ech config for $host: ${it.size} bytes（源=落盘）")
+            Diagnostics.trace(
+                "ech.state.hit",
+                mapOf("host" to host, "bytes" to it.size,
+                      "note" to "冷启动读落盘；密钥轮换后这里会短暂用到旧值")
+            )
             return it
         }
         val failedAt = echFailed[host]
-        if (failedAt != null && now - failedAt < FAIL_COOLDOWN_MS) return null
+        if (failedAt != null && now - failedAt < FAIL_COOLDOWN_MS) {
+            Diagnostics.trace(
+                "ech.cooldown",
+                mapOf("host" to host, "ageMs" to (now - failedAt),
+                      "cooldownMs" to FAIL_COOLDOWN_MS,
+                      "note" to "上次失败后的冷却期内，直接放弃 → 上层 fail-closed")
+            )
+            return null
+        }
 
         // 先走哪条路：默认官方活源；被翻过标志位的域名先用它自己的记录。
         val first = if (host != LIVE_SOURCE_HOST && !ownFirst.contains(host)) LIVE_SOURCE_HOST else host
         val second = if (first == host) LIVE_SOURCE_HOST else host
+        Diagnostics.trace(
+            "ech.fetch.begin",
+            mapOf("host" to host, "first" to first, "second" to second,
+                  "ownFirst" to ownFirst.contains(host))
+        )
         val hit = try {
             // 活值优先：国内三家纯 IP（随机一家，失败换下一家）；失败才回退网关的 JSON 链路
             if (first == LIVE_SOURCE_HOST) fetchLiveEch() ?: fetchConfig(first, now)
             else fetchConfig(first, now) ?: (if (second == LIVE_SOURCE_HOST) fetchLiveEch() else fetchConfig(second, now))
         } catch (t: Throwable) {
             Log.w(TAG, "ech query failed for $host: ${t.message}")
+            Diagnostics.trace(
+                "ech.fetch.throw",
+                mapOf("host" to host, "err" to "${t.javaClass.simpleName}: ${t.message}")
+            )
             null
         }
         if (hit == null) {
             Log.i(TAG, "no ech config for $host（已试：$first / $second）")
+            Diagnostics.trace(
+                "ech.fetch.allFail",
+                mapOf("host" to host, "tried" to "$first / $second",
+                      "note" to "所有来源都拿不到 ECH 配置 → 进入 30s 冷却 → 上层 fail-closed")
+            )
             echFailed[host] = now
             return null
         }
@@ -229,6 +265,10 @@ object EchDoh {
         EchState.save(host, wire, ttlMs)
         echFailed.remove(host)
         Log.i(TAG, "ech config for $host: ${wire.size} bytes（源=$first）")
+        Diagnostics.trace(
+            "ech.fetch.ok",
+            mapOf("host" to host, "bytes" to wire.size, "ttlMs" to ttlMs, "src" to first)
+        )
         return wire
     }
 
