@@ -297,6 +297,14 @@ object EchDoh {
             //   ② 网关自带 / 解析出的地址
             //   ③ 内置兜底段
             val ips = (preferredIps() + base + DOH_FALLBACK_IPS).distinct()
+            // ★ 可用性校验：池里可能有"域名能解析、但查询一律空应答"的坏端点
+            //   （实测 v7e373e11t = Status:5 REFUSED）。不校验就会一直选它、
+            //   一直 fail-closed，表现成"第一次打开失败、重试碰巧才好"。
+            val pins = ips.mapNotNull { runCatching { InetAddress.getByName(it) }.getOrNull() }
+            if (!gatewayAnswers(spec.url, pins)) {
+                Diagnostics.trace("doh.gateway.dead", mapOf("url" to spec.url))
+                continue
+            }
             val g = Gateway(spec.url, host, ips)
             gatewayCache = g to (now + GATEWAY_IP_TTL_MS)
             Diagnostics.trace("doh.gateway.ok", mapOf("url" to spec.url, "ips" to ips.joinToString(",")))
@@ -380,6 +388,36 @@ object EchDoh {
         gatewayCache = null
         poolCache = null
         resolverCache = null
+    }
+
+    /**
+     * 网关可用性校验：真的发一次查询，确认它**给得出答案**。
+     *
+     * 为什么必须校验：池里可能有已停用/未生效的端点 —— 实测 `v7e373e11t` 返回
+     * `Status:5 REFUSED`（空应答 36 字节），但它的**域名照样解析得到 IP**，
+     * 所以光判断"能解析"根本分辨不出来。曾被它害得很惨：
+     * 每次选到它就 `net.doh.fail 0 个地址 → fail-closed`，
+     * 失败后重挑、碰巧换到好的才通 —— 表现就是"第一次打开失败、等半分钟重试才好"。
+     *
+     * 验的是「能不能给出答案」，用 LIVE_SOURCE_HOST（cloudflare-ech.com，没被墙）做探针。
+     */
+    private fun gatewayAnswers(url: String, pins: List<InetAddress>): Boolean {
+        val t0 = System.currentTimeMillis()
+        val ok = runCatching {
+            DnsOverHttps.Builder()
+                .client(bootstrapClient)
+                .url(url.toHttpUrl())
+                .bootstrapDnsHosts(*pins.toTypedArray())
+                .includeIPv6(false) // 只要一个答案即可，不必查 AAAA
+                .build()
+                .lookup(LIVE_SOURCE_HOST)
+                .isNotEmpty()
+        }.getOrDefault(false)
+        Diagnostics.trace(
+            "doh.gateway.check",
+            mapOf("url" to url, "ok" to ok, "ms" to (System.currentTimeMillis() - t0))
+        )
+        return ok
     }
 
     @Volatile private var resolverCache: Pair<DnsOverHttps, String>? = null

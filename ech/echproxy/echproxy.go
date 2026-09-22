@@ -1942,7 +1942,7 @@ func hostOfURL(raw string) string {
 	return u.Hostname()
 }
 
-// refreshActiveDoHFromPool 读网关池，把 activeDoH 换成池里第一个**能解析出地址**的端点。
+// refreshActiveDoHFromPool 读网关池，把 activeDoH 换成池里第一个**真正可用**的端点。
 //
 // 全都不行则保持原样（Start 传入的默认端点），绝不因此断网。
 func refreshActiveDoHFromPool() {
@@ -1958,8 +1958,21 @@ func refreshActiveDoHFromPool() {
 		}
 		// ★ TXT 自带 IP 时**直接采用，不做解析** —— 解析这一步本身也会失败，
 		// 而「优选 IP」正是要由 TXT 远程控制的东西。
-		if len(s.ips) == 0 && len(resolveHostViaDomesticDoH(host)) == 0 {
-			noteLog("网关 %s 解析不出地址,跳过", s.url)
+		var checkIPs []string
+		if len(s.ips) > 0 {
+			checkIPs = s.ips
+		} else {
+			checkIPs = resolveHostViaDomesticDoH(host)
+			if len(checkIPs) == 0 {
+				noteLog("网关 %s 解析不出地址,跳过", s.url)
+				continue
+			}
+		}
+		// ★ 可用性校验：池里可能有"域名能解析、但查询一律空应答"的坏端点
+		//   （实测 v7e373e11t = Status:5 REFUSED）。不校验就会一直选它、
+		//   一直 fail-closed，表现成"第一次打开失败、重试碰巧才好"。
+		if !gatewayAnswers(s.url, checkIPs) {
+			noteLog("网关 %s 校验不通过(空应答/拒绝),跳过", s.url)
 			continue
 		}
 		invalidateGatewayIPs()
@@ -1974,7 +1987,80 @@ func refreshActiveDoHFromPool() {
 	noteLog("网关池全部不可用,沿用当前端点")
 }
 
+// gatewayAnswers 校验某个网关是否**真的给得出答案**。
+//
+// 为什么必须校验：池里可能有已停用/未生效的端点 —— 实测 v7e373e11t 返回
+// Status:5 REFUSED（空应答），但它的**域名照样解析得到 IP**，所以光判断"能解析"
+// 分辨不出来。曾被它害得很惨：选到它就 0 个地址 → fail-closed，
+// 失败后重挑、碰巧换到好的才通 —— 表现就是"第一次打开失败、等半分钟重试才好"。
+//
+// 用 cloudflare-ech.com（没被墙）做探针，只查 A。
+func gatewayAnswers(rawURL string, ips []string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Hostname() == "" {
+		return false
+	}
+	var pins []string
+	for _, ip := range ips {
+		if net.ParseIP(ip) != nil {
+			pins = append(pins, ip)
+		}
+	}
+	addrs, err := resolveHostViaDoHWithPins(parsed.Hostname(), pins)
+	if err != nil || len(addrs) == 0 {
+		noteLog("网关校验失败 %s: %v", rawURL, err)
+		return false
+	}
+	return true
+}
 
+// resolveHostViaDoHWithPins 用指定 IP 直连某个 DoH 端点做一次查询（hostname 保持端点域名）。
+func resolveHostViaDoHWithPins(endpointHost string, pins []string) ([]string, error) {
+	if len(pins) == 0 {
+		return nil, fmt.Errorf("no pins")
+	}
+	q := buildDNSQuery(cloudflareECHHost, 1)
+	u := "https://" + endpointHost + "/dns-query?dns=" + base64.RawURLEncoding.EncodeToString(q)
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("accept", "application/dns-message")
+	transport := &http.Transport{
+		Proxy:             nil, // 绝不走代理
+		DisableKeepAlives: true,
+	}
+	dc := &net.Dialer{Timeout: 4 * time.Second}
+	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		_, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			port = "443"
+		}
+		var lastErr error
+		for _, ip := range pins {
+			conn, err := dc.DialContext(ctx, network, net.JoinHostPort(ip, port))
+			if err == nil {
+				return conn, nil
+			}
+			lastErr = err
+		}
+		return nil, lastErr
+	}
+	client := &http.Client{Timeout: 6 * time.Second, Transport: transport}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("http %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return nil, err
+	}
+	return extractAddresses(body), nil
+}
 
 // extractType65RData 从 DNS 应答报文里取出第一条 type=65 记录的 rdata。
 func extractType65RData(msg []byte) ([]byte, error) {
