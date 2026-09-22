@@ -68,7 +68,10 @@ var (
 	hostsMu    sync.Mutex
 	hostConfs  = map[string]*hostConf{}
 	activeDoH  string
-	activeInse bool
+	// activeDoHSelfIPs 是当前网关**自带的** bootstrap IP（TXT 里 `URL|IP|IP` 的 IP 部分）。
+	// 非空时优先用它，不做解析 —— 见 refreshActiveDoHFromPool。同样由 hostsMu 保护。
+	activeDoHSelfIPs []string
+	activeInse       bool
 
 	// cachePath 是 ECHConfigList 的磁盘缓存位置(5h TTL),由 Start 传入。
 	// 首次从 cloudflare-ech.com / 目标 HTTPS ech= / server retry_configs 获取后
@@ -1276,11 +1279,17 @@ func gatewayIPsForDial() []string {
 	if len(gatewayIPsCache) > 0 && time.Since(gatewayIPsAt) < gatewayIPsTTL {
 		return append([]string(nil), gatewayIPsCache...)
 	}
-	// activeDoH 由 hostsMu 保护（与 transportFor 的读法一致）。
+	// activeDoH / activeDoHSelfIPs 由 hostsMu 保护（与 transportFor 的读法一致）。
 	hostsMu.Lock()
 	doh := activeDoH
+	selfIPs := append([]string(nil), activeDoHSelfIPs...)
 	hostsMu.Unlock()
-	resolved := resolveDoHHostIPs(doh)
+	// ★ 网关自带 IP 优先，不做解析 —— 免掉一个可能失败的环节，
+	// 也让「优选 IP」可以由 TXT 远程调整而不必发版。
+	resolved := selfIPs
+	if len(resolved) == 0 {
+		resolved = resolveDoHHostIPs(doh)
+	}
 	// 解析出的地址优先，再补上内置段作冗余：国内 DoH 对网关域名解析出的是
 	// 162.159.36.x，而**同一台设备上 Han1meViewer 用 172.64.229.x 一直是好的**。
 	// 两个段都作为候选按顺序试，任一条通即可 —— 是加冗余，不是替换。
@@ -1751,21 +1760,48 @@ func extractTxtStrings(msg []byte) []string {
 	return out
 }
 
-// extractGatewayURLs 从 TXT 内容里挑出 DoH 端点 URL。兼容两种写法：
-//   - 纯 URL 列表 —— 当前配置域名用的形式
-//   - key=value  —— `doh=https://…` / `doh2=https://…,https://…`
-func extractGatewayURLs(txt string) []string {
-	var out []string
+// gatewaySpec 是网关池里的一条：URL + 它自带的 bootstrap IP（可为空）。
+type gatewaySpec struct {
+	url string
+	ips []string
+}
+
+// parseGatewaySpecs 从 TXT 内容里解析网关条目。兼容三种写法：
+//   - `https://网关/dns-query|IP|IP`  —— **推荐**（bangumi 同款；自带 IP，免去解析那一步）
+//   - `https://网关/dns-query`        —— 纯 URL，地址由国内种子 DoH 解析
+//   - `doh=https://…` / `doh2=https://…,…` —— key=value 老写法
+//
+// 为什么自带 IP 更好：解析网关地址这一步本身也会失败（污染 / 超时），
+// 而在受污染网络里「解析网关域名」最不该依赖系统 DNS。直接给定 IP 就省掉这个环节，
+// 也让「优选 IP」可以由 TXT 远程调整，不必重新发版。
+func parseGatewaySpecs(txt string) []gatewaySpec {
+	var out []gatewaySpec
 	for _, seg := range strings.FieldsFunc(txt, func(r rune) bool {
 		return r == ',' || r == ';' || r == ' ' || r == '\n' || r == '	'
 	}) {
 		seg = strings.TrimSpace(seg)
+		if seg == "" {
+			continue
+		}
 		if idx := strings.Index(seg, "="); idx >= 0 {
 			seg = strings.TrimSpace(seg[idx+1:])
 		}
-		if strings.HasPrefix(seg, "https://") && strings.Contains(seg, "/dns-query") {
-			out = append(out, seg)
+		parts := strings.Split(seg, "|")
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
 		}
+		u := parts[0]
+		if !strings.HasPrefix(u, "https://") || !strings.Contains(u, "/dns-query") {
+			continue
+		}
+		// IP 字面量校验：只收合法的，非法就丢掉（宁可少一条候选）
+		var ips []string
+		for _, p := range parts[1:] {
+			if p != "" && net.ParseIP(p) != nil {
+				ips = append(ips, p)
+			}
+		}
+		out = append(out, gatewaySpec{url: u, ips: ips})
 	}
 	return out
 }
@@ -1796,7 +1832,7 @@ func queryTxtWire(ip, name string) ([]string, error) {
 }
 
 // fetchGatewayPool 用国内种子 DoH 读配置域名的 TXT → 网关池。
-func fetchGatewayPool() []string {
+func fetchGatewayPool() []gatewaySpec {
 	ips := append([]string(nil), domesticDoHIPs...)
 	rand.Shuffle(len(ips), func(i, j int) { ips[i], ips[j] = ips[j], ips[i] })
 	for _, ip := range ips {
@@ -1805,21 +1841,26 @@ func fetchGatewayPool() []string {
 			noteLog("网关池 via %s 失败: %v", ip, err)
 			continue
 		}
-		var urls []string
+		var specs []gatewaySpec
 		seen := map[string]bool{}
+		selfIP := 0
 		for _, t := range txts {
-			for _, u := range extractGatewayURLs(t) {
-				if !seen[u] {
-					seen[u] = true
-					urls = append(urls, u)
+			for _, s := range parseGatewaySpecs(t) {
+				key := s.url + "|" + strings.Join(s.ips, ",")
+				if !seen[key] {
+					seen[key] = true
+					specs = append(specs, s)
+					if len(s.ips) > 0 {
+						selfIP++
+					}
 				}
 			}
 		}
-		if len(urls) > 0 {
-			noteLog("网关池 via %s -> %d 个", ip, len(urls))
-			return urls
+		if len(specs) > 0 {
+			noteLog("网关池 via %s -> %d 条(其中 %d 条自带 IP)", ip, len(specs), selfIP)
+			return specs
 		}
-		noteLog("网关池 via %s 无有效 URL(%d 条 TXT)", ip, len(txts))
+		noteLog("网关池 via %s 无有效条目(%d 条 TXT)", ip, len(txts))
 	}
 	return nil
 }
@@ -1837,33 +1878,35 @@ func hostOfURL(raw string) string {
 //
 // 全都不行则保持原样（Start 传入的默认端点），绝不因此断网。
 func refreshActiveDoHFromPool() {
-	urls := fetchGatewayPool()
-	if len(urls) == 0 {
+	specs := fetchGatewayPool()
+	if len(specs) == 0 {
 		noteLog("网关池读取失败,沿用当前端点")
 		return
 	}
-	for _, u := range urls {
-		host := hostOfURL(u)
+	for _, s := range specs {
+		host := hostOfURL(s.url)
 		if host == "" {
 			continue
 		}
-		if len(resolveHostViaDomesticDoH(host)) == 0 {
-			noteLog("网关 %s 解析不出地址,跳过", u)
+		// ★ TXT 自带 IP 时**直接采用，不做解析** —— 解析这一步本身也会失败，
+		// 而「优选 IP」正是要由 TXT 远程控制的东西。
+		if len(s.ips) == 0 && len(resolveHostViaDomesticDoH(host)) == 0 {
+			noteLog("网关 %s 解析不出地址,跳过", s.url)
 			continue
 		}
-		// 先丢网关缓存（拿 gatewayIPsMu），再改 activeDoH（拿 hostsMu）——
-		// 固定顺序，避免与 gatewayIPsForDial 形成反向加锁。
 		invalidateGatewayIPs()
 		hostsMu.Lock()
-		activeDoH = u
-		// 清掉 per-host 缓存：已经解析过的 host 下次重新走新网关。
+		activeDoH = s.url
+		activeDoHSelfIPs = append([]string(nil), s.ips...)
 		hostConfs = map[string]*hostConf{}
 		hostsMu.Unlock()
-		noteLog("网关已选用 %s (池共 %d 个)", u, len(urls))
+		noteLog("网关已选用 %s (自带 IP=%v, 池共 %d 条)", s.url, s.ips, len(specs))
 		return
 	}
 	noteLog("网关池全部不可用,沿用当前端点")
 }
+
+
 
 // extractType65RData 从 DNS 应答报文里取出第一条 type=65 记录的 rdata。
 func extractType65RData(msg []byte) ([]byte, error) {

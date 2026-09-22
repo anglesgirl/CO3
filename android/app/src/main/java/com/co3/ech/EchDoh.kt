@@ -138,50 +138,83 @@ object EchDoh {
         return out
     }
 
+    /** 网关条目：URL + 它自带的 bootstrap IP（可为空）。 */
+    private class GatewaySpec(val url: String, val ips: List<String>)
+
     /**
-     * 从 TXT 内容里挑出 DoH 端点 URL。兼容两种写法：
-     *   · 纯 URL 列表 —— 当前配置域名用的形式
-     *   · key=value  —— `doh=https://…` / `doh2=https://…,https://…`
+     * 从 TXT 内容里解析网关条目。兼容三种写法：
+     *   · `https://网关/dns-query|IP|IP`  —— **推荐**（bangumi 同款；自带 IP，免去解析那一步）
+     *   · `https://网关/dns-query`        —— 纯 URL，地址由国内种子 DoH 解析
+     *   · `doh=https://…` / `doh2=https://…,…` —— key=value 老写法
+     *
+     * 为什么自带 IP 更好：解析网关地址这一步本身也是可能出问题的环节
+     * （污染、超时），而且在受污染网络里「解析网关域名」最不该依赖系统 DNS。
+     * 直接给定 IP 就把这个环节整个省掉，也让「优选 IP」可以由 TXT 远程调整。
      */
-    private fun extractGatewayUrls(txt: String): List<String> =
+    private fun extractGatewaySpecs(txt: String): List<GatewaySpec> =
         txt.split(',', ';', ' ', '\n')
             .map { it.trim() }
+            .filter { it.isNotEmpty() }
             .map { seg -> if (seg.contains('=')) seg.substringAfter('=').trim() else seg }
-            .filter { it.startsWith("https://") && it.contains("/dns-query") }
+            .flatMap { seg ->
+                val parts = seg.split('|').map { it.trim() }
+                val url = parts.firstOrNull().orEmpty()
+                if (!url.startsWith("https://") || !url.contains("/dns-query")) {
+                    emptyList()
+                } else {
+                    // IP 字面量校验：只收合法的 IPv4/IPv6，不合法就丢掉（宁可少一条候选）
+                    val ips = parts.drop(1).filter { isIpLiteral(it) }
+                    listOf(GatewaySpec(url, ips))
+                }
+            }
+
+    /** 宽松校验：能被 InetAddress 解析成字面量的才算 IP（不走 DNS）。 */
+    private fun isIpLiteral(s: String): Boolean {
+        if (s.isEmpty()) return false
+        val v4 = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
+        val v6 = Regex("^[0-9a-fA-F:]+$")
+        if (!v4.matches(s) && !(v6.matches(s) && s.contains(':'))) return false
+        return runCatching { InetAddress.getByName(s) }.isSuccess
+    }
 
     /** 用国内种子 DoH 读配置域名的 TXT → 网关池。 */
-    private fun fetchGatewayPool(): List<String> {
+    private fun fetchGatewayPool(): List<GatewaySpec> {
         for (ip in ECH_DOH_IPS.shuffled()) {
             val wire = dohWire(ip, CONFIG_TXT_DOMAIN, 16) ?: continue
-            val urls = parseTxt(wire).flatMap { extractGatewayUrls(it) }.distinct()
-            if (urls.isNotEmpty()) {
+            val specs = parseTxt(wire).flatMap { extractGatewaySpecs(it) }
+                .distinctBy { it.url + "|" + it.ips.joinToString(",") }
+            if (specs.isNotEmpty()) {
                 Diagnostics.trace(
                     "doh.pool.ok",
-                    mapOf("via" to ip, "n" to urls.size, "urls" to urls.joinToString(","))
+                    mapOf(
+                        "via" to ip, "n" to specs.size,
+                        "selfIp" to specs.count { it.ips.isNotEmpty() },
+                        "urls" to specs.joinToString(",") { it.url },
+                    )
                 )
-                return urls
+                return specs
             }
             Diagnostics.trace("doh.pool.miss", mapOf("via" to ip))
         }
         return emptyList()
     }
 
-    @Volatile private var poolCache: Pair<List<String>, Long>? = null
+    @Volatile private var poolCache: Pair<List<GatewaySpec>, Long>? = null
 
     /** 网关池（带 TTL 缓存）；TXT 读不到就用内置默认。 */
-    private fun gatewayPool(): List<String> {
+    private fun gatewayPool(): List<GatewaySpec> {
         val now = System.currentTimeMillis()
         poolCache?.let { (u, exp) -> if (exp > now && u.isNotEmpty()) return u }
-        val urls = fetchGatewayPool()
-        if (urls.isEmpty()) {
+        val specs = fetchGatewayPool()
+        if (specs.isEmpty()) {
             Diagnostics.trace("doh.pool.fallback", mapOf("url" to DOH_URL))
-            return listOf(DOH_URL)
+            return listOf(GatewaySpec(DOH_URL, emptyList()))
         }
-        poolCache = urls to (now + GATEWAY_POOL_TTL_MS)
-        return urls
+        poolCache = specs to (now + GATEWAY_POOL_TTL_MS)
+        return specs
     }
 
-    /** 选定的网关：URL + 域名 + 已解析出的地址。 */
+    /** 选定的网关：URL + 域名 + bootstrap 地址。 */
     private class Gateway(val url: String, val host: String, val ips: List<String>)
 
     @Volatile private var gatewayCache: Pair<Gateway, Long>? = null
@@ -194,21 +227,30 @@ object EchDoh {
     private fun currentGateway(): Gateway? {
         val now = System.currentTimeMillis()
         gatewayCache?.let { (g, exp) -> if (exp > now) return g }
-        for (url in gatewayPool()) {
-            val host = runCatching { url.toHttpUrl().host }.getOrNull() ?: continue
-            val resolved = resolveHostIps(host)
-            if (resolved.isEmpty()) {
-                Diagnostics.trace("doh.gateway.unusable", mapOf("url" to url))
-                continue
+        for (spec in gatewayPool()) {
+            val host = runCatching { spec.url.toHttpUrl().host }.getOrNull() ?: continue
+            // ★ TXT 自带 IP（`URL|IP|IP`）时**直接用它，不做解析** ——
+            // 解析这一步本身也会失败（污染/超时），而「优选 IP」正是要由 TXT 远程控制的东西。
+            val base = if (spec.ips.isNotEmpty()) {
+                Diagnostics.trace(
+                    "doh.gateway.selfIp",
+                    mapOf("url" to spec.url, "ips" to spec.ips.joinToString(","))
+                )
+                spec.ips
+            } else {
+                val resolved = resolveHostIps(host)
+                if (resolved.isEmpty()) {
+                    Diagnostics.trace("doh.gateway.unusable", mapOf("url" to spec.url))
+                    continue
+                }
+                resolved
             }
-            // 解析出的地址优先，再补上 [DOH_FALLBACK_IPS] 作冗余：
-            // 国内 DoH 对网关域名解析出的是 162.159.36.x，而**同一台设备上
-            // Han1meViewer 用 172.64.229.x 一直是好的** —— 两个段都放进去让
-            // OkHttp 按顺序试，任一条通就能用。这不是replace，是加冗余。
-            val ips = (resolved + DOH_FALLBACK_IPS).distinct()
-            val g = Gateway(url, host, ips)
+            // 自带/解析出的地址优先，再补上 [DOH_FALLBACK_IPS] 作冗余（历史多次证明
+            // 某个段忽然不通很常见；多一条候选不亏，OkHttp 会按顺序试）。
+            val ips = (base + DOH_FALLBACK_IPS).distinct()
+            val g = Gateway(spec.url, host, ips)
             gatewayCache = g to (now + GATEWAY_IP_TTL_MS)
-            Diagnostics.trace("doh.gateway.ok", mapOf("url" to url, "ips" to ips.joinToString(",")))
+            Diagnostics.trace("doh.gateway.ok", mapOf("url" to spec.url, "ips" to ips.joinToString(",")))
             // 诊断：异步把「连网关」拆成 TCP / DoH 两步分别记录（不改行为）
             runCatching { probeGateway(g) }
             return g
