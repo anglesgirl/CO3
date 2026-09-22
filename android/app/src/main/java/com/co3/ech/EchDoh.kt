@@ -200,9 +200,76 @@ object EchDoh {
             val g = Gateway(url, host, ips)
             gatewayCache = g to (now + GATEWAY_IP_TTL_MS)
             Diagnostics.trace("doh.gateway.ok", mapOf("url" to url, "ips" to ips.joinToString(",")))
+            // 诊断：异步把「连网关」拆成 TCP / DoH 两步分别记录（不改行为）
+            runCatching { probeGateway(g) }
             return g
         }
         return null
+    }
+
+    /**
+     * 【诊断专用，不改行为】把「连网关」这件事拆成两步分别测。
+     *
+     * 起因：同一个网关，浏览器能开、App 卡十几秒 —— 说明问题在客户端这条链上，
+     * 而只靠猜参数已经试错太多次。这里把链路切开，失败时能直接看出是哪一步：
+     *   ① probe.tcp   —— TCP 能否连上某个候选 IP（连不上就是链路层）
+     *   ② probe.doh   —— 用同一个 IP 真的发一次 DoH 查询（连得上但查不通就是协议/配置层）
+     * 若 ①② 都成功、而 DnsOverHttps 仍然失败，就能定位到 OkHttp 那层封装。
+     *
+     * 异步执行，不阻塞启动；结果只进 trace。
+     */
+    private fun probeGateway(gw: Gateway) {
+        Thread {
+            val b64 = android.util.Base64.encodeToString(
+                buildQuery(LIVE_SOURCE_HOST, 1),
+                android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE,
+            ).trimEnd('=')
+            for (ip in gw.ips) {
+                // ① TCP
+                val t0 = System.currentTimeMillis()
+                val tcpOk = runCatching {
+                    java.net.Socket().use { s -> s.connect(java.net.InetSocketAddress(ip, 443), 4000) }
+                    true
+                }.getOrDefault(false)
+                Diagnostics.trace(
+                    "probe.tcp",
+                    mapOf("ip" to ip, "ok" to tcpOk, "ms" to (System.currentTimeMillis() - t0))
+                )
+                if (!tcpOk) continue
+
+                // ② 用这个 IP 真的发一次 DoH（SNI/Host 仍是网关域名，靠 dns 覆盖强制走该 IP）
+                val t1 = System.currentTimeMillis()
+                val line = runCatching {
+                    val c = OkHttpClient.Builder()
+                        .connectTimeout(4, TimeUnit.SECONDS)
+                        .readTimeout(4, TimeUnit.SECONDS)
+                        .dns(object : Dns {
+                            override fun lookup(hostname: String): List<InetAddress> =
+                                listOf(InetAddress.getByName(ip))
+                        })
+                        .build()
+                    c.newCall(
+                        okhttp3.Request.Builder()
+                            .url("https://${gw.host}/dns-query?dns=$b64")
+                            .header("accept", "application/dns-message")
+                            .build()
+                    ).execute().use { r ->
+                        mapOf(
+                            "ip" to ip, "code" to r.code,
+                            "bytes" to (r.body?.contentLength() ?: -1L),
+                            "ms" to (System.currentTimeMillis() - t1),
+                        )
+                    }
+                }.getOrElse { e ->
+                    mapOf(
+                        "ip" to ip,
+                        "err" to "${e.javaClass.simpleName}: ${e.message}",
+                        "ms" to (System.currentTimeMillis() - t1),
+                    )
+                }
+                Diagnostics.trace("probe.doh", line)
+            }
+        }.apply { isDaemon = true }.start()
     }
 
     /** 网关不可达时调用：丢缓存，下次重新读 TXT 并重新解析（网关可能已换）。 */
