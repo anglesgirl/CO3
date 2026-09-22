@@ -1081,8 +1081,16 @@ func parseIPList(s string) []string {
 	return out
 }
 
-// resolveDoHHostIPs 解析 DoH 端点域名(如 pieqllv9i7.cloudflare-gateway.com)
-// 的 IP 列表,用于自动并入 ECH 握手候选。系统 DNS 解析失败时回退内置快照。
+// resolveDoHHostIPs 解析 DoH 端点域名(如 pieqllv9i7.cloudflare-gateway.com)的 IP 列表。
+//
+// 【种子层 —— 用户定的方案】网关地址由国内纯 IP DoH 动态解析，不写死在代码里：
+//   - 国内三家是纯 IP 直连，查它们本身不需要任何解析，天然免疫污染，又快又好；
+//   - 所以「网关在哪」交给它们回答；
+//   - 网关可换：改 DOH_URL 即可，地址自动跟着变，不需要动代码。
+//
+// 顺序：国内种子 DoH → 系统 DNS（带 3s 超时）→ 内置快照。
+// ⚠️ 绝不能让系统 DNS 排前面 —— 它会被污染，拿到假 IP 后连接超时，
+// Android 侧实测表现为卡 21 秒后 fail-closed（而连纯 IP 的国内 DoH 只要 158ms）。
 // doh 参数可能是逗号分隔的多个端点,取第一个能解析的即可。
 func resolveDoHHostIPs(doh string) []string {
 	for _, part := range strings.Split(doh, ",") {
@@ -1092,43 +1100,42 @@ func resolveDoHHostIPs(doh string) []string {
 			continue
 		}
 		host := u.Hostname()
-		var ips []string
+
+		// ① 国内种子 DoH（首选）
+		ips := resolveHostViaDomesticDoH(host)
+
+		// ② 系统 DNS（末位）。
 		// ⚠️ net.LookupHost 无超时：移动宽带被污染的系统 DNS 能卡 30s+
 		// （2026-08-15 实测：第二次冷启动 Start() 卡 30s，works 请求在
-		// beforeRequest 等 getEchBase 干等）。3s 超时，失败走内置快照。
-		type lookupRes struct {
-			addrs []string
-			err   error
-		}
-		lch := make(chan lookupRes, 1)
-		go func() {
-			addrs, err := net.LookupHost(host)
-			lch <- lookupRes{addrs, err}
-		}()
-		select {
-		case r := <-lch:
-			if r.err == nil {
-				for _, a := range r.addrs {
-					if net.ParseIP(a) != nil {
-						ips = append(ips, a)
+		// beforeRequest 等 getEchBase 干等）。所以必须包 3s 超时。
+		if len(ips) == 0 {
+			type lookupRes struct {
+				addrs []string
+				err   error
+			}
+			lch := make(chan lookupRes, 1)
+			go func() {
+				addrs, err := net.LookupHost(host)
+				lch <- lookupRes{addrs, err}
+			}()
+			select {
+			case r := <-lch:
+				if r.err == nil {
+					for _, a := range r.addrs {
+						if net.ParseIP(a) != nil {
+							ips = append(ips, a)
+						}
 					}
 				}
+			case <-time.After(3 * time.Second):
+				// 超时：继续走内置快照
 			}
-		case <-time.After(3 * time.Second):
-			// 超时：跳过系统 DNS，直接用内置快照
 		}
-		// 内置快照兜底(系统 DNS 被污染时仍能用)。
-		for _, b := range builtinDoHHostIPs {
-			found := false
-			for _, a := range ips {
-				if a == b {
-					found = true
-					break
-				}
-			}
-			if !found {
-				ips = append(ips, b)
-			}
+
+		// ③ 内置快照兜底（连国内 DoH 都失败时）
+		if len(ips) == 0 {
+			ips = append(ips, builtinDoHHostIPs...)
+			noteLog("DoH 网关 %s 解析失败,回落内置快照 %v", host, builtinDoHHostIPs)
 		}
 		if len(ips) > 0 {
 			return ips
@@ -1229,6 +1236,53 @@ type dohResp struct {
 	} `json:"Answer"`
 }
 
+// gatewayIPsMu 保护下面这份网关地址缓存。
+var (
+	gatewayIPsMu    sync.Mutex
+	gatewayIPsCache []string
+	gatewayIPsAt    time.Time
+)
+
+const gatewayIPsTTL = 30 * time.Minute
+
+// invalidateGatewayIPs 在网关不可达时调用：丢缓存，下次重新解析（网关可能已换地址）。
+func invalidateGatewayIPs() {
+	gatewayIPsMu.Lock()
+	gatewayIPsCache = nil
+	gatewayIPsAt = time.Time{}
+	gatewayIPsMu.Unlock()
+}
+
+// gatewayIPsForDial 返回 DoH 网关的地址列表（拨号到网关用）。
+//
+// 【种子层 —— 用户定的方案】网关地址由国内纯 IP DoH **动态解析**，不写死在代码里：
+//   - 国内三家是纯 IP 直连，查它们本身不需要任何解析，天然免疫污染，又快又好；
+//   - 所以「网关在哪」交给它们回答；
+//   - 网关可换：改 DoH 端点即可，地址自动跟着变，不需要动代码；
+//   - 内置快照只作末位兜底（连国内 DoH 都失败时）。
+//
+// ⚠️ 绝不能让系统 DNS 承担这件事 —— 它会被污染。Android 侧实测：同一个客户端
+// 连国内纯 IP DoH 只要 158ms，而经系统 DNS 拿到的网关地址会卡 21 秒后 fail-closed。
+//
+// 带 30 分钟缓存，避免每次拨号都查一遍 DoH。
+func gatewayIPsForDial() []string {
+	gatewayIPsMu.Lock()
+	defer gatewayIPsMu.Unlock()
+	if len(gatewayIPsCache) > 0 && time.Since(gatewayIPsAt) < gatewayIPsTTL {
+		return append([]string(nil), gatewayIPsCache...)
+	}
+	ips := resolveDoHHostIPs(activeDoH)
+	if len(ips) == 0 {
+		ips = append([]string(nil), builtinDoHHostIPs...)
+		noteLog("网关地址解析失败,回落内置快照 %v", ips)
+	} else {
+		noteLog("网关地址已解析(国内种子 DoH) %v", ips)
+	}
+	gatewayIPsCache = ips
+	gatewayIPsAt = time.Now()
+	return append([]string(nil), ips...)
+}
+
 // dohDialContext returns a DialContext that connects to the DoH endpoint via
 // the user-supplied preferred IPs (SNI/domain stays the endpoint's hostname).
 // Rationale: the DoH endpoint domain (e.g. cloudflare-gateway.com) can itself
@@ -1236,19 +1290,30 @@ type dohResp struct {
 // fail before it ever gets to query cloudflare-ech.com's HTTPS ech= record,
 // so the public ECH config could never be fetched or cached. The DoH endpoint
 // is a Cloudflare domain, so the same preferred CF edge IPs apply.
+//
+// 网关地址来源（按用户定的方案）：国内种子 DoH 动态解析 → 内置快照末位兜底。
 // Returns nil when no preferred IPs are configured (use system DNS).
 func dohDialContext() func(ctx context.Context, network, addr string) (net.Conn, error) {
 	mu.Lock()
 	custom := append([]string(nil), customIPs...)
 	mu.Unlock()
-	if len(custom) == 0 {
-		// 远端配置（TXT 下发 ip=）已为冷启动提速移除，启动时不再有种子 IP。
-		// 此处绝不能返回 nil —— 那会让 DoH 查询退化成走系统 DNS 解析网关域名，
-		// 国内会被污染/超时，实测表现为 iOS 冷启动「找不到网络」：
-		//   dial archiveofourown.org failed: %!w(<nil>)  →  HTTP 502
-		// 回落到内置网关 anycast 快照，与 JS 侧 DEFAULT_DOH 的硬编码默认对称。
-		custom = append([]string(nil), builtinDoHHostIPs...)
+	// 【用户定的方案】网关地址由国内种子 DoH 动态解析 —— 网关可换、免疫污染。
+	// 已有优选 IP 时它们同样能靠 SNI 路由到网关，把动态解析结果补在后面做冗余，
+	// 去重后一起作为候选；这样任一边失效都还有路可走。
+	gw := gatewayIPsForDial()
+	seen := make(map[string]bool, len(custom)+len(gw))
+	merged := make([]string, 0, len(custom)+len(gw))
+	for _, ip := range append(custom, gw...) {
+		if ip == "" || seen[ip] {
+			continue
+		}
+		seen[ip] = true
+		merged = append(merged, ip)
 	}
+	custom = merged
+	// 此处绝不能返回 nil —— 那会让 DoH 查询退化成走系统 DNS 解析网关域名，
+	// 国内会被污染/超时，实测表现为 iOS 冷启动「找不到网络」：
+	//   dial archiveofourown.org failed: %!w(<nil>)  →  HTTP 502
 	if len(custom) == 0 {
 		return nil
 	}
@@ -1267,6 +1332,8 @@ func dohDialContext() func(ctx context.Context, network, addr string) (net.Conn,
 			lastErr = err
 		}
 		if lastErr != nil {
+			// 网关地址可能已变（或当前 IP 不可达）—— 丢缓存，下次重新向国内种子 DoH 问一遍。
+			invalidateGatewayIPs()
 			// 优选 IP 全部失败时回退系统解析,避免 DoH 直接断网。
 			setDNSInfo("DoH preferred IPs failed (%v), falling back to system DNS", lastErr)
 			return d.DialContext(ctx, network, addr)
@@ -1500,15 +1567,114 @@ func queryECHWire(ip, name string) ([]byte, error) {
 	return parseSVCBWireECH("\\# " + fmt.Sprintf("%d", len(rdata)) + " " + hex.EncodeToString(rdata))
 }
 
-// buildDNSQuery65 组一个 type=65（HTTPS）的 DNS 查询报文。
-func buildDNSQuery65(name string) []byte {
+// buildDNSQuery 组一个 DNS 查询报文。qtype: 1=A, 28=AAAA, 65=HTTPS。
+func buildDNSQuery(name string, qtype uint16) []byte {
 	buf := []byte{0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0}
 	for _, label := range strings.Split(name, ".") {
 		buf = append(buf, byte(len(label)))
 		buf = append(buf, []byte(label)...)
 	}
-	buf = append(buf, 0, 0x00, 65, 0x00, 0x01)
+	buf = append(buf, 0, byte(qtype>>8), byte(qtype), 0x00, 0x01)
 	return buf
+}
+
+// buildDNSQuery65 组一个 type=65（HTTPS）的 DNS 查询报文。
+func buildDNSQuery65(name string) []byte {
+	return buildDNSQuery(name, 65)
+}
+
+// queryAddressWire 用纯 IP + wire 查 A/AAAA 记录，返回地址字符串。
+// 绝不设置 Host 头（阿里会因此失败）；URL 里的 IP 就是 Host，证书对 IP 生效。
+func queryAddressWire(ip, name string, qtype uint16) ([]string, error) {
+	q := buildDNSQuery(name, qtype)
+	u := "https://" + ip + "/dns-query?dns=" + base64.RawURLEncoding.EncodeToString(q)
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("accept", "application/dns-message")
+	client := &http.Client{Timeout: 2500 * time.Millisecond}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("http %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return nil, err
+	}
+	return extractAddresses(body), nil
+}
+
+// extractAddresses 收集 DNS 应答里的 A(1)/AAAA(28) 地址。
+// 顺带兼容 CNAME 链：应答段里有什么地址就收什么，不追踪链路。
+func extractAddresses(msg []byte) []string {
+	if len(msg) < 12 {
+		return nil
+	}
+	i := 12
+	for i < len(msg) && msg[i] != 0 {
+		i += int(msg[i]) + 1
+	}
+	i += 5 // 跳过根标签 + qtype(2) + qclass(2)
+	ancount := int(msg[6])<<8 | int(msg[7])
+	var out []string
+	for n := 0; n < ancount; n++ {
+		if i+12 > len(msg) {
+			break
+		}
+		if msg[i]&0xC0 == 0xC0 {
+			i += 2
+		} else {
+			for i < len(msg) && msg[i] != 0 {
+				i += int(msg[i]) + 1
+			}
+			i++
+		}
+		typ := int(msg[i])<<8 | int(msg[i+1])
+		rdlen := int(msg[i+8])<<8 | int(msg[i+9])
+		rdata := i + 10
+		if rdata+rdlen > len(msg) {
+			break
+		}
+		switch {
+		case typ == 1 && rdlen == 4:
+			out = append(out, net.IP(msg[rdata:rdata+4]).String())
+		case typ == 28 && rdlen == 16:
+			out = append(out, net.IP(msg[rdata:rdata+16]).String())
+		}
+		i = rdata + rdlen
+	}
+	return out
+}
+
+// resolveHostViaDomesticDoH 用国内三家的纯 IP DoH 解析一个域名（A + AAAA）。
+//
+// 【种子层】这是整套链路的地基。国内三家是纯 IP 直连 —— 查它们本身不需要任何解析，
+// 天然免疫污染 —— 所以「某个域名在哪」这种问题交给它们回答最可靠。
+// 随机挑一家、逐家尝试，任意一家给出地址即返回。
+func resolveHostViaDomesticDoH(host string) []string {
+	ips := append([]string(nil), domesticDoHIPs...)
+	rand.Shuffle(len(ips), func(i, j int) { ips[i], ips[j] = ips[j], ips[i] })
+	for _, ip := range ips {
+		var got []string
+		for _, qt := range []uint16{1, 28} {
+			addrs, err := queryAddressWire(ip, host, qt)
+			if err != nil {
+				continue
+			}
+			got = append(got, addrs...)
+		}
+		if len(got) > 0 {
+			noteLog("resolved %s via %s -> %v", host, ip, got)
+			return got
+		}
+		noteLog("resolve %s via %s failed", host, ip)
+	}
+	return nil
 }
 
 // extractType65RData 从 DNS 应答报文里取出第一条 type=65 记录的 rdata。
@@ -1638,11 +1804,20 @@ const cloudflareECHHost = "cloudflare-ech.com"
 // 时自动用新公钥重试),内置值过期无害。2026-08-13 抓取自 cloudflare-ech.com。
 const builtinCFECHConfigB64 = "AEX+DQBBNAAgACCyup0GYiVj1Iph45mjgzNuuKu0qMra6LGPbZVfMTXgJwAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA="
 
-// builtinDoHHostIPs 是 Cloudflare Gateway DoH 端点域名当前解析的 IP 快照
-// (2026-08-13 实测 pieqllv9i7.cloudflare-gateway.com → 162.159.36.5/20)。
-// 属于 AS13335;部分区域(福建)封禁目标站点 CF 边缘 IP 时 DoH 端点 IP 仍可达。
-// 作为 DoH 端点 IP 自动并入 ECH 候选的兜底(系统 DNS 被污染时仍能用)。
-var builtinDoHHostIPs = []string{"162.159.36.5", "162.159.36.20"}
+// builtinDoHHostIPs 是网关地址的**末位后备**（正常情况下用不到）。
+//
+// 网关真相不写死在这里，而是启动/首次用时用国内纯 IP DoH 动态解析
+// （见 resolveDoHHostIPs）。理由：
+//   - 硬编码 IP 迟早失效：网关可更换、地址段会被封、CF 边缘也会变；
+//   - 而走系统 DNS 解析网关域名又会被污染（拿到假 IP → 连接超时）。
+// 所以「网关在哪」交给国内 DoH 回答；这份清单只在**连国内 DoH 都失败**时兜底。
+//
+// 2026-09-22 用户拨测确认：162.159.36.x 与 172.64.229.x 两组 IP 在国内都是通的。
+// 之前那条 21 秒超时不是 IP 不通 —— 是**网关域名解析被污染**，连到了假地址
+// （同一客户端直连国内纯 IP DoH 只要 158ms，因为那家无需解析）。
+var builtinDoHHostIPs = []string{
+	"172.64.229.4", "172.64.229.128", "162.159.36.20", "162.159.36.5",
+}
 
 // loadECHConfigWithFallbacks returns the ECHConfigList for an AS13335 host,
 // trying in order:

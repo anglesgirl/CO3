@@ -30,18 +30,94 @@ object EchDoh {
     const val DOH_URL = "https://82sew1c85i.cloudflare-gateway.com/dns-query"
     private const val DOH_HOST = "82sew1c85i.cloudflare-gateway.com"
 
-    /** 网关自身 pin 到 CF 边缘 IP */
-    private val DOH_PIN_IPS = listOf("162.159.36.20", "162.159.36.5")
+    /**
+     * 网关地址的**末位后备**（正常情况下用不到）。
+     *
+     * 网关真相不写死在这里，而是启动时用国内种子 DoH 动态解析 [DOH_HOST]（见 [gatewayIps]）。
+     * 理由：
+     *   · 硬编码 IP 迟早失效 —— 网关可更换、地址段会被封、CF 边缘也会变；
+     *   · 而走系统 DNS 解析网关域名又会被污染（拿到假 IP → 连接超时）。
+     * 所以「网关在哪」交给国内 DoH 回答；这份清单只在**连国内 DoH 都失败**时兜底。
+     *
+     * 2026-09-22 用户拨测确认：`162.159.36.x` 与 `172.64.229.x` 两组 IP 在国内都是通的。
+     * 之前那条 21 秒超时不是 IP 不通 —— 是**网关域名解析被污染**，连到了假地址。
+     * （这也解释了为什么同一客户端连 `223.5.5.5` 只要 158ms：那家是纯 IP，无需解析。）
+     */
+    private val DOH_FALLBACK_IPS = listOf(
+        "172.64.229.4", "172.64.229.128", "162.159.36.20", "162.159.36.5",
+    )
 
     private val bootstrapClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(8, TimeUnit.SECONDS)
         .build()
 
-    /** 官方 DoH 解析器：A/AAAA + TTL 缓存；DoH 网关走 bootstrap IP，绕开污染 */
-    private val dohResolver: DnsOverHttps by lazy {
-        val pins = DOH_PIN_IPS.mapNotNull { runCatching { InetAddress.getByName(it) }.getOrNull() }
-        DnsOverHttps.Builder()
+    /**
+     * 【种子层】用国内纯 IP DoH 解析自有网关域名 → 拿到网关的真实地址。
+     *
+     * 这是整套链路的地基。网关域名若交给系统 DNS 就会被污染（拿到假 IP → 连接超时），
+     * 而写死 IP 又会随网关更换 / 地址段被封而失效。
+     * 国内三家 DoH 是**纯 IP 直连** —— 查它们本身不需要任何解析，天然免疫污染 ——
+     * 所以「网关在哪」这个问题交给它们回答。
+     *
+     * 一次拿 A + AAAA；任意一家成功即返回，失败换下一家。
+     */
+    private fun resolveGatewayIps(): List<String> {
+        val out = LinkedHashSet<String>()
+        for (ip in ECH_DOH_IPS.shuffled()) {
+            for (type in intArrayOf(1, 28)) {
+                val wire = dohWire(ip, DOH_HOST, type) ?: continue
+                out.addAll(parseAddresses(wire))
+            }
+            if (out.isNotEmpty()) {
+                Diagnostics.trace(
+                    "doh.gateway.ok",
+                    mapOf("via" to ip, "n" to out.size, "ips" to out.joinToString(","))
+                )
+                break
+            }
+            Diagnostics.trace("doh.gateway.miss", mapOf("via" to ip))
+        }
+        return out.toList()
+    }
+
+    private const val GATEWAY_IP_TTL_MS = 30 * 60 * 1000L
+
+    @Volatile private var gatewayCache: Pair<List<String>, Long>? = null
+
+    /** 网关 IP（带 TTL 缓存）；连国内 DoH 都解析不出来时才用末位后备。 */
+    private fun gatewayIps(): List<String> {
+        val now = System.currentTimeMillis()
+        gatewayCache?.let { (ips, exp) -> if (exp > now && ips.isNotEmpty()) return ips }
+        val ips = resolveGatewayIps()
+        if (ips.isEmpty()) {
+            Diagnostics.trace("doh.gateway.fallback", mapOf("ips" to DOH_FALLBACK_IPS.joinToString(",")))
+            return DOH_FALLBACK_IPS
+        }
+        gatewayCache = ips to (now + GATEWAY_IP_TTL_MS)
+        return ips
+    }
+
+    /** 网关不可达时调用：丢掉缓存，下次重新解析（网关可能已换地址）。 */
+    private fun invalidateGateway() {
+        gatewayCache = null
+        resolverCache = null
+    }
+
+    @Volatile private var resolverCache: Pair<DnsOverHttps, String>? = null
+
+    /**
+     * 官方 DoH 解析器：A/AAAA + TTL 缓存，用于解析受保护域名（防污染 + 兜底）。
+     *
+     * bootstrap 地址来自 [gatewayIps]（动态解析），网关 IP 一变就重建 ——
+     * 所以**换网关只需要改 [DOH_URL]，不需要动代码**。
+     */
+    private fun dohResolver(): DnsOverHttps {
+        val ips = gatewayIps()
+        val key = ips.joinToString(",")
+        resolverCache?.let { (r, k) -> if (k == key) return r }
+        val pins = ips.mapNotNull { runCatching { InetAddress.getByName(it) }.getOrNull() }
+        val built = DnsOverHttps.Builder()
             .client(bootstrapClient)
             .url(DOH_URL.toHttpUrl())
             .bootstrapDnsHosts(*pins.toTypedArray())
@@ -50,6 +126,8 @@ object EchDoh {
             // （Chrome 走 IPv6 绕过了封锁，App 只有 IPv4 就被掐）。
             .includeIPv6(true)
             .build()
+        resolverCache = built to key
+        return built
     }
 
     // ---------------- ECH 配置 ----------------
@@ -173,14 +251,67 @@ object EchDoh {
         return null
     }
 
-    /** 建 DNS 查询（type 65 = HTTPS）。 */
-    private fun buildQuery(name: String): ByteArray {
+    /** 建 DNS 查询。type: 1=A, 28=AAAA, 65=HTTPS。 */
+    private fun buildQuery(name: String, type: Int = 65): ByteArray {
         val out = java.io.ByteArrayOutputStream()
         out.write(byteArrayOf(0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
         name.split('.').forEach { lb -> out.write(lb.length); out.write(lb.toByteArray()) }
         out.write(0)
-        out.write(byteArrayOf(0x00, 65, 0x00, 0x01))
+        out.write(byteArrayOf(0x00, type.toByte(), 0x00, 0x01))
         return out.toByteArray()
+    }
+
+    /** 纯 IP DoH 查询的公共通道（绝不加 Host 头；URL 的 host 就是 IP，证书对 IP 生效）。 */
+    private fun dohWire(ip: String, name: String, type: Int): ByteArray? {
+        val b64 = android.util.Base64.encodeToString(
+            buildQuery(name, type), android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE,
+        ).trimEnd('=')
+        val req = okhttp3.Request.Builder()
+            .url("https://$ip/dns-query?dns=$b64")
+            .header("accept", "application/dns-message")
+            .build()
+        return runCatching {
+            bootstrapClient.newBuilder()
+                .connectTimeout(ECH_ONE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .readTimeout(ECH_ONE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .callTimeout(ECH_ONE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .build()
+                .newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) null else resp.body?.bytes()
+                }
+        }.getOrNull()
+    }
+
+    /** 从 DNS 应答里收集 A(1) / AAAA(28) 地址（顺带兼容 CNAME 链：应答里有什么就收什么）。 */
+    private fun parseAddresses(msg: ByteArray): List<String> {
+        if (msg.size < 12) return emptyList()
+        var i = 12
+        while (i < msg.size && msg[i].toInt() != 0) i += (msg[i].toInt() and 0xFF) + 1
+        i += 5
+        val ancount = ((msg[6].toInt() and 0xFF) shl 8) or (msg[7].toInt() and 0xFF)
+        val out = ArrayList<String>()
+        for (n in 0 until ancount) {
+            if (i + 12 > msg.size) break
+            if ((msg[i].toInt() and 0xC0) == 0xC0) i += 2
+            else { while (i < msg.size && msg[i].toInt() != 0) i += (msg[i].toInt() and 0xFF) + 1; i += 1 }
+            val rtype = ((msg[i].toInt() and 0xFF) shl 8) or (msg[i + 1].toInt() and 0xFF)
+            val rdlen = ((msg[i + 8].toInt() and 0xFF) shl 8) or (msg[i + 9].toInt() and 0xFF)
+            val rdata = i + 10
+            if (rdata + rdlen <= msg.size) {
+                if (rtype == 1 && rdlen == 4) {
+                    out.add(
+                        "${msg[rdata].toInt() and 0xFF}.${msg[rdata + 1].toInt() and 0xFF}." +
+                            "${msg[rdata + 2].toInt() and 0xFF}.${msg[rdata + 3].toInt() and 0xFF}"
+                    )
+                } else if (rtype == 28 && rdlen == 16) {
+                    runCatching {
+                        out.add(java.net.InetAddress.getByAddress(msg.copyOfRange(rdata, rdata + 16)).hostAddress ?: "")
+                    }
+                }
+            }
+            i = rdata + rdlen
+        }
+        return out.filter { it.isNotEmpty() }
     }
 
     /** 纯 IP + wire 的 DoH 查询，解析完整 HTTPS 记录（ech + ipv4hint + ipv6hint）。 */
@@ -478,9 +609,9 @@ object EchDoh {
             }
         }
 
-        // ② 兜底：自有网关（旧路径）
+        // ② 兜底：自有网关（防污染）。bootstrap IP 由种子层动态解析而来。
         return try {
-            val addrs = dohResolver.lookup(host)
+            val addrs = dohResolver().lookup(host)
             Log.i(TAG, "doh resolve $host -> ${addrs.joinToString { it.hostAddress ?: "?" }}")
             Diagnostics.trace(
                 "net.resolve.gateway",
@@ -494,6 +625,8 @@ object EchDoh {
                 "net.resolve.fail",
                 mapOf("host" to host, "err" to "${t.javaClass.simpleName}: ${t.message}")
             )
+            // 网关可能换了地址或当前 IP 不可达 —— 丢缓存，下次重新向国内 DoH 问「网关在哪」。
+            invalidateGateway()
             emptyList()
         }
     }

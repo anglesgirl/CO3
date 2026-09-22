@@ -23,14 +23,23 @@ export const DEFAULT_DOH_FALLBACKS = [
   'https://dz1598pphb.cloudflare-gateway.com/dns-query',
 ];
 
-// 内置 CF Gateway 边缘地址。162.159.36.5 / .20 是 *.cloudflare-gateway.com
-// 的 anycast 地址，也正是网关自己解析出来的那两个 —— 与 DEFAULT_DOH 对称：
-// DoH 端点有硬编码默认，网关地址同样要有，否则 DoH 查询会退化成走系统 DNS
-// 解析网关域名（国内会被污染/超时，实测 iOS 冷启动即"找不到网络"）。
+// 内置优先 IP 默认值（默认留空，理由见下）。
 //
 // 历史上这两个值由远端 TXT 配置（ech-config.anglesgirl.eu.org 的 ip=）下发；
 // 远端为冷启动提速被移除后，读取端 IP_KEY 就再没人写入，导致 hasIp 恒为 false。
-export const DEFAULT_EDGE_IPS = '162.159.36.5,162.159.36.20';
+//
+// 中间曾在此填死网关 IP（先 162.159.36.x，后改 172.64.229.x）——
+// 2026-09-22 用户拨测确认两组 IP 在国内**都是通的**：那条 21 秒超时不是 IP 不通，
+// 而是「网关域名解析被污染」（连到了假地址）。所以这不该靠换硬编码 IP 来修。
+
+// ⚠️ 默认**留空**（用户可在设置页手配）—— 这是用户定的方案：
+//   · 网关地址由原生侧用国内种子 DoH 动态解析（go: gatewayIPsForDial → 国内三家纯 IP），
+//     又快又好、免疫污染；而且网关可换：改 DoH 端点即可，不用动代码。
+//   · 这里若填 Gateway 段 IP，它们会作为 ipList 落到原生 customIPs，而 customIPs
+//     是用来连**目标域名**的。2026-08-15 实测：Gateway 段 IP 连 AO3 会触发
+//     CF 1034 (Edge IP Restricted)，同一天用目标域官方段 IP 稳定 200。
+//     所以默认不给，让目标域名走它自己的官方段。
+export const DEFAULT_EDGE_IPS = '';
 
 // Domain whose TXT record carries remote settings, so end users can pull a
 // working DoH endpoint / edge IPs with one tap instead of understanding DoH.
@@ -79,9 +88,9 @@ async function getDohCandidates() {
 
 // Optional comma-separated list of preferred Cloudflare edge IPs.
 // Custom IPs only change which edge we connect to; SNI/ECH stay the same.
-// 用户在设置页手配的优先；未配置时回落到内置网关地址（DEFAULT_EDGE_IPS）。
-// 注意：绝不能返回空串 —— 空串会让原生侧 DoH 查询退化为走系统 DNS 解析
-// 网关域名，国内会被污染/超时，表现为冷启动「找不到网络」。
+// 用户在设置页手配的优先；未配置时用 DEFAULT_EDGE_IPS（现为空 = 不指定）。
+// 空串现在是安全的：原生侧用国内种子 DoH 解析网关地址，解析不出来还有内置快照兜底，
+// 不会退化成走系统 DNS（那条路会被污染，实测卡 21 秒后 fail-closed）。
 export async function getCustomIPs() {
   try {
     const v = await AsyncStorage.getItem(IP_KEY);
