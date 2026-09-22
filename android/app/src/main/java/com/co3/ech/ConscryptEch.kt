@@ -222,30 +222,59 @@ class EchDns(private val system: Dns = Dns.SYSTEM) : Dns {
 }
 
 /**
- * ECH 被服务器拒绝（密钥轮换/配置过期）时清掉缓存，让 OkHttp 的重试拿到新配置。
- * Conscrypt 会抛 EchRejectedException 并附带 retryConfigs，这里只做失效 + 重试，不改语义。
+ * 任何失败 → 去权威源取新的 ECH 配置 → 重试一次。
+ *
+ * 用户定的规则（也是浏览器的语义）：**cloudflare-ech.com 永远是权威正确值；
+ * 只要失败，不管缓存了多久，就立刻去那里取新值并缓存起来。**
+ *
+ * 旧实现只在异常名含 "EchRejected" 时才清缓存 —— 太窄了：握手超时、连接被重置、
+ * 异常被包装后类名不再含 EchRejected 等情况都不会清，于是继续拿旧密钥撞墙，
+ * 一直撞到缓存 TTL 自然过期（而旧 TTL 下限是 1 小时），表现为「功能一直坏着」。
  */
 class EchRetryInterceptor : Interceptor {
+
+    /** 请求标记：保证最多只重试一次，避免持续失败时打成风暴。 */
+    private object Retried
+
     override fun intercept(chain: Interceptor.Chain): Response {
-        val host = chain.request().url.host
+        val req = chain.request()
+        val host = req.url.host
         return try {
-            chain.proceed(chain.request())
+            chain.proceed(req)
         } catch (t: Throwable) {
+            if (!EchHosts.isProtected(host)) throw t
+            if (req.tag(Any::class.java) === Retried) throw t // 已重试过，不再循环
+
             val echRejected = generateSequence(t) { it.cause }
                 .any { it.javaClass.simpleName.contains("EchRejected", ignoreCase = true) }
-            if (echRejected && EchHosts.isProtected(host)) {
-                Log.w("CO-ECH", "ECH 被拒，清缓存以便用 retryConfigs 重试: $host")
+            if (echRejected) {
                 Diagnostics.trace(
                     "tls.ech.rejected",
-                    mapOf(
-                        "host" to host,
-                        "err" to "${t.javaClass.simpleName}: ${t.message}",
-                        "note" to "服务器拒绝 ECH（多为密钥轮换/配置过期），已清缓存准备重试"
-                    )
+                    mapOf("host" to host, "err" to "${t.javaClass.simpleName}: ${t.message}")
                 )
-                EchDoh.invalidateEch(host)
             }
-            throw t
+            Diagnostics.trace(
+                "ech.refetch.begin",
+                mapOf(
+                    "host" to host,
+                    "err" to "${t.javaClass.simpleName}: ${t.message}",
+                    "echRejected" to echRejected,
+                    "note" to "任何失败都去权威源取新值并缓存"
+                )
+            )
+            val fresh = EchDoh.refetchNow(host)
+            if (fresh == null) {
+                Diagnostics.trace(
+                    "ech.refetch.fail",
+                    mapOf("host" to host, "note" to "权威源也没拿到 → fail-closed")
+                )
+                throw t
+            }
+            Diagnostics.trace(
+                "ech.refetch.ok",
+                mapOf("host" to host, "bytes" to fresh.size, "note" to "已缓存新值，重试一次")
+            )
+            return chain.proceed(req.newBuilder().tag(Any::class.java, Retried).build())
         }
     }
 }

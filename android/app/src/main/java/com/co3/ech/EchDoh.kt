@@ -45,7 +45,10 @@ object EchDoh {
             .client(bootstrapClient)
             .url(DOH_URL.toHttpUrl())
             .bootstrapDnsHosts(*pins.toTypedArray())
-            .includeIPv6(false)
+            // ⚠️ 必须 true。移动网络的 SNI 封锁**只针对 IPv4**，禁掉 IPv6 等于自断后路 ——
+            // 这正是 Han1meViewer 上"Chrome 能开、App 打不开"的同一个根因
+            // （Chrome 走 IPv6 绕过了封锁，App 只有 IPv4 就被掐）。
+            .includeIPv6(true)
             .build()
     }
 
@@ -99,10 +102,21 @@ object EchDoh {
 
     /** 单家超时：快失败快换下一家，避免首次启动干等。 */
     private const val ECH_ONE_TIMEOUT_MS = 2500L
-    /** ECH 配置缓存下限：记录的 TTL 只有 ~198s，但公钥实测能稳定数天；
-     *  缓存久一点才能真正省掉冷启动那次查询；万一被轮换，握手被拒会走 invalidateEch 自愈。 */
-    private const val ECH_CACHE_MIN_MS = 60 * 60 * 1000L
-    private const val ECH_CACHE_MAX_MS = 5 * 60 * 60 * 1000L
+
+    /**
+     * ECH 配置缓存时长。
+     *
+     * ⚠️ **绝不能设大**。旧值曾是「下限 1 小时 / 上限 5 小时」，注释理由是
+     * "公钥实测能稳定数天" —— 但密钥轮换时这个假设直接失效，结果是轮换后
+     * 最长 1 小时都拿旧密钥去撞墙，功能看起来"一直坏着"。
+     *
+     * 规则（用户定的，也是浏览器语义）：
+     *   cloudflare-ech.com 永远是权威正确值；**任何失败都立即去那里取新值**，
+     *   不管缓存了多久。所以缓存只用于"省掉重复查询"，绝不能成为"用旧值硬扛"的理由。
+     * 记录本身的 TTL 只有 ~198s，这里就跟着它走，最多 30 分钟。
+     */
+    private const val ECH_CACHE_MIN_MS = 60_000L              // 1 分钟
+    private const val ECH_CACHE_MAX_MS = 30 * 60 * 1000L      // 30 分钟
 
     /** 从随机一家纯 IP DoH 取官方活值（wire 格式，解析 SVCB 的 key=5）。 */
     private fun fetchLiveEch(): Pair<ByteArray, Long>? {
@@ -288,16 +302,36 @@ object EchDoh {
     }
 
     /**
-     * ECH 被服务器拒绝（密钥轮换 / 配置失效）后清缓存。
-     * 活源那份也一起丢（它可能正是被拒的那份），并把这个域名翻成「用它自己的记录」，
-     * 否则重试会拿回同一个值、一直撞同一堵墙。
+     * 清掉这个域名的一切 ECH 缓存，逼下一次重新取。
+     *
+     * ⚠️ 必须清得**彻底** —— 任何一处残留都会让下一次取用又拿到旧值：
+     *   echCache    内存缓存（按域名 + 权威源各一份）
+     *   EchState    落盘
+     *   echFailed   失败冷却（不清就被 30s 冷却挡住，无法立刻重取）
+     *   ownFirst    "优先用自己记录"的偏好
+     *
+     * 规则（用户定的，也是浏览器语义）：**cloudflare-ech.com 永远是权威正确值；
+     * 只要失败，不管缓存了多久，就立刻去取新值** —— 缓存只用于省掉重复查询，
+     * 绝不能成为"拿旧密钥硬扛"的理由。
      */
     fun invalidateEch(host: String) {
         echCache.remove(host)
         EchState.drop(host)
         echFailed.remove(host)
         echCache.remove(LIVE_SOURCE_HOST)
-        if (host != LIVE_SOURCE_HOST) ownFirst.add(host)
+        // 旧实现这里是 ownFirst.add(host)，让该域名**永久**偏向"自己的记录"——
+        // 但那份记录可能同样是旧的，等于换个地方继续撞墙，而且再也回不到权威源。
+        // 改为清除：下次仍然优先权威源。
+        ownFirst.remove(host)
+    }
+
+    /**
+     * 失效并**立即**重取。用户规则：失败就去权威源拿正确值，并缓存起来。
+     * @return 新拿到的配置；权威源也没拿到则返回 null（调用方继续 fail-closed）
+     */
+    fun refetchNow(host: String): ByteArray? {
+        invalidateEch(host)
+        return echConfigList(host)
     }
 
     // ---------------- DNS ----------------
