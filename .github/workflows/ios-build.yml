@@ -69,6 +69,20 @@ jobs:
           test -f ios/EchProxyBridge/EchProxyBridge.m \
             || { echo "::error::ios/EchProxyBridge/EchProxyBridge.m missing — EchProxy 原生模块不会注册"; exit 1; }
 
+      - name: Verify native log drain is exported
+        run: |
+          # 防回归：gomobile 对切片返回值（[]string）的导出不可靠 —— 曾让
+          # EchproxyDrainLogs 符号根本没生成，直到 SwiftCompile 才报
+          # "error: cannot find 'EchproxyDrainLogs' in scope"，浪费一整轮 CI。
+          # 这里在编译前直接断言符号存在于 xcframework 头文件里。
+          HDR=$(find ios/EchProxyBridge/Echproxy.xcframework -name '*.h' 2>/dev/null | head -1)
+          test -n "$HDR" \
+            || { echo "::error::Echproxy.xcframework 里找不到头文件"; exit 1; }
+          echo "检查 $HDR"
+          grep -q 'EchproxyDrainLogs' "$HDR" \
+            || { echo "::error::EchproxyDrainLogs 未导出 —— 原生日志上报会静默失效（gomobile 可能不支持该返回类型）"; exit 1; }
+          echo "✅ EchproxyDrainLogs 已导出（原生日志上报通路可用）"
+
       # ⚠️ 同样必须排在 `pod install` 之前：Podfile 引用了本地 pod HymtBridge，
       # 而它依赖这里生成的 llama.xcframework。
       - name: Cache llama.xcframework

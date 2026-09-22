@@ -213,23 +213,26 @@ const NATIVE_LOG_CHUNK = 360;   // remoteLog 单字段上限 400，留余量避�
 const NATIVE_LOG_INTERVAL_MS = 5000;
 
 async function drainNativeLogs() {
-  let lines;
+  let raw;
   try {
     const mod = NativeModules.EchProxy;
     if (!mod || typeof mod.drainLogs !== 'function') return;
     // Swift 桥是 RCTPromise（同 status()），必须 await —— 同步取值会拿到 Promise 对象
-    lines = await mod.drainLogs();
+    raw = await mod.drainLogs();
   } catch {
     return; // 原生侧不可用绝不能影响主流程
   }
-  if (!Array.isArray(lines) || lines.length === 0) return;
+  // 原生侧刻意返回换行分隔的 string 而非数组：gomobile 导出 []string 不可靠
+  // （实测会让 EchproxyDrainLogs 符号缺失，iOS 直接编译不过）。
+  if (typeof raw !== 'string' || raw.length === 0) return;
+  const lines = raw.split('\n');
 
   // 按字符预算切块（块内多行）。超长字符串会被 remoteLog 静默截断，
   // 截掉的往往正是后半段的关键错误，所以主动切。
   const chunks = [];
   let buf = '';
-  for (const raw of lines) {
-    const t = String(raw ?? '').trim();
+  for (const line of lines) {
+    const t = String(line ?? '').trim();
     if (!t) continue;
     if (buf && buf.length + t.length + 1 > NATIVE_LOG_CHUNK) {
       chunks.push(buf);

@@ -220,11 +220,20 @@ func noteLog(format string, a ...any) {
 	logRingMu.Unlock()
 }
 
-// DrainLogs 返回并清空缓冲区，供 JS 取走上报。没有新日志时返回空切片。
-func DrainLogs() []string {
+// DrainLogs 返回并清空缓冲区，供 JS 取走上报。没有新日志时返回空字符串。
+//
+// ⚠️ 刻意返回 string（换行分隔）而不是 []string：gomobile 对切片返回值的导出
+// 支持不可靠 —— 实测 []string 版本在 Swift 侧报
+//   error: cannot find 'EchproxyDrainLogs' in scope
+// （符号根本没生成，xcframework 里查不到它）。与 LastStatus() 保持一致的
+// string 类型是最稳的，gomobile 对这个类型有充分验证。
+func DrainLogs() string {
 	logRingMu.Lock()
 	defer logRingMu.Unlock()
-	out := append([]string(nil), logRing...)
+	if len(logRing) == 0 {
+		return ""
+	}
+	out := strings.Join(logRing, "\n")
 	logRing = nil
 	return out
 }
