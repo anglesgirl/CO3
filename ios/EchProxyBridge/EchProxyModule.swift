@@ -14,6 +14,7 @@
 //      -> NSString* _Nonnull EchproxyFetchTxt(NSString*, NSString*, NSError** _Nullable error)
 //         (on failure: empty string + NSError set — NOT nullable!)
 //    LastStatus() string                          -> NSString* _Nonnull EchproxyLastStatus()
+//    DrainLogs() []string                         -> NSArray<NSString*>* _Nonnull EchproxyDrainLogs()
 //
 //  JS usage (identical to Android):
 //    import { NativeModules } from 'react-native';
@@ -204,6 +205,18 @@ class EchProxyModule: NSObject, RCTBridgeModule {
   ) {
     let s = EchproxyLastStatus()
     resolve(s)
+  }
+
+  // 取走原生侧缓冲的关键日志（Go 的 DrainLogs() -> EchproxyDrainLogs()）。
+  // 用途：iOS 是侧载测试，测试者拿不到 Xcode console，Go 的 log.Printf 等于
+  // 不可见。这里把 ring buffer 交给 JS，由 remoteLog 统一上报 —— 避免每次
+  // 排查都要"麻烦别人导出日志文件"。
+  @objc(drainLogsWithResolver:withRejecter:)
+  func drainLogs(
+    resolve: @escaping RCTPromiseResolveBlock,
+    reject: @escaping RCTPromiseRejectBlock
+  ) {
+    resolve(EchproxyDrainLogs())
   }
 
   private static func freePort() -> Int32 {

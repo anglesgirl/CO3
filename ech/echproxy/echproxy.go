@@ -192,12 +192,49 @@ type hostConf struct {
 	transport *http.Transport
 }
 
+// ---- 日志环形缓冲：留住关键事件，供 JS 定时取走上报 ----
+//
+// 背景：Go 侧的 log.Printf 只进 Xcode console。iOS 是侧载测试（未签名 IPA），
+// 测试者拿不到 console，于是每次排查都得"麻烦别人导出日志"。这里把关键事件
+// 留在内存，由 JS 通过 DrainLogs() 取走，再走 remoteLog.js 的既有通路上报
+// —— 复用它的队列/限流/脱敏，不另造一套。
+var (
+	logRingMu sync.Mutex
+	logRing   []string
+)
+
+// logRingMax 要够覆盖「冷启动 → 首次请求失败」的完整过程。
+const logRingMax = 200
+
+// noteLog 记录一条关键事件：既写 Xcode console（本机调试），也进环形缓冲（上报）。
+func noteLog(format string, a ...any) {
+	msg := fmt.Sprintf(format, a...)
+	// 这里必须保留 log.Printf（不能换成 noteLog，否则自我递归）：
+	// console 供本机 Xcode 调试，环形缓冲供 JS 取走上报。
+	log.Printf("echproxy: %s", msg)
+	logRingMu.Lock()
+	logRing = append(logRing, time.Now().Format("15:04:05.000")+" "+msg)
+	if len(logRing) > logRingMax {
+		logRing = logRing[len(logRing)-logRingMax:]
+	}
+	logRingMu.Unlock()
+}
+
+// DrainLogs 返回并清空缓冲区，供 JS 取走上报。没有新日志时返回空切片。
+func DrainLogs() []string {
+	logRingMu.Lock()
+	defer logRingMu.Unlock()
+	out := append([]string(nil), logRing...)
+	logRing = nil
+	return out
+}
+
 func setStatus(format string, a ...any) {
 	s := fmt.Sprintf(format, a...)
 	mu.Lock()
 	lastStatus = s
 	mu.Unlock()
-	log.Printf("echproxy: %s", s)
+	noteLog("%s", s)
 }
 
 func setConfigInfo(format string, a ...any) {
@@ -205,7 +242,7 @@ func setConfigInfo(format string, a ...any) {
 	mu.Lock()
 	configInfo = s
 	mu.Unlock()
-	log.Printf("echproxy: config %s", s)
+	noteLog("config %s", s)
 }
 
 func setDNSInfo(format string, a ...any) {
@@ -213,7 +250,7 @@ func setDNSInfo(format string, a ...any) {
 	mu.Lock()
 	dnsInfo = s
 	mu.Unlock()
-	log.Printf("echproxy: dns %s", s)
+	noteLog("dns %s", s)
 }
 
 func setShakeInfo(format string, a ...any) {
@@ -221,7 +258,7 @@ func setShakeInfo(format string, a ...any) {
 	mu.Lock()
 	shakeInfo = s
 	mu.Unlock()
-	log.Printf("echproxy: handshake %s", s)
+	noteLog("handshake %s", s)
 }
 
 // LastStatus returns a multi-line summary: ECH config source, DNS resolution,
@@ -443,9 +480,9 @@ func Start(listen, target, echB64, doh, ipList, cpArg string, insecure bool) err
 		customIPs = fresh
 		mu.Unlock()
 		setDNSInfo("preferred IP scan: %d fallback edge IPs appended: %v (took %v)", len(fastIPs), fastIPs, time.Since(fastStart))
-		log.Printf("echproxy: preferred IP scan done in %v: %v", time.Since(fastStart), fastIPs)
+		noteLog("preferred IP scan done in %v: %v", time.Since(fastStart), fastIPs)
 	} else {
-		log.Printf("echproxy: preferred IP scan: none (took %v)", time.Since(fastStart))
+		noteLog("preferred IP scan: none (took %v)", time.Since(fastStart))
 	}
 
 	// Remember the settings so every requested host can be resolved the same way.
@@ -732,7 +769,7 @@ func transportFor(host string) (*http.Transport, error) {
 		hc.as13335 = allCloudflareAS13335(ips)
 		setDNSInfo("%s: %d DoH address(es), AS13335=%v", host, len(ips), hc.as13335)
 	} else {
-		log.Printf("echproxy: DoH resolve for %s failed: %v", host, err)
+		noteLog("DoH resolve for %s failed: %v", host, err)
 		// DoH 失败时用种子 TXT 下发的优选 IP 兜底直连（不抛错断网）。
 		// 与 Han1meViewer 已验证方案一致：宁可走种子 IP 直连 + ECH，
 		// 也不要因为 DoH 被墙/抖动就完全断网。
@@ -779,7 +816,7 @@ func transportFor(host string) (*http.Transport, error) {
 	hostsMu.Lock()
 	hostConfs[host] = hc
 	hostsMu.Unlock()
-	log.Printf("echproxy: host %s ready (%d addr(s), ech=%v)", host, len(hc.ips), len(hc.ech) > 0)
+	noteLog("host %s ready (%d addr(s), ech=%v)", host, len(hc.ips), len(hc.ech) > 0)
 	return hc.transport, nil
 }
 
@@ -884,9 +921,9 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 					}
 					customIPs = fresh
 					mu.Unlock()
-					log.Printf("echproxy: re-scan after dial failure: %v", ips)
+					noteLog("re-scan after dial failure: %v", ips)
 				} else {
-					log.Printf("echproxy: re-scan after dial failure: no reachable IP")
+					noteLog("re-scan after dial failure: no reachable IP")
 				}
 			}()
 			return nil, fmt.Errorf("dial %s failed: %w", host, err)
@@ -1128,7 +1165,7 @@ func echDialContext(sni string, echList []byte, cachePath string, insecure bool)
 			raw, err := d.DialContext(ctx, "tcp", dialed)
 			if err != nil {
 				lastErr = err
-				log.Printf("echproxy: dial %s failed: %v", dialed, err)
+				noteLog("dial %s failed: %v", dialed, err)
 				continue
 			}
 
@@ -1154,7 +1191,7 @@ func echDialContext(sni string, echList []byte, cachePath string, insecure bool)
 			if err != nil {
 				raw.Close()
 				lastErr = err
-				log.Printf("echproxy: ECH handshake via %s failed; trying next candidate: %v", dialed, err)
+				noteLog("ECH handshake via %s failed; trying next candidate: %v", dialed, err)
 				continue
 			}
 			st := tc.ConnectionState()
@@ -1410,11 +1447,11 @@ func fetchLiveECHWire() ([]byte, error) {
 	for _, ip := range ips {
 		b, err := queryECHWire(ip, cloudflareECHHost)
 		if err == nil && len(b) > 0 {
-			log.Printf("echproxy: live ECH via %s (%d bytes)", ip, len(b))
+			noteLog("live ECH via %s (%d bytes)", ip, len(b))
 			return b, nil
 		}
 		lastErr = err
-		log.Printf("echproxy: live ECH via %s failed: %v", ip, err)
+		noteLog("live ECH via %s failed: %v", ip, err)
 	}
 	if lastErr == nil {
 		lastErr = errors.New("no domestic DoH candidate")
@@ -1627,7 +1664,7 @@ func loadECHConfigWithFallbacks(host, doh string) ([]byte, string) {
 		storePublicECHCache(cp, host, b)
 		return b, "domestic-pure-ip"
 	} else {
-		log.Printf("echproxy: domestic pure-ip ECH failed, falling back to gateway: %v", err)
+		noteLog("domestic pure-ip ECH failed, falling back to gateway: %v", err)
 	}
 
 	// 2b. 回退：经用户/内置的 DoH 网关取（原有链路，保留）。

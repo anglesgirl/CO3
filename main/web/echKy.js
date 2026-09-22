@@ -200,6 +200,56 @@ export function getEchBase() {
   return Promise.resolve(null);
 }
 
+// ---- 原生侧日志回收（iOS 的 Go 代理）----
+//
+// 为什么需要：Go 的 log.Printf 只进 Xcode console。iOS 是侧载测试（未签名
+// IPA），测试者拿不到 console，于是每次排查都要"麻烦别人导出日志"。原生侧
+// 现在把关键事件留在 ring buffer（echproxy.DrainLogs），这里定时取走并走
+// remoteLog 的统一上报通路 —— 复用它的队列/限流/脱敏，不另造一套。
+//
+// 冷启动那批（DoH 解析失败、host ready、dial 失败）最关键，所以启动时立刻
+// 拉一次，不能只等定时器 —— 否则最关键的一段会被"5 秒后才开始收"漏掉。
+const NATIVE_LOG_CHUNK = 360;   // remoteLog 单字段上限 400，留余量避免被静默截断
+const NATIVE_LOG_INTERVAL_MS = 5000;
+
+async function drainNativeLogs() {
+  let lines;
+  try {
+    const mod = NativeModules.EchProxy;
+    if (!mod || typeof mod.drainLogs !== 'function') return;
+    // Swift 桥是 RCTPromise（同 status()），必须 await —— 同步取值会拿到 Promise 对象
+    lines = await mod.drainLogs();
+  } catch {
+    return; // 原生侧不可用绝不能影响主流程
+  }
+  if (!Array.isArray(lines) || lines.length === 0) return;
+
+  // 按字符预算切块（块内多行）。超长字符串会被 remoteLog 静默截断，
+  // 截掉的往往正是后半段的关键错误，所以主动切。
+  const chunks = [];
+  let buf = '';
+  for (const raw of lines) {
+    const t = String(raw ?? '').trim();
+    if (!t) continue;
+    if (buf && buf.length + t.length + 1 > NATIVE_LOG_CHUNK) {
+      chunks.push(buf);
+      buf = '';
+    }
+    buf = buf ? `${buf}\n${t}` : t;
+  }
+  if (buf) chunks.push(buf);
+
+  // 只报最新几块：队列上限 40、限流 1200ms，报太多会把其他诊断挤掉
+  chunks.slice(-6).forEach((c, i) => rlog('native_log', { i, n: chunks.length, lines: c }));
+}
+
+let nativeLogTimer = null;
+function startNativeLogDrain() {
+  if (nativeLogTimer) return; // initEch 可能被多处 import 触发，只允许起一个
+  drainNativeLogs();          // 立刻拉一次：冷启动那批最关键
+  nativeLogTimer = setInterval(drainNativeLogs, NATIVE_LOG_INTERVAL_MS);
+}
+
 // Eagerly warm up the proxy so it's ready before the first AO3 request.
 export function initEch() {
   rlog('startup_env', {
@@ -207,6 +257,7 @@ export function initEch() {
     osVersion: String(Platform.Version ?? ''),
     dohDefault: DEFAULT_DOH,
   });
+  startNativeLogDrain();
   // 只在没有进行中的启动时才触发，避免 App 启动瞬间多处 import 同时
   // 调用造成并发 start()（原生侧会抛 "echproxy already running"，
   // JS 侧则丢掉端口 → 之后 30s 冷却里全部请求 fail-closed。
