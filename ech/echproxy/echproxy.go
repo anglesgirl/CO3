@@ -500,6 +500,11 @@ func Start(listen, target, echB64, doh, ipList, cpArg string, insecure bool) err
 	hostConfs = map[string]*hostConf{}
 	hostsMu.Unlock()
 
+	// 【用户定的方案】网关地址不写死：用国内种子 DoH 读配置域名的 TXT 拿到网关池，
+	// 挑一个可用的换上 —— 换网关只改 TXT，App 不用发版。
+	// 异步执行：冷启动不为它阻塞；期间沿用上面传入的默认端点，不会断网。
+	go refreshActiveDoHFromPool()
+
 	jar := newCookieJar()
 	client := &http.Client{
 		Transport: &hostRouter{},
@@ -1271,7 +1276,11 @@ func gatewayIPsForDial() []string {
 	if len(gatewayIPsCache) > 0 && time.Since(gatewayIPsAt) < gatewayIPsTTL {
 		return append([]string(nil), gatewayIPsCache...)
 	}
-	ips := resolveDoHHostIPs(activeDoH)
+	// activeDoH 由 hostsMu 保护（与 transportFor 的读法一致）。
+	hostsMu.Lock()
+	doh := activeDoH
+	hostsMu.Unlock()
+	ips := resolveDoHHostIPs(doh)
 	if len(ips) == 0 {
 		ips = append([]string(nil), builtinDoHHostIPs...)
 		noteLog("网关地址解析失败,回落内置快照 %v", ips)
@@ -1675,6 +1684,175 @@ func resolveHostViaDomesticDoH(host string) []string {
 		noteLog("resolve %s via %s failed", host, ip)
 	}
 	return nil
+}
+
+// configTxtDomain 的 TXT 里发布**网关池**（一行一个 DoH 端点 URL）。
+//
+// 这是「网关可换」那一环 —— 换网关只改这条 TXT，App 不用重新发版。
+// 只用国内种子 DoH 去读（纯 IP 直连，天然免疫污染）。
+const configTxtDomain = "doh.xn--pn1aul.eu.org"
+
+// extractTxtStrings 解析 DNS 应答里的 TXT(16) 记录（rdata 是若干 character-string，需拼接）。
+func extractTxtStrings(msg []byte) []string {
+	if len(msg) < 12 {
+		return nil
+	}
+	i := 12
+	for i < len(msg) && msg[i] != 0 {
+		i += int(msg[i]) + 1
+	}
+	i += 5
+	ancount := int(msg[6])<<8 | int(msg[7])
+	var out []string
+	for n := 0; n < ancount; n++ {
+		if i+12 > len(msg) {
+			break
+		}
+		if msg[i]&0xC0 == 0xC0 {
+			i += 2
+		} else {
+			for i < len(msg) && msg[i] != 0 {
+				i += int(msg[i]) + 1
+			}
+			i++
+		}
+		typ := int(msg[i])<<8 | int(msg[i+1])
+		rdlen := int(msg[i+8])<<8 | int(msg[i+9])
+		rdata := i + 10
+		if rdata+rdlen > len(msg) {
+			break
+		}
+		if typ == 16 {
+			var sb strings.Builder
+			for p := rdata; p < rdata+rdlen; {
+				ln := int(msg[p])
+				if p+1+ln > rdata+rdlen {
+					break
+				}
+				sb.Write(msg[p+1 : p+1+ln])
+				p += 1 + ln
+			}
+			if sb.Len() > 0 {
+				out = append(out, sb.String())
+			}
+		}
+		i = rdata + rdlen
+	}
+	return out
+}
+
+// extractGatewayURLs 从 TXT 内容里挑出 DoH 端点 URL。兼容两种写法：
+//   - 纯 URL 列表 —— 当前配置域名用的形式
+//   - key=value  —— `doh=https://…` / `doh2=https://…,https://…`
+func extractGatewayURLs(txt string) []string {
+	var out []string
+	for _, seg := range strings.FieldsFunc(txt, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\n' || r == '	'
+	}) {
+		seg = strings.TrimSpace(seg)
+		if idx := strings.Index(seg, "="); idx >= 0 {
+			seg = strings.TrimSpace(seg[idx+1:])
+		}
+		if strings.HasPrefix(seg, "https://") && strings.Contains(seg, "/dns-query") {
+			out = append(out, seg)
+		}
+	}
+	return out
+}
+
+// queryTxtWire 用纯 IP + wire 查 TXT 记录。
+func queryTxtWire(ip, name string) ([]string, error) {
+	q := buildDNSQuery(name, 16)
+	u := "https://" + ip + "/dns-query?dns=" + base64.RawURLEncoding.EncodeToString(q)
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("accept", "application/dns-message")
+	client := &http.Client{Timeout: 2500 * time.Millisecond}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("http %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return nil, err
+	}
+	return extractTxtStrings(body), nil
+}
+
+// fetchGatewayPool 用国内种子 DoH 读配置域名的 TXT → 网关池。
+func fetchGatewayPool() []string {
+	ips := append([]string(nil), domesticDoHIPs...)
+	rand.Shuffle(len(ips), func(i, j int) { ips[i], ips[j] = ips[j], ips[i] })
+	for _, ip := range ips {
+		txts, err := queryTxtWire(ip, configTxtDomain)
+		if err != nil {
+			noteLog("网关池 via %s 失败: %v", ip, err)
+			continue
+		}
+		var urls []string
+		seen := map[string]bool{}
+		for _, t := range txts {
+			for _, u := range extractGatewayURLs(t) {
+				if !seen[u] {
+					seen[u] = true
+					urls = append(urls, u)
+				}
+			}
+		}
+		if len(urls) > 0 {
+			noteLog("网关池 via %s -> %d 个", ip, len(urls))
+			return urls
+		}
+		noteLog("网关池 via %s 无有效 URL(%d 条 TXT)", ip, len(txts))
+	}
+	return nil
+}
+
+// hostOfURL 取 URL 的 host（失败返回空串）。
+func hostOfURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+// refreshActiveDoHFromPool 读网关池，把 activeDoH 换成池里第一个**能解析出地址**的端点。
+//
+// 全都不行则保持原样（Start 传入的默认端点），绝不因此断网。
+func refreshActiveDoHFromPool() {
+	urls := fetchGatewayPool()
+	if len(urls) == 0 {
+		noteLog("网关池读取失败,沿用当前端点")
+		return
+	}
+	for _, u := range urls {
+		host := hostOfURL(u)
+		if host == "" {
+			continue
+		}
+		if len(resolveHostViaDomesticDoH(host)) == 0 {
+			noteLog("网关 %s 解析不出地址,跳过", u)
+			continue
+		}
+		// 先丢网关缓存（拿 gatewayIPsMu），再改 activeDoH（拿 hostsMu）——
+		// 固定顺序，避免与 gatewayIPsForDial 形成反向加锁。
+		invalidateGatewayIPs()
+		hostsMu.Lock()
+		activeDoH = u
+		// 清掉 per-host 缓存：已经解析过的 host 下次重新走新网关。
+		hostConfs = map[string]*hostConf{}
+		hostsMu.Unlock()
+		noteLog("网关已选用 %s (池共 %d 个)", u, len(urls))
+		return
+	}
+	noteLog("网关池全部不可用,沿用当前端点")
 }
 
 // extractType65RData 从 DNS 应答报文里取出第一条 type=65 记录的 rdata。

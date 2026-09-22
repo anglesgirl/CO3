@@ -26,14 +26,29 @@ object EchDoh {
 
     private const val TAG = "CO-ECH-DOH"
 
-    /** 云端 DoH 网关（与旧 JNI 链路同一个，换传输层不改这里） */
+    /** 云端 DoH 网关的**内置默认**；实际用哪个由网关池（TXT）决定。 */
     const val DOH_URL = "https://82sew1c85i.cloudflare-gateway.com/dns-query"
-    private const val DOH_HOST = "82sew1c85i.cloudflare-gateway.com"
+
+    /**
+     * 配置域名：TXT 记录里发布**网关池**（一行一个 DoH 端点 URL）。
+     *
+     * 这是「网关可换」那一环 —— 换网关只改这条 TXT，App 不用重新编译发版。
+     * 只由国内种子 DoH 去读（纯 IP 直连，天然免疫污染）；实测六家国内 DoH
+     * （阿里/腾讯/360 各两台）都能完整取到 4 条。
+     *
+     * 解析器同时兼容两种写法：
+     *   · 纯 URL 列表        —— 当前用的形式
+     *   · key=value          —— `doh=https://…` / `doh2=https://…,https://…`
+     */
+    private const val CONFIG_TXT_DOMAIN = "doh.xn--pn1aul.eu.org"
+    private const val GATEWAY_POOL_TTL_MS = 30 * 60 * 1000L
+    private const val GATEWAY_IP_TTL_MS = 30 * 60 * 1000L
 
     /**
      * 网关地址的**末位后备**（正常情况下用不到）。
      *
-     * 网关真相不写死在这里，而是启动时用国内种子 DoH 动态解析 [DOH_HOST]（见 [gatewayIps]）。
+     * 网关真相不写死在这里：先用国内种子 DoH 读配置域名的 TXT 拿到网关池（见 [gatewayPool]），
+     * 再动态解析出选定端点的地址（见 [currentGateway]）。
      * 理由：
      *   · 硬编码 IP 迟早失效 —— 网关可更换、地址段会被封、CF 边缘也会变；
      *   · 而走系统 DNS 解析网关域名又会被污染（拿到假 IP → 连接超时）。
@@ -53,54 +68,140 @@ object EchDoh {
         .build()
 
     /**
-     * 【种子层】用国内纯 IP DoH 解析自有网关域名 → 拿到网关的真实地址。
+     * 【种子层】用国内纯 IP DoH 解析一个域名的地址（A + AAAA）。
      *
-     * 这是整套链路的地基。网关域名若交给系统 DNS 就会被污染（拿到假 IP → 连接超时），
+     * 这是整套链路的地基。域名若交给系统 DNS 就会被污染（拿到假 IP → 连接超时），
      * 而写死 IP 又会随网关更换 / 地址段被封而失效。
      * 国内三家 DoH 是**纯 IP 直连** —— 查它们本身不需要任何解析，天然免疫污染 ——
-     * 所以「网关在哪」这个问题交给它们回答。
+     * 所以「网关在哪」交给它们回答。
      *
-     * 一次拿 A + AAAA；任意一家成功即返回，失败换下一家。
+     * 任意一家成功即返回，失败换下一家。
      */
-    private fun resolveGatewayIps(): List<String> {
+    private fun resolveHostIps(host: String): List<String> {
         val out = LinkedHashSet<String>()
         for (ip in ECH_DOH_IPS.shuffled()) {
             for (type in intArrayOf(1, 28)) {
-                val wire = dohWire(ip, DOH_HOST, type) ?: continue
+                val wire = dohWire(ip, host, type) ?: continue
                 out.addAll(parseAddresses(wire))
             }
             if (out.isNotEmpty()) {
                 Diagnostics.trace(
-                    "doh.gateway.ok",
-                    mapOf("via" to ip, "n" to out.size, "ips" to out.joinToString(","))
+                    "doh.hostres.ok",
+                    mapOf("host" to host, "via" to ip, "n" to out.size, "ips" to out.joinToString(","))
                 )
                 break
             }
-            Diagnostics.trace("doh.gateway.miss", mapOf("via" to ip))
+            Diagnostics.trace("doh.hostres.miss", mapOf("host" to host, "via" to ip))
         }
         return out.toList()
     }
 
-    private const val GATEWAY_IP_TTL_MS = 30 * 60 * 1000L
-
-    @Volatile private var gatewayCache: Pair<List<String>, Long>? = null
-
-    /** 网关 IP（带 TTL 缓存）；连国内 DoH 都解析不出来时才用末位后备。 */
-    private fun gatewayIps(): List<String> {
-        val now = System.currentTimeMillis()
-        gatewayCache?.let { (ips, exp) -> if (exp > now && ips.isNotEmpty()) return ips }
-        val ips = resolveGatewayIps()
-        if (ips.isEmpty()) {
-            Diagnostics.trace("doh.gateway.fallback", mapOf("ips" to DOH_FALLBACK_IPS.joinToString(",")))
-            return DOH_FALLBACK_IPS
+    /** 解析 DNS 应答里的 TXT(16) 记录（rdata 是若干 character-string，需拼接）。 */
+    private fun parseTxt(msg: ByteArray): List<String> {
+        if (msg.size < 12) return emptyList()
+        var i = 12
+        while (i < msg.size && msg[i].toInt() != 0) i += (msg[i].toInt() and 0xFF) + 1
+        i += 5
+        val ancount = ((msg[6].toInt() and 0xFF) shl 8) or (msg[7].toInt() and 0xFF)
+        val out = ArrayList<String>()
+        for (n in 0 until ancount) {
+            if (i + 12 > msg.size) break
+            if ((msg[i].toInt() and 0xC0) == 0xC0) i += 2
+            else { while (i < msg.size && msg[i].toInt() != 0) i += (msg[i].toInt() and 0xFF) + 1; i += 1 }
+            val rtype = ((msg[i].toInt() and 0xFF) shl 8) or (msg[i + 1].toInt() and 0xFF)
+            val rdlen = ((msg[i + 8].toInt() and 0xFF) shl 8) or (msg[i + 9].toInt() and 0xFF)
+            val rdata = i + 10
+            if (rtype == 16 && rdata + rdlen <= msg.size) {
+                val sb = StringBuilder()
+                var p = rdata
+                while (p < rdata + rdlen) {
+                    val ln = msg[p].toInt() and 0xFF
+                    if (p + 1 + ln > rdata + rdlen) break
+                    sb.append(String(msg, p + 1, ln, Charsets.UTF_8))
+                    p += 1 + ln
+                }
+                if (sb.isNotEmpty()) out.add(sb.toString())
+            }
+            i = rdata + rdlen
         }
-        gatewayCache = ips to (now + GATEWAY_IP_TTL_MS)
-        return ips
+        return out
     }
 
-    /** 网关不可达时调用：丢掉缓存，下次重新解析（网关可能已换地址）。 */
+    /**
+     * 从 TXT 内容里挑出 DoH 端点 URL。兼容两种写法：
+     *   · 纯 URL 列表 —— 当前配置域名用的形式
+     *   · key=value  —— `doh=https://…` / `doh2=https://…,https://…`
+     */
+    private fun extractGatewayUrls(txt: String): List<String> =
+        txt.split(',', ';', ' ', '\n')
+            .map { it.trim() }
+            .map { seg -> if (seg.contains('=')) seg.substringAfter('=').trim() else seg }
+            .filter { it.startsWith("https://") && it.contains("/dns-query") }
+
+    /** 用国内种子 DoH 读配置域名的 TXT → 网关池。 */
+    private fun fetchGatewayPool(): List<String> {
+        for (ip in ECH_DOH_IPS.shuffled()) {
+            val wire = dohWire(ip, CONFIG_TXT_DOMAIN, 16) ?: continue
+            val urls = parseTxt(wire).flatMap { extractGatewayUrls(it) }.distinct()
+            if (urls.isNotEmpty()) {
+                Diagnostics.trace(
+                    "doh.pool.ok",
+                    mapOf("via" to ip, "n" to urls.size, "urls" to urls.joinToString(","))
+                )
+                return urls
+            }
+            Diagnostics.trace("doh.pool.miss", mapOf("via" to ip))
+        }
+        return emptyList()
+    }
+
+    @Volatile private var poolCache: Pair<List<String>, Long>? = null
+
+    /** 网关池（带 TTL 缓存）；TXT 读不到就用内置默认。 */
+    private fun gatewayPool(): List<String> {
+        val now = System.currentTimeMillis()
+        poolCache?.let { (u, exp) -> if (exp > now && u.isNotEmpty()) return u }
+        val urls = fetchGatewayPool()
+        if (urls.isEmpty()) {
+            Diagnostics.trace("doh.pool.fallback", mapOf("url" to DOH_URL))
+            return listOf(DOH_URL)
+        }
+        poolCache = urls to (now + GATEWAY_POOL_TTL_MS)
+        return urls
+    }
+
+    /** 选定的网关：URL + 域名 + 已解析出的地址。 */
+    private class Gateway(val url: String, val host: String, val ips: List<String>)
+
+    @Volatile private var gatewayCache: Pair<Gateway, Long>? = null
+
+    /**
+     * 从网关池里挑第一个**能解析出地址**的端点。
+     *
+     * 换网关只要改 TXT —— 池里哪个能用就用哪个；全都不行才回落内置默认。
+     */
+    private fun currentGateway(): Gateway? {
+        val now = System.currentTimeMillis()
+        gatewayCache?.let { (g, exp) -> if (exp > now) return g }
+        for (url in gatewayPool()) {
+            val host = runCatching { url.toHttpUrl().host }.getOrNull() ?: continue
+            val ips = resolveHostIps(host)
+            if (ips.isEmpty()) {
+                Diagnostics.trace("doh.gateway.unusable", mapOf("url" to url))
+                continue
+            }
+            val g = Gateway(url, host, ips)
+            gatewayCache = g to (now + GATEWAY_IP_TTL_MS)
+            Diagnostics.trace("doh.gateway.ok", mapOf("url" to url, "ips" to ips.joinToString(",")))
+            return g
+        }
+        return null
+    }
+
+    /** 网关不可达时调用：丢缓存，下次重新读 TXT 并重新解析（网关可能已换）。 */
     private fun invalidateGateway() {
         gatewayCache = null
+        poolCache = null
         resolverCache = null
     }
 
@@ -109,17 +210,19 @@ object EchDoh {
     /**
      * 官方 DoH 解析器：A/AAAA + TTL 缓存，用于解析受保护域名（防污染 + 兜底）。
      *
-     * bootstrap 地址来自 [gatewayIps]（动态解析），网关 IP 一变就重建 ——
-     * 所以**换网关只需要改 [DOH_URL]，不需要动代码**。
+     * 端点与 bootstrap 地址都来自 [currentGateway]（先读 TXT 拿网关池 → 再动态解析地址），
+     * 任一变化就重建 —— 所以**换网关只要改配置域名的 TXT，不需要动代码**。
      */
     private fun dohResolver(): DnsOverHttps {
-        val ips = gatewayIps()
-        val key = ips.joinToString(",")
+        val gw = currentGateway()
+        val url = (gw?.url ?: DOH_URL).toHttpUrl()
+        val ips = gw?.ips ?: DOH_FALLBACK_IPS
+        val key = url.toString() + "|" + ips.joinToString(",")
         resolverCache?.let { (r, k) -> if (k == key) return r }
         val pins = ips.mapNotNull { runCatching { InetAddress.getByName(it) }.getOrNull() }
         val built = DnsOverHttps.Builder()
             .client(bootstrapClient)
-            .url(DOH_URL.toHttpUrl())
+            .url(url)
             .bootstrapDnsHosts(*pins.toTypedArray())
             // ⚠️ 必须 true。移动网络的 SNI 封锁**只针对 IPv4**，禁掉 IPv6 等于自断后路 ——
             // 这正是 Han1meViewer 上"Chrome 能开、App 打不开"的同一个根因
