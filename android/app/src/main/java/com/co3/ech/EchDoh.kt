@@ -63,10 +63,19 @@ object EchDoh {
     )
 
     private val bootstrapClient: OkHttpClient = OkHttpClient.Builder()
-        // 4s：对齐 Han1meViewer 在同一台设备上已验证的配置（它用 4s 一直正常）。
-        // 8s 的代价是失败时要干等 16s（A/AAAA 各一次），重试/重取逻辑全被拖住。
+        // ⚠️ 禁用代理。默认的 proxySelector 是 ProxySelector.getDefault()（系统代理），
+        // 手机上只要装过代理/VPN 类 App 或 APN 里配了代理，DoH 请求就会走它 ——
+        // 而代理不通的表现是**卡死**，不是快速报错。bangumi-ech 显式禁用了两次，
+        // 这正是"同一个套路、不同 App 效果不一样"的差别之一。
+        .proxy(java.net.Proxy.NO_PROXY)
+        // ⚠️ 关掉自动重试。OkHttp 默认 true 会静默重试，把一次超时放大成两倍 ——
+        // CO3 日志里那个 21.45 秒正是「8s 超时 × 重试」的形状；bangumi 关掉后 10s 就快速失败。
+        .retryOnConnectionFailure(false)
         .connectTimeout(4, TimeUnit.SECONDS)
         .readTimeout(4, TimeUnit.SECONDS)
+        // ⚠️ 总时限兜底。DnsOverHttps 内部是 latch.await()（无超时参数），
+        // 没有 callTimeout 就可能无限等；bangumi 给了 15s。
+        .callTimeout(12, TimeUnit.SECONDS)
         .build()
 
     /**
@@ -241,8 +250,11 @@ object EchDoh {
                 val t1 = System.currentTimeMillis()
                 val line = runCatching {
                     val c = OkHttpClient.Builder()
+                        .proxy(java.net.Proxy.NO_PROXY)
+                        .retryOnConnectionFailure(false)
                         .connectTimeout(4, TimeUnit.SECONDS)
                         .readTimeout(4, TimeUnit.SECONDS)
+                        .callTimeout(12, TimeUnit.SECONDS)
                         .dns(object : Dns {
                             override fun lookup(hostname: String): List<InetAddress> =
                                 listOf(InetAddress.getByName(ip))
