@@ -118,16 +118,57 @@ object EchDoh {
     private const val ECH_CACHE_MIN_MS = 60_000L              // 1 分钟
     private const val ECH_CACHE_MAX_MS = 30 * 60 * 1000L      // 30 分钟
 
+    /**
+     * HTTPS(65) 记录解析结果：**一次查询同时拿到 ECH 配置与地址提示**。
+     *
+     * 为什么合并：RFC 9460 的 HTTPS 记录本身就同时携带
+     *   ech(key=5) + ipv4hint(key=4) + ipv6hint(key=6)
+     * 实测国内三家 DoH 查 archiveofourown.org 全部完整返回：
+     *   v4=104.20.8.2,104.20.9.2  v6=2606:4700:10::…  ech=71B  ttl=116~600s
+     *
+     * 而旧实现把这两件事拆成两条路：
+     *   ① ECH 配置 → fetchLiveEch() 走国内三家纯 IP      → ✅ 158ms
+     *   ② A/AAAA   → dohResolver 走自有网关(162.159.36.x) → ❌ 每次卡 17~21 秒后 0 地址
+     * 用户网络下 ② 根本连不上，于是整个 ECH 链路 fail-closed。
+     * 合并后只需要一次查询，且走的是国内可达的纯 IP。
+     */
+    private class HttpsRecord(
+        val ech: ByteArray?,
+        val ipv4: List<String>,
+        val ipv6: List<String>,
+        val ttlMs: Long,
+    )
+
+    private val httpsRecordCache = ConcurrentHashMap<String, Pair<HttpsRecord, Long>>()
+
     /** 从随机一家纯 IP DoH 取官方活值（wire 格式，解析 SVCB 的 key=5）。 */
     private fun fetchLiveEch(): Pair<ByteArray, Long>? {
+        return fetchLiveRecord(LIVE_SOURCE_HOST)?.let { rec ->
+            rec.ech?.let { it to rec.ttlMs }
+        }
+    }
+
+    /**
+     * 走国内三家纯 IP DoH 取某个域名的完整 HTTPS 记录（ech + 地址提示）。
+     * 随机挑一家、2.5s 超时、失败换下一家（与既有 fetchLiveEch 的策略一致）。
+     */
+    private fun fetchLiveRecord(host: String): HttpsRecord? {
         val order = ECH_DOH_IPS.shuffled()
         for (ip in order) {
-            val hit = runCatching { queryEchWire(ip, LIVE_SOURCE_HOST) }.getOrNull()
-            if (hit != null) {
-                Log.i(TAG, "live ech via $ip: ${hit.first.size} bytes, ttl=${hit.second}ms")
-                return hit
+            val rec = runCatching { queryHttpsRecord(ip, host) }.getOrNull()
+            if (rec != null) {
+                Diagnostics.trace(
+                    "ech.record.ok",
+                    mapOf(
+                        "host" to host, "via" to ip,
+                        "echBytes" to (rec.ech?.size ?: 0),
+                        "v4" to rec.ipv4.joinToString(","), "v6n" to rec.ipv6.size,
+                        "ttlMs" to rec.ttlMs,
+                    )
+                )
+                return rec
             }
-            Log.i(TAG, "live ech via $ip failed, next")
+            Diagnostics.trace("ech.record.miss", mapOf("host" to host, "via" to ip))
         }
         return null
     }
@@ -142,8 +183,8 @@ object EchDoh {
         return out.toByteArray()
     }
 
-    /** 纯 IP + wire 的 DoH 查询；返回 ech（含 2 字节长度前缀）+ 缓存时长。 */
-    private fun queryEchWire(ip: String, name: String): Pair<ByteArray, Long>? {
+    /** 纯 IP + wire 的 DoH 查询，解析完整 HTTPS 记录（ech + ipv4hint + ipv6hint）。 */
+    private fun queryHttpsRecord(ip: String, name: String): HttpsRecord? {
         val b64 = android.util.Base64.encodeToString(
             buildQuery(name), android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE,
         ).trimEnd('=')
@@ -161,14 +202,17 @@ object EchDoh {
                 if (!resp.isSuccessful) return null
                 resp.body?.bytes() ?: return null
             }
-        return parseSvcbEch(wire)
+        return parseHttpsRecord(wire)
     }
 
     /**
-     * 解析 DNS 应答，找 type=65 的 HTTPS 记录，走 SvcParams 取 key=5（ech）。
-     * 返回的字节**含 2 字节长度前缀**，可直接喂 Conscrypt（实测：值以 0x00 0x45 开头，0x45=69）。
+     * 解析 DNS 应答，找 type=65 的 HTTPS 记录，取出 SvcParams：
+     *   key=5 ech（含 2 字节长度前缀，可直接喂 Conscrypt）
+     *   key=4 ipv4hint（4 字节一个地址）
+     *   key=6 ipv6hint（16 字节一个地址）
+     * 三者一次拿全 —— 这样解析 IP 与取 ECH 配置走的是同一批国内可达的纯 IP。
      */
-    private fun parseSvcbEch(msg: ByteArray): Pair<ByteArray, Long>? {
+    private fun parseHttpsRecord(msg: ByteArray): HttpsRecord? {
         if (msg.size < 12) return null
         var i = 12
         // 跳过 question
@@ -191,16 +235,38 @@ object EchDoh {
                 var j = rdata + 2
                 while (j < rdata + rdlen && msg[j].toInt() != 0) j += (msg[j].toInt() and 0xFF) + 1
                 j += 1
+                var ech: ByteArray? = null
+                val v4 = ArrayList<String>()
+                val v6 = ArrayList<String>()
                 while (j + 4 <= rdata + rdlen) {
                     val key = ((msg[j].toInt() and 0xFF) shl 8) or (msg[j + 1].toInt() and 0xFF)
                     val len = ((msg[j + 2].toInt() and 0xFF) shl 8) or (msg[j + 3].toInt() and 0xFF)
-                    if (key == 5 && len > 0) {
-                        val ech = msg.copyOfRange(j + 4, j + 4 + len)
-                        val ttlMs = (ttl * 1000).coerceIn(ECH_CACHE_MIN_MS, ECH_CACHE_MAX_MS - 1) + 1
-                        return ech to ttlMs
+                    val vStart = j + 4
+                    if (vStart + len <= rdata + rdlen) {
+                        when (key) {
+                            5 -> if (len > 0) ech = msg.copyOfRange(vStart, vStart + len)
+                            4 -> {
+                                var k = vStart
+                                while (k + 3 < vStart + len) {
+                                    v4.add("${msg[k].toInt() and 0xFF}.${msg[k+1].toInt() and 0xFF}.${msg[k+2].toInt() and 0xFF}.${msg[k+3].toInt() and 0xFF}")
+                                    k += 4
+                                }
+                            }
+                            6 -> {
+                                var k = vStart
+                                while (k + 15 < vStart + len) {
+                                    runCatching {
+                                        v6.add(java.net.InetAddress.getByAddress(msg.copyOfRange(k, k + 16)).hostAddress ?: "")
+                                    }
+                                    k += 16
+                                }
+                            }
+                        }
                     }
                     j += 4 + len
                 }
+                val ttlMs = (ttl * 1000).coerceIn(ECH_CACHE_MIN_MS, ECH_CACHE_MAX_MS - 1) + 1
+                return HttpsRecord(ech, v4, v6, ttlMs)
             }
             i = rdata + rdlen
         }
@@ -253,9 +319,31 @@ object EchDoh {
                   "ownFirst" to ownFirst.contains(host))
         )
         val hit = try {
-            // 活值优先：国内三家纯 IP（随机一家，失败换下一家）；失败才回退网关的 JSON 链路
-            if (first == LIVE_SOURCE_HOST) fetchLiveEch() ?: fetchConfig(first, now)
-            else fetchConfig(first, now) ?: (if (second == LIVE_SOURCE_HOST) fetchLiveEch() else fetchConfig(second, now))
+            // ① 优先用**目标域名自己的** HTTPS 记录：实测它同时带 ech(71B) 与
+            //    ipv4hint/ipv6hint，一次查询就把「配置」和「IP」都解决了。
+            //    （AO3 的 ech 与 cloudflare-ech.com 的活值本就同源，不存在"必须借用"的问题）
+            val ownRec = httpsRecord(host)
+            val ownEch = ownRec?.ech
+            if (ownEch != null) {
+                Diagnostics.trace(
+                    "ech.fetch.own",
+                    mapOf(
+                        "host" to host, "bytes" to ownEch.size,
+                        "v4" to ownRec.ipv4.joinToString(","), "v6n" to ownRec.ipv6.size,
+                    )
+                )
+                ownEch to ownRec.ttlMs
+            } else {
+                // ② 借用路径：某些域名自己的记录里没有 ech（例：未挂 CF custom hostname），
+                //    此时才去 cloudflare-ech.com 取官方活值。这条路径没有地址提示，
+                //    resolve() 会退回自有网关。
+                Diagnostics.trace(
+                    "ech.fetch.borrow",
+                    mapOf("host" to host, "first" to first, "second" to second)
+                )
+                if (first == LIVE_SOURCE_HOST) fetchLiveEch() ?: fetchConfig(first, now)
+                else fetchConfig(first, now) ?: (if (second == LIVE_SOURCE_HOST) fetchLiveEch() else fetchConfig(second, now))
+            }
         } catch (t: Throwable) {
             Log.w(TAG, "ech query failed for $host: ${t.message}")
             Diagnostics.trace(
@@ -319,6 +407,10 @@ object EchDoh {
         EchState.drop(host)
         echFailed.remove(host)
         echCache.remove(LIVE_SOURCE_HOST)
+        // 新加的 HTTPS 记录缓存（ech + 地址提示）同样必须清 —— 它就是「配置+IP」的来源，
+        // 留着不清等于下次仍然拿旧记录，跟没清一样。
+        invalidateHttpsRecord(host)
+        invalidateHttpsRecord(LIVE_SOURCE_HOST)
         // 旧实现这里是 ownFirst.add(host)，让该域名**永久**偏向"自己的记录"——
         // 但那份记录可能同样是旧的，等于换个地方继续撞墙，而且再也回不到权威源。
         // 改为清除：下次仍然优先权威源。
@@ -337,15 +429,71 @@ object EchDoh {
     // ---------------- DNS ----------------
 
     /**
-     * 用 DoH 解析域名。失败返回空列表；调用方必须 fail-closed，不要回落系统 DNS（会拿到污染 IP）。
+     * 取某域名的完整 HTTPS 记录（带缓存）。
+     * resolve 与 echConfigList 共用这一份，避免同一个域名打两次 DoH。
+     */
+    private fun httpsRecord(host: String): HttpsRecord? {
+        val now = System.currentTimeMillis()
+        httpsRecordCache[host]?.let { (rec, expireAt) -> if (expireAt > now) return rec }
+        val rec = fetchLiveRecord(host) ?: return null
+        httpsRecordCache[host] = rec to (now + rec.ttlMs)
+        return rec
+    }
+
+    private fun invalidateHttpsRecord(host: String) {
+        httpsRecordCache.remove(host)
+    }
+
+    /**
+     * 用 DoH 解析域名，失败返回空列表。
+     *
+     * **优先用 HTTPS 记录里的 ipv4hint/ipv6hint** —— 它与 ECH 配置来自同一次查询、
+     * 同一批国内可达的纯 IP（实测 158ms 成功）。
+     *
+     * 为什么改掉原实现：原实现一律走 `dohResolver`（OkHttp DnsOverHttps → 自有网关，
+     * 钉 162.159.36.x）。实测用户网络下那条路连不上 —— 日志里每次卡 17~21 秒后
+     * `0 个地址 → fail-closed`，而**同一时刻** ech.fetch 走国内三家 158ms 就成功了。
+     * 于是 ECH 配置拿得到、IP 却解析不出来，整个链路仍然 fail-closed。
+     *
+     * 自有网关退为兜底：它仍有价值（能拿到不受污染的结果），但不能是唯一路径。
      */
     fun resolve(host: String): List<InetAddress> {
+        // ① HTTPS 记录的地址提示（与 ECH 同源、同一次查询、国内可达）
+        runCatching {
+            val rec = httpsRecord(host)
+            if (rec != null) {
+                val addrs = (rec.ipv4 + rec.ipv6)
+                    .mapNotNull { ip -> runCatching { InetAddress.getByName(ip) }.getOrNull() }
+                    .filter { !it.isAnyLocalAddress && !it.isLoopbackAddress }
+                if (addrs.isNotEmpty()) {
+                    Diagnostics.trace(
+                        "net.resolve.hint",
+                        mapOf(
+                            "host" to host, "n" to addrs.size,
+                            "ips" to addrs.joinToString(",") { it.hostAddress ?: "?" }
+                        )
+                    )
+                    return addrs
+                }
+            }
+        }
+
+        // ② 兜底：自有网关（旧路径）
         return try {
             val addrs = dohResolver.lookup(host)
             Log.i(TAG, "doh resolve $host -> ${addrs.joinToString { it.hostAddress ?: "?" }}")
+            Diagnostics.trace(
+                "net.resolve.gateway",
+                mapOf("host" to host, "n" to addrs.size,
+                      "ips" to addrs.joinToString(",") { it.hostAddress ?: "?" })
+            )
             addrs
         } catch (t: Throwable) {
             Log.w(TAG, "doh resolve failed for $host: ${t.message}")
+            Diagnostics.trace(
+                "net.resolve.fail",
+                mapOf("host" to host, "err" to "${t.javaClass.simpleName}: ${t.message}")
+            )
             emptyList()
         }
     }
