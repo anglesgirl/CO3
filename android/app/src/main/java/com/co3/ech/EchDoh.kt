@@ -60,11 +60,10 @@ object EchDoh {
     /** IP → 是否属于 Cloudflare。按地址缓存，避免每个新连接都查一次 ASN。 */
     private val asnCache = ConcurrentHashMap<String, Boolean>()
 
-    /** 域名 → 是否解析到 CF 段。按域名缓存，避免每次 H3 尝试都重新判定。 */
+    /** 域名 → 是否解析到 CF 段。按域名缓存，供 ECH 保护判定。 */
     private val cfHostCache = ConcurrentHashMap<String, Boolean>()
 
-    /** 域名 → HTTPS 记录里的 alpn 是否含 h3。**H3 的独立判据，与 ECH 无关。** */
-    private val h3HintCache = ConcurrentHashMap<String, Boolean>()
+    /** 保护域名的 ECH 判定缓存。 */
 
     /**
      * 网关地址的**末位后备**（正常情况下用不到）。
@@ -959,15 +958,7 @@ object EchDoh {
         return cf
     }
 
-    /**
-     * 该域名是否解析到 Cloudflare 边缘段 —— **决定要不要给它试 ECH / H3**。
-     *
-     * ⚠️ 解析失败时**返回 true（不拦）**：宁可白试一次，也不能因为一次解析失败
-     * 就让本该受保护的域名退回明文 —— 核心域名是 fail-closed 的，误判等于断网。
-     *
-     * 用户定调：「不在 cloudflare 的不用试了，提前判定好，不用每次都要尝试」。
-     * 这条必须真的判断域名 —— 只看「上次失败过吗」的负缓存判断不了这件事。
-     */
+    /** 目标域名是否在 Cloudflare 上，用于决定是否启用 ECH。 */
     fun isCloudflareHost(host: String): Boolean {
         cfHostCache[host]?.let { return it }
         val addrs = try {
@@ -986,40 +977,6 @@ object EchDoh {
             mapOf("host" to host, "v4" to v4.size.toString()),
         )
         return cf
-    }
-
-    /**
-     * 目标是否**自称支持 H3** —— 取自 HTTPS(65) 记录的 `alpn` 参数。
-     *
-     * ⚠️ 这是 **H3 的判据，不是 ECH 的判据**。两者必须分开：
-     *   - ECH 需要目标域有 `ech=` 记录（没有就只能借 CF 的）→ 判「在不在 Cloudflare」
-     *   - H3 是 QUIC/HTTP3，**与 ECH 完全无关**。谷歌不支持 ECH（也没有 HTTPS 记录），
-     *     但它明确宣告支持 H3（实测响应头 `alt-svc: h3=":443"; ma=2592000`）。
-     *     拿「是不是 Cloudflare」去挡 H3 是错的 —— 会把能走的域名也挡掉。
-     *
-     * 返回值语义：
-     *   true  = 记录里 alpn 含 h3        → 试
-     *   false = 记录里 alpn 明确不含 h3  → 不试（例如只写 h2）
-     *   null  = 没有 HTTPS 记录 / 查询失败 → **无从判断，交给调用方按「试」处理**
-     *           （多数域名不发 HTTPS 记录，谷歌就没有。用户定调：默认所有域名都先试 H3）
-     */
-    fun hostAdvertisesH3(host: String): Boolean? {
-        h3HintCache[host]?.let { return it }
-        val body = try {
-            query(host, "HTTPS")
-        } catch (t: Throwable) {
-            null
-        } ?: return null
-        val alpn = Regex("""alpn\s*=\s*"([^"]*)"""", RegexOption.IGNORE_CASE)
-            .find(body)?.groupValues?.get(1)
-            ?: return null
-        val has = alpn.split(",").any { it.trim().startsWith("h3", ignoreCase = true) }
-        h3HintCache[host] = has
-        Diagnostics.trace(
-            if (has) "h3.hint.yes" else "h3.hint.no",
-            mapOf("host" to host, "alpn" to alpn.take(40)),
-        )
-        return has
     }
 
     private fun query(host: String, type: String): String? {

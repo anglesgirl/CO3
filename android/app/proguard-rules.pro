@@ -9,9 +9,6 @@
 
 # Add any project specific keep options here:
 
-# H3 原生库入口：JNI 按类名/方法名查找，混淆后必须保留（否则 native 侧找不到方法）
--keep class com.co3.ech.CoEchH3 { *; }
--keepclasseswithmembernames class com.co3.ech.CoEchH3 { native <methods>; }
 
 # ---------------------------------------------------------------------------
 # ⚠️ 以下规则当前【不生效】—— 因为 build.gradle 里
