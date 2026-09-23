@@ -51,6 +51,12 @@ object EchDoh {
      * 这些 IP 会排在 bootstrap 候选的**最前面**（用户实测快 > 解析结果 > 内置兜底）。
      */
     private const val CONFIG_IP_DOMAIN = "ip.xn--pn1aul.eu.org"
+
+    /** 别名表记录域名：源域名 → 替代域名（不可达域名改写用），远程可调。 */
+    private const val CONFIG_ALIAS_DOMAIN = "alias.xn--pn1aul.eu.org"
+
+    /** 别名表缓存（与网关池同 TTL）。 */
+    @Volatile private var aliasCache: Pair<Map<String, String>, Long>? = null
     private const val GATEWAY_POOL_TTL_MS = 30 * 60 * 1000L
     private const val GATEWAY_IP_TTL_MS = 30 * 60 * 1000L
 
@@ -247,6 +253,79 @@ object EchDoh {
             Diagnostics.trace("doh.prefip.miss", mapOf("via" to ip))
         }
         return emptyList()
+    }
+
+    /**
+     * 查别名（源域名 → 替代域名）。**表在远程 TXT，改镜像不用发版。**
+     *
+     * 用途：某些域名在国内根本不可达，但它能换一个等价镜像域名访问。
+     * 实测例子：`ajax.googleapis.com` 连不上（15s 连接超时），
+     * 而 `ajax.proxy.ustclug.org` 返回的文件**逐字节相同**
+     * （89500 字节，sha256 80f04717…）—— 所以带 `integrity=` 的 SRI 校验也照样通过。
+     *
+     * ⚠️ **域名 ≠ IP**：实测**不能**用「把 ajax 指向 fonts 的国内节点」解决 ——
+     * 国内那些 fonts 节点是特化的，不给 `ajax.googleapis.com` 提供服务。必须换域名。
+     *
+     * TXT 格式（与网关池同风格，逗号分隔多条）：
+     *
+     *     ajax.googleapis.com|ajax.proxy.ustclug.org,fonts.googleapis.com|fonts.geekzu.org
+     *
+     * 表里没有的域名一律不改写；读不到表 / 表为空就完全保持现有行为。
+     *
+     * ⚠️ **冷启动不阻塞调用线程**：`shouldInterceptRequest` 在拿到表之前返回 null（不改写），
+     * 同时丢一个后台线程去加载；从下一个请求起就能用上。
+     * 这样第一次加载页面不会因为「顺带取一次 TXT」而多等一两秒。
+     */
+    fun hostAlias(host: String): String? {
+        val now = System.currentTimeMillis()
+        aliasCache?.let { (m, exp) -> if (exp > now) return m[host.lowercase()] }
+        if (!aliasLoading) {
+            aliasLoading = true
+            Thread {
+                runCatching { aliasTable() }
+                aliasLoading = false
+            }.apply {
+                isDaemon = true
+                name = "ech-alias-load"
+            }.start()
+        }
+        return null
+    }
+
+    @Volatile private var aliasLoading = false
+
+    private fun aliasTable(): Map<String, String> {
+        val now = System.currentTimeMillis()
+        aliasCache?.let { (m, exp) -> if (exp > now) return m }
+        val v = fetchAliasTable()
+        aliasCache = v to (now + GATEWAY_POOL_TTL_MS)
+        return v
+    }
+
+    private fun fetchAliasTable(): Map<String, String> {
+        for (ip in ECH_DOH_IPS.shuffled()) {
+            val wire = dohWire(ip, CONFIG_ALIAS_DOMAIN, 16) ?: continue
+            val map = parseTxt(wire)
+                .flatMap { it.split(',', ';', '\n', '\t') }
+                .mapNotNull { entry ->
+                    val p = entry.trim().split('|')
+                    if (p.size == 2 && p[0].isNotBlank() && p[1].isNotBlank()) {
+                        p[0].trim().lowercase() to p[1].trim().lowercase()
+                    } else {
+                        null
+                    }
+                }
+                .toMap()
+            if (map.isNotEmpty()) {
+                Diagnostics.trace(
+                    "alias.table.ok",
+                    mapOf("via" to ip, "n" to map.size, "pairs" to map.entries.joinToString(",") { "${it.key}->${it.value}" }),
+                )
+                return map
+            }
+            Diagnostics.trace("alias.table.miss", mapOf("via" to ip))
+        }
+        return emptyMap()
     }
 
     /** 优选 IP（带 TTL 缓存）；读不到就是空列表 —— 那就退回到解析/内置兜底。 */
