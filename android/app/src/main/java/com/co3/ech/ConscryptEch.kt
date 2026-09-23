@@ -240,7 +240,32 @@ class EchRetryInterceptor : Interceptor {
         val req = chain.request()
         val host = req.url.host
         return try {
-            chain.proceed(req)
+            val response = chain.proceed(req)
+            // Cloudflare 525/526 是 TLS 层拒绝，但以 HTTP 响应返回，不会进入 catch。
+            // 保护域收到这两个状态时，不能直接交给 JS 让用户重复点击；
+            // 丢弃响应、刷新权威 ECH、只自动重试一次。
+            if (EchHosts.isProtected(host) && response.code in setOf(525, 526) &&
+                req.tag(Any::class.java) !== Retried
+            ) {
+                Diagnostics.trace(
+                    "tls.ech.httpRejected",
+                    mapOf("host" to host, "code" to response.code, "note" to "HTTP 层返回 TLS 拒绝，刷新 ECH 后重试一次"),
+                )
+                response.close()
+                val fresh = EchDoh.refetchNow(host)
+                if (fresh != null) {
+                    Diagnostics.trace(
+                        "ech.refetch.ok",
+                        mapOf("host" to host, "bytes" to fresh.size, "reason" to "http_${response.code}"),
+                    )
+                    return chain.proceed(req.newBuilder().tag(Any::class.java, Retried).build())
+                }
+                Diagnostics.trace(
+                    "ech.refetch.fail",
+                    mapOf("host" to host, "reason" to "http_${response.code}"),
+                )
+            }
+            response
         } catch (t: Throwable) {
             if (!EchHosts.isProtected(host)) throw t
             if (req.tag(Any::class.java) === Retried) throw t // 已重试过，不再循环
