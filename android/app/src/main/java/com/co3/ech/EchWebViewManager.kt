@@ -37,6 +37,16 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                 // 劫持后的登录成功跳转由 Bridge 负责 loadUrl，这里不拦截
                 return false
             }
+            override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                super.onPageStarted(view, url, favicon)
+                // ★ 尽早注入：表单监听必须在用户能操作之前装好。
+                //   只靠 onPageFinished 会有一个窗口期 —— 用户在这个窗口里点登录，
+                //   表单就走 WebView 原生栈提交（没有 ECH，SNI 被墙）→ 登录必然失败。
+                //   注入是幂等的（脚本里判 window.__coLoginHijack），重复调用无害。
+                if (url != null && url.contains("archiveofourown.org")) {
+                    injectLoginHijack(view)
+                }
+            }
             override fun onPageFinished(view: WebView, url: String?) {
                 super.onPageFinished(view, url)
                 if (url != null && url.contains("archiveofourown.org")) {
@@ -65,35 +75,62 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
 
     private fun injectLoginHijack(view: WebView) {
         try {
-            view.evaluateJavascript("""
+            view.evaluateJavascript(
+                """
                 (function(){
-                  // 先扫描已存在的表单，再监听动态插入，避免页面已完成加载时漏绑 submit。
-                  function scan(){
-                    var f=document.getElementById('new_user');
-                    if(f && !f._coHijacked){
-                      f._coHijacked=true;
-                      try{ window.CoBridge.onLoginHijacked('found new_user'); }catch(e){}
-                      f.addEventListener('submit', function(e){
-                        e.preventDefault();
-                        e.stopPropagation();
-                        try{
-                          var fd=new FormData(f);
-                          var params=new URLSearchParams();
-                          for(var pair of fd.entries()){ params.append(pair[0], pair[1]); }
-                          var body=params.toString();
-                          window.CoBridge.postLogin(f.action || window.location.href, body);
-                        }catch(err){
-                          try{ window.CoBridge.onLoginHijacked('hijack err:'+err); }catch(e){}
-                          f.submit();
-                        }
-                      }, true);
+                  // 幂等：onPageStarted 与 onPageFinished 都会调用，重复注入只装一次
+                  if (window.__coLoginHijack) return;
+                  window.__coLoginHijack = 1;
+
+                  function isLoginForm(f){
+                    if (!f || f.tagName !== 'FORM') return false;
+                    if (f.id === 'new_user') return true;
+                    var a = (f.getAttribute && f.getAttribute('action')) || '';
+                    return a.indexOf('/users/login') >= 0;
+                  }
+
+                  function hijack(f){
+                    try {
+                      var fd = new FormData(f);
+                      var params = new URLSearchParams();
+                      for (var pair of fd.entries()) { params.append(pair[0], pair[1]); }
+                      var body = params.toString();
+                      try { window.CoBridge.onLoginHijacked('hijack:' + (f.id || f.action || 'form') + ' len=' + body.length); } catch(e){}
+                      window.CoBridge.postLogin(f.action || window.location.href, body);
+                    } catch (err) {
+                      // ★ 绝不退回 f.submit()：WebView 原生网络栈没有 ECH，
+                      //   到 archiveofourown.org 的 POST 会被 SNI 阻断，等于必然失败。
+                      //   fail-closed：就地报错，让上层看到失败原因，而不是静默交给一堵墙。
+                      try { window.CoBridge.onLoginHijacked('hijack err:' + err); } catch(e){}
                     }
                   }
-                  scan();
-                  new MutationObserver(scan).observe(document, {childList: true, subtree: true});
+
+                  // 文档级捕获监听：不管表单何时出现、id 是什么、被谁替换，
+                  // 只要有表单提交就接住 —— 不依赖 onPageFinished 的时机，也不依赖具体元素。
+                  document.addEventListener('submit', function(e){
+                    var f = e.target;
+                    if (!isLoginForm(f)) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (e.stopImmediatePropagation) { e.stopImmediatePropagation(); }
+                    hijack(f);
+                  }, true);
+
+                  // 兜底：极少数走 requestSubmit()/程序化提交的路径也观察一下
+                  try {
+                    new MutationObserver(function(){
+                      var f = document.getElementById('new_user');
+                      if (f && !f._coHijacked) {
+                        f._coHijacked = true;
+                        try { window.CoBridge.onLoginHijacked('found new_user'); } catch(e){}
+                      }
+                    }).observe(document, {childList: true, subtree: true});
+                  } catch(e){}
                 })();
-            """.trimIndent(), null)
-        } catch(_:Exception){}
+                """.trimIndent(), null,
+            )
+        } catch (_: Exception) {
+        }
     }
 
     class Bridge(private val webView: WebView, private val reactContext: ThemedReactContext?) {
