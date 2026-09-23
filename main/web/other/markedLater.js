@@ -1,3 +1,4 @@
+import { ao3Request } from '../ao3Transport';
 import { getRealUsername } from '../account/accountIdentity';
 import { parseWorkElements } from '../browse/fetchWorks';
 import getUrl from '../requestManager';
@@ -21,7 +22,7 @@ export async function markForLater(work) {
     const workId = work.id;
     const url = `https://archiveofourown.org/works/${workId}`;
 
-    const pageResponse = await fetch(url, {
+    const pageResponse = await ao3Request(url, {
       credentials: 'include',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -55,7 +56,7 @@ export async function markForLater(work) {
     params.append('authenticity_token', token);
     params.append('_method', 'patch');
 
-    const response = await fetch(markUrl, {
+    const response = await ao3Request(markUrl, {
       method: 'POST',
       body: params.toString(),
       credentials: 'include',

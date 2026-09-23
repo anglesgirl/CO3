@@ -1,5 +1,5 @@
-import ky from 'ky';
 import getUrl from '../requestManager';
+import { ao3Text } from '../ao3Transport';
 import { diagEvent } from '../../utils/diag';
 
 let DomParser = require('react-native-html-parser').DOMParser;
@@ -64,7 +64,7 @@ export async function fetchLoginFormFields() {
   try {
     // 登录链路第 1 步：取登录页（走 ECH 拦截器）
     diagEvent('login_step', { step: 'get_login_page' });
-    let html = await ky.get("https://archiveofourown.org/users/login").text();
+    let html = await ao3Text("https://archiveofourown.org/users/login");
     diagEvent('login_step', {
       step: 'login_page_html',
       len: html.length,

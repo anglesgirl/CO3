@@ -1,3 +1,4 @@
+import { ao3Request } from '../ao3Transport';
 import { fetchKudoAuthenticityToken } from '../account/fetchAuthenticityToken';
 
 export default async function sendKudo(workId) {
@@ -13,7 +14,7 @@ export default async function sendKudo(workId) {
     params.append('commit', 'Kudos ♥');
 
     // Send the kudos request
-    const response = await fetch('https://archiveofourown.org/kudos', {
+    const response = await ao3Request('https://archiveofourown.org/kudos', {
       method: 'POST',
       body: params.toString(),
       credentials: 'include',

@@ -1,33 +1,9 @@
-import kyDefault, { TimeoutError } from 'ky';
+import { TimeoutError } from 'ky';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fetchViaWebView, isEchProtectedUrl } from './WebviewFetcher';
 import { Platform } from 'react-native';
 import { diagEvent } from '../utils/diag';
-
-/**
- * ECH 传输层在两端是**不同实现** —— 这是刻意的设计取舍，不是历史遗留：
- *
- *  · **Android**：OkHttp + Conscrypt，进程内拦截器（Kotlin）。用普通 ky 即可，
- *    拦截器自动给 AO3 流量套上 ECH（无外挂线程、无本地端口）。
- *  · **iOS**：Conscrypt 是 Java 库，iOS 上根本不存在。因此走 **Go 代理**
- *    —— gomobile 打出的 `Echproxy.xcframework` + 本地 pod `EchProxyBridge`，
- *    由 `echKy` 这个 drop-in ky 实例把 AO3 请求重写到本地代理。
- *
- * 两者在 JS 层是**同一套 ky 接口**，业务代码完全无感 —— 两端的差异只存在于
- * 传输层这一个位置，其余（UI/登录/翻译/书签/排队…）全部共享同一份代码。
- *
- * ⚠️ **超时必须两端一致（30 秒）。** 此前 Android 用的是 ky 默认 10 秒，
- * 而 iOS 的 `echKy` 明确给了 30 秒（其注释原文：the first request may have to
- * bootstrap the ECH handshake），两端差 3 倍。
- *
- * 实测后果（2026-09-23 用户反馈「点三次才加载出文章」）：
- * 冷启动首次请求要依次完成 DoH 解析（日志实测 boot.prewarm.dns ms=3079）、
- * 取 ECH 配置、TLS 握手 —— 10 秒不够就超时，超时又触发那条必然失败的回退，
- * 于是用户在界面上看到「ECH 失败」。给足 30 秒后，第一次就能成功。
- */
-const ky = Platform.OS === 'ios'
-  ? require('./echKy').default
-  : kyDefault.create({ timeout: 30000 });
+import { ao3Text } from './ao3Transport';
 import {
   deleteCredsPasswd,
   deleteCredsToken,
@@ -149,14 +125,14 @@ export default async function getUrl(url, noWebview = false) {
   }
 
   try {
-    const html = await ky.get(url).text();
+    const html = await ao3Text(url);
 
     if (isCFChallenge(html)) {
       console.log(`isCfChalenged fiered with ${html}`);
       return await fallbackOrSurfaced(url, hostname, 'cf_challenge');
     }
 
-    console.log(`fetched ${url} via ky.`);
+    console.log(`fetched ${url} via unified AO3 transport.`);
     return html;
   } catch (err) {
     if (cloudflareErrorCodes.includes(err?.response?.status)) {

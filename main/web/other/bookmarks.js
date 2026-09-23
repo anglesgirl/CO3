@@ -1,3 +1,4 @@
+import { ao3Request } from '../ao3Transport';
 import { getRealUsername, looksLikeEmail } from '../account/accountIdentity';
 import { parseWorkElements } from '../browse/fetchWorks';
 import getUrl from '../requestManager';
@@ -61,7 +62,7 @@ export async function bookmark(work) {
     const url = `https://archiveofourown.org/works/${workId}/bookmarks/new`;
     const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
 
-    const pageResponse = await fetch(url, {
+    const pageResponse = await ao3Request(url, {
       credentials: 'include',
       headers: { 'User-Agent': userAgent }
     });
@@ -101,7 +102,7 @@ export async function bookmark(work) {
     params.append('bookmark[rec]', '0');
     params.append('commit', 'Create');
 
-    const postResponse = await fetch(`https://archiveofourown.org/works/${workId}/bookmarks`, {
+    const postResponse = await ao3Request(`https://archiveofourown.org/works/${workId}/bookmarks`, {
       method: 'POST',
       body: params.toString(),
       credentials: 'include',

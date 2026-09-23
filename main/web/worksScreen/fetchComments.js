@@ -1,4 +1,4 @@
-import ky from 'ky';
+import ao3Request from '../ao3Transport';
 
 let DomParser = require('react-native-html-parser').DOMParser;
 
@@ -49,7 +49,7 @@ export async function fetchComments(setCannotNext, setStep, preferHTML, singleCh
       "Sec-Fetch-Site": "same-origin",
       "Priority": "u=0"
     });
-    const response = await ky.get(url, { headers }).text();
+    const response = await ao3Request(url, { headers, retry: 0 }).text();
     setCannotNext(response.includes('$j("#comments_placeholder").html("");') || response.includes('<span class=\\"disabled\\">Next &#8594;<\\/span>'))
     const htmlCT = response.split('.append("<!-- START thread -->')[1].split('");')[0].replaceAll('\\n','').replaceAll('\\','');
     setStep("Parsing");

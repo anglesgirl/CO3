@@ -1,3 +1,4 @@
+import { ao3Request } from '../ao3Transport';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import getUrl from '../requestManager';
 
@@ -130,7 +131,7 @@ export async function submitInviteRequest(email) {
   let status = 0;
   let text = '';
   try {
-    const res = await fetch(url, {
+    const res = await ao3Request(url, {
       method: 'POST',
       body: params.toString(),
       credentials: 'include',

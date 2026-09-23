@@ -1,3 +1,4 @@
+import { ao3Request } from '../ao3Transport';
 import getUrl from '../requestManager';
 
 /**
@@ -61,7 +62,7 @@ export async function requestPasswordReset(email) {
     'Reset Password';
   params.append('commit', commitValue);
 
-  const res = await fetch(url, {
+  const res = await ao3Request(url, {
     method: 'POST',
     body: params.toString(),
     credentials: 'include',

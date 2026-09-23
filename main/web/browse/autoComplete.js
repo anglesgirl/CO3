@@ -1,3 +1,4 @@
+import { ao3Request } from '../ao3Transport';
 // Service for fetching autocomplete suggestions from AO3
 
 const AO3_BASE_URL = 'https://archiveofourown.org/autocomplete';
@@ -15,7 +16,7 @@ export const fetchAutocompleteSuggestions = async (type, term) => {
 
     try {
         const url = `${AO3_BASE_URL}/${type}?term=${encodeURIComponent(term)}`;
-        const response = await fetch(url, {
+        const response = await ao3Request(url, {
             method: 'GET',
             headers: {
                 'Accept': 'application/json',

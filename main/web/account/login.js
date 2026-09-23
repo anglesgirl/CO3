@@ -1,5 +1,6 @@
 import { fetchLoginFormFields } from './fetchAuthenticityToken';
 import { fetchAccountIdentity, clearIdentityCache, looksLikeEmail } from './accountIdentity';
+import { ao3Request } from '../ao3Transport';
 import { diagEvent } from '../../utils/diag';
 import Toast from 'react-native-toast-message';
 import {
@@ -95,7 +96,7 @@ export default async function login(username, password) {
     // 实测教训：缺 Origin 或 Referer 丢了 query，AO3 会返回 400 Bad Request
     //（此前一直卡在登录失败，根因就在这里）。
     const LOGIN_URL = 'https://archiveofourown.org/users/login?return_to=%2F';
-    const response = await fetch(LOGIN_URL, {
+    const response = await ao3Request(LOGIN_URL, {
       method: 'POST',
       body: params.toString(),
       credentials: 'include', // Important for cookies
@@ -184,7 +185,7 @@ export default async function login(username, password) {
 export async function validateCookie(sessionToken) {
   try {
     // Send a request to the website with the provided cookies
-    const response = await fetch('https://archiveofourown.org/', {
+    const response = await ao3Request('https://archiveofourown.org/', {
       method: 'GET',
       credentials: 'include', // Include cookies in the request
       headers: {

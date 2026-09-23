@@ -1,3 +1,4 @@
+import { ao3Request } from '../ao3Transport';
 /**
  * 查询邀请排队名次。
  *
@@ -80,7 +81,7 @@ export async function queryInviteQueue(email) {
   let text = '';
   let status = 0;
   try {
-    const res = await fetch(url, {
+    const res = await ao3Request(url, {
       method: 'GET',
       credentials: 'include',
       headers: {
