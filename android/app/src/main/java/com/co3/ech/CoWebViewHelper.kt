@@ -47,28 +47,9 @@ object CoWebViewHelper {
     }
 
     fun intercept(request: WebResourceRequest): WebResourceResponse? {
-        val originalHost = request.url.host ?: return null
+        val host = request.url.host ?: return null
         val method = request.method ?: "GET"
-
-        // ★ 别名改写：源域名不可达时换成等价镜像域名（表在远程 TXT，改镜像不用发版）。
-        //   关键点：换的是**域名**不是 IP —— 实测把 ajax 指向 fonts 的国内节点没用，
-        //   那些节点是特化的、不给 ajax.googleapis.com 提供服务；而等价镜像域名
-        //   返回的文件逐字节相同（SRI 校验也过）。
-        //   只在表里有这个域名时才改写，读不到表就完全保持原行为。
-        val alias = runCatching { EchDoh.hostAlias(originalHost) }.getOrNull()
-        val effectiveUrl = if (alias != null) {
-            val rewritten = request.url.buildUpon().authority(alias).build()
-            Diagnostics.event(
-                "alias.rewrite",
-                mapOf("host" to originalHost, "to" to alias, "path" to (request.url.path ?: "").take(60)),
-            )
-            rewritten
-        } else {
-            request.url
-        }
-
-        val host = effectiveUrl.host ?: originalHost
-        val url = effectiveUrl.toString()
+        val url = request.url.toString()
 
         // 登录 POST 完全放行：交给 JS 劫持（postLogin）走原生 ECH POST + 渲染结果
         if (method == "POST" && url.contains("/users/login")) {
