@@ -186,7 +186,23 @@ object CoWebViewHelper {
             }
         }
 
-        // fail-closed：宁可这个请求失败，也不以明文 SNI 直连
+        // ★ fail-closed 只对**受保护域名**生效。
+        //
+        // 以前这里对任何 host 失败都返回「ECH 连接失败」502 HTML —— 后果是：
+        // 第三方 JS/CSS/图床连不上时，浏览器拿到一段「声称是 document 的 HTML」去当 JS 执行，
+        // 页面脚本直接崩，上层表现成「登录坏了 / 页面功能失灵」，而真实原因只是某个无关域名连不上。
+        // **那是把无关故障归因给 ECH。**
+        //
+        // 非保护域失败就如实返回 null，让 WebView 按正常语义处理（它自己的错误页/重试）。
+        if (!EchHosts.isProtected(host)) {
+            Diagnostics.event(
+                "webview_fail_passthrough",
+                mapOf("host" to host, "err" to lastError.take(120), "note" to "非保护域，交回 WebView 处理"),
+            )
+            return null
+        }
+
+        // 受保护域名：fail-closed —— 宁可这个请求失败，也不以明文 SNI 直连
         Diagnostics.event("ech_fail_webview", mapOf("host" to host, "err" to lastError.take(120)))
         val page = "<!DOCTYPE html><html><body><h3>ECH 连接失败（fail-closed）</h3><p>${lastError.replace("<", "&lt;")}</p></body></html>"
         return WebResourceResponse(

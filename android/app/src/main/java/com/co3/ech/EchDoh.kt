@@ -54,6 +54,15 @@ object EchDoh {
     private const val GATEWAY_POOL_TTL_MS = 30 * 60 * 1000L
     private const val GATEWAY_IP_TTL_MS = 30 * 60 * 1000L
 
+    /** Cloudflare 的 ASN。用它判定「这个域名在不在 CF 上」，见 isCloudflareHost。 */
+    private const val CLOUDFLARE_ASN = 13335
+
+    /** IP → 是否属于 Cloudflare。按地址缓存，避免每个新连接都查一次 ASN。 */
+    private val asnCache = ConcurrentHashMap<String, Boolean>()
+
+    /** 域名 → 是否解析到 CF 段。按域名缓存，避免每次 H3 尝试都重新判定。 */
+    private val cfHostCache = ConcurrentHashMap<String, Boolean>()
+
     /**
      * 网关地址的**末位后备**（正常情况下用不到）。
      *
@@ -912,9 +921,78 @@ object EchDoh {
 
     // ---------------- 底层 JSON 查询（仅用于 HTTPS(65) 记录） ----------------
 
+    /**
+     * 该 IP 是否属于 Cloudflare（**AS13335**）。
+     *
+     * 为什么用 ASN 而不是官方 IP 段表：段表要手工维护、而且**会漏** ——
+     * 新增段、以及 CF「中国网络」的国内段都不在 `ips-v4` 里，漏判会让本该受保护的
+     * 域名退回明文。ASN 归属由 IRRd 权威数据决定，一次查询覆盖它的全部段。
+     * 实测：CF 站点（cloudflare-ech.com / bgm.tv / hanime1.me / javchu.com）全是 13335，
+     * 而 CDN77 是 60068、站方自建 VPS 是 30058、**Google 是 15169**。
+     *
+     * 查询走 Team Cymru 的 DNS 反查（纯 DNS，与我们自己的网关 DoH 同一条路，
+     * 手机上不需要任何额外依赖）：
+     *
+     *     <反转 IP>.origin.asn.cymru.com   TXT
+     *     → "13335 | 104.26.0.0/20 | US | arin | 2014-03-28"
+     *
+     * IPv6 不参与判定（Cymru 的 v6 反查是另一套 nibble 形式），由调用方只看 IPv4。
+     */
+    private fun isCloudflareIp(ip: InetAddress): Boolean {
+        if (ip.address.size != 4) return false
+        val addr = ip.hostAddress ?: return false
+        asnCache[addr]?.let { return it }
+        val rev = addr.split(".").reversed().joinToString(".") + ".origin.asn.cymru.com"
+        val body = try {
+            query(rev, "TXT")
+        } catch (t: Throwable) {
+            null
+        }
+        val asn = body?.let {
+            Regex("""(\d{2,6})\s*\|""").find(it)?.groupValues?.get(1)?.toIntOrNull()
+        }
+        // 查不到（网络或服务异常）时按「是 CF」处理：宁可白试一次，也不能误伤受保护域名
+        if (asn == null) return true
+        val cf = asn == CLOUDFLARE_ASN
+        asnCache[addr] = cf
+        return cf
+    }
+
+    /**
+     * 该域名是否解析到 Cloudflare 边缘段 —— **决定要不要给它试 ECH / H3**。
+     *
+     * ⚠️ 解析失败时**返回 true（不拦）**：宁可白试一次，也不能因为一次解析失败
+     * 就让本该受保护的域名退回明文 —— 核心域名是 fail-closed 的，误判等于断网。
+     *
+     * 用户定调：「不在 cloudflare 的不用试了，提前判定好，不用每次都要尝试」。
+     * 这条必须真的判断域名 —— 只看「上次失败过吗」的负缓存判断不了这件事。
+     */
+    fun isCloudflareHost(host: String): Boolean {
+        cfHostCache[host]?.let { return it }
+        val addrs = try {
+            resolve(host)
+        } catch (t: Throwable) {
+            emptyList()
+        }
+        if (addrs.isEmpty()) return true
+        // 只看 IPv4 的归属：域名只要有一个 IPv4 判为 CF 就算 CF。
+        // 只有 IPv6 的域名（罕见）不拦 —— 宁可白试一次，不能误伤。
+        val v4 = addrs.filter { it.address.size == 4 }
+        val cf = if (v4.isEmpty()) true else v4.any { isCloudflareIp(it) }
+        cfHostCache[host] = cf
+        Diagnostics.trace(
+            if (cf) "cf.host.yes" else "cf.host.no",
+            mapOf("host" to host, "v4" to v4.size.toString()),
+        )
+        return cf
+    }
+
     private fun query(host: String, type: String): String? {
+        // ⚠️ 必须走**当前生效的网关**，不能用写死的 DOH_URL ——
+        // 网关池是远程 TXT 可调的，写死意味着换了网关这里还打旧地址（或打到一个被停用的端点）。
+        val base = currentGateway()?.url ?: DOH_URL
         val req = Request.Builder()
-            .url("$DOH_URL?name=$host&type=$type")
+            .url("$base?name=$host&type=$type")
             .header("Accept", "application/dns-json")
             .build()
         bootstrapClient.newCall(req).execute().use { resp ->

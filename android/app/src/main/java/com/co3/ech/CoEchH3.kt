@@ -61,11 +61,23 @@ object CoEchH3 {
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(H3_STATE_PREFS, Context.MODE_PRIVATE)
 
-    /** 是否该先试 H3：只要没被负缓存拦下就算可用（不写死白名单）。 */
+    /**
+     * 这个域名要不要试 H3。
+     *
+     * ⚠️ 必须真的判断域名 —— 原来只看「上次失败过吗」的负缓存是**不够**的：
+     * 一个从没见过的非 CF 域名（例如 ajax.googleapis.com）会直接放行去试 H3+ECH，
+     * 而它既没有 ECH 记录也不支持 H3，试一次只是白等几十秒。
+     *
+     * 用户定调：「不在 cloudflare 的不用试了，提前判定好，不用每次都要尝试」。
+     * 判定走 ASN（AS13335，Team Cymru TXT 反查），见 EchDoh.isCloudflareHost。
+     */
     fun shouldTryH3(host: String): Boolean {
         val context = ctx() ?: return false
         val until = runCatching { prefs(context).getLong("bad:$host", 0L) }.getOrDefault(0L)
-        return System.currentTimeMillis() >= until
+        if (System.currentTimeMillis() < until) return false
+        // 不在 Cloudflare 上 → 不可能有 ECH、也不支持 H3，直接不试。
+        // 判定失败时 isCloudflareHost 返回 true（宁可白试一次，不误伤受保护域名）。
+        return runCatching { EchDoh.isCloudflareHost(host) }.getOrDefault(true)
     }
 
     private fun rememberH3(context: Context, host: String, ok: Boolean, why: String = "") {
