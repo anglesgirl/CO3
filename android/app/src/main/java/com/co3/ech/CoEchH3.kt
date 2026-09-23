@@ -64,20 +64,22 @@ object CoEchH3 {
     /**
      * 这个域名要不要试 H3。
      *
-     * ⚠️ 必须真的判断域名 —— 原来只看「上次失败过吗」的负缓存是**不够**的：
-     * 一个从没见过的非 CF 域名（例如 ajax.googleapis.com）会直接放行去试 H3+ECH，
-     * 而它既没有 ECH 记录也不支持 H3，试一次只是白等几十秒。
+     * ⚠️ **H3 与 ECH 是两件事，判据必须分开。**
+     * ECH 需要目标域有 `ech=` 记录（没有就只能借 CF 的），所以 ECH 用「在不在 Cloudflare」判；
+     * 但 H3 是 QUIC/HTTP3，**跟 Cloudflare 毫无关系** —— 谷歌不支持 ECH、也没有 HTTPS 记录，
+     * 却明确宣告支持 H3（实测 `alt-svc: h3=":443"; ma=2592000`）。
+     * 曾经拿 isCloudflareHost 来挡 H3，等于把「能走 H3 的非 CF 域名」也一起挡掉，那是错的。
      *
-     * 用户定调：「不在 cloudflare 的不用试了，提前判定好，不用每次都要尝试」。
-     * 判定走 ASN（AS13335，Team Cymru TXT 反查），见 EchDoh.isCloudflareHost。
+     * 现在的判据：
+     *   ① 负缓存：该域名近期 H3 失败过 → 不试（省时间）
+     *   ② HTTPS(65) 记录的 alpn：明说含 h3 → 试；明说不含 → 不试
+     *   ③ 没有 HTTPS 记录 / 查不到 → **照样试**（用户定调：默认所有域名都先试 H3）
      */
     fun shouldTryH3(host: String): Boolean {
         val context = ctx() ?: return false
         val until = runCatching { prefs(context).getLong("bad:$host", 0L) }.getOrDefault(0L)
         if (System.currentTimeMillis() < until) return false
-        // 不在 Cloudflare 上 → 不可能有 ECH、也不支持 H3，直接不试。
-        // 判定失败时 isCloudflareHost 返回 true（宁可白试一次，不误伤受保护域名）。
-        return runCatching { EchDoh.isCloudflareHost(host) }.getOrDefault(true)
+        return runCatching { EchDoh.hostAdvertisesH3(host) }.getOrNull() ?: true
     }
 
     private fun rememberH3(context: Context, host: String, ok: Boolean, why: String = "") {
@@ -156,7 +158,16 @@ object CoEchH3 {
 
         val ip = runCatching { EchDoh.resolve(host).firstOrNull()?.hostAddress }.getOrNull()
             ?: run { rememberH3(context, host, false, "DoH 未解析出 IP"); return null }
-        val ech = runCatching { EchDoh.echConfigList(host) }.getOrNull()
+        // ★ ECH 与 H3 解耦：
+        //   受保护域名（有 ech= 记录 / 走 CF 借用的）→ H3 + ECH 一起用；
+        //   其它支持 H3 的域名（例如谷歌）→ **H3 但不带 ECH**。
+        //   以前这里对任意 host 都取 ECH 配置，会拿 cloudflare-ech.com 的配置
+        //   去和压根不支持 ECH 的服务器握手（日志里 ech.fetch.ok host=ajax.googleapis.com 就是它）。
+        val ech = if (EchHosts.isProtected(host)) {
+            runCatching { EchDoh.echConfigList(host) }.getOrNull()
+        } else {
+            null
+        }
         val pathWithQuery = buildString {
             append(uri.rawPath ?: "/")
             uri.rawQuery?.let { append('?').append(it) }
