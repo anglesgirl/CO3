@@ -201,6 +201,7 @@ object EchDoh {
 
     /** 用国内种子 DoH 读配置域名的 TXT → 网关池。 */
     private fun fetchGatewayPool(): List<GatewaySpec> {
+        val started = System.currentTimeMillis()
         for (ip in ECH_DOH_IPS.shuffled()) {
             val wire = dohWire(ip, CONFIG_TXT_DOMAIN, 16) ?: continue
             val specs = parseTxt(wire).flatMap { extractGatewaySpecs(it) }
@@ -211,6 +212,7 @@ object EchDoh {
                     mapOf(
                         "via" to ip, "n" to specs.size,
                         "selfIp" to specs.count { it.ips.isNotEmpty() },
+                        "ms" to (System.currentTimeMillis() - started),
                         "urls" to specs.joinToString(",") { it.url },
                     )
                 )
@@ -230,6 +232,7 @@ object EchDoh {
      * 这样用户写「一行一个」「逗号分隔」「带 key=」都能用。
      */
     private fun fetchPreferredIps(): List<String> {
+        val started = System.currentTimeMillis()
         for (ip in ECH_DOH_IPS.shuffled()) {
             val wire = dohWire(ip, CONFIG_IP_DOMAIN, 16) ?: continue
             val found = parseTxt(wire)
@@ -240,7 +243,7 @@ object EchDoh {
             if (found.isNotEmpty()) {
                 Diagnostics.trace(
                     "doh.prefip.ok",
-                    mapOf("via" to ip, "n" to found.size, "ips" to found.joinToString(","))
+                    mapOf("via" to ip, "n" to found.size, "ms" to (System.currentTimeMillis() - started), "ips" to found.joinToString(","))
                 )
                 return found
             }
@@ -278,6 +281,19 @@ object EchDoh {
 
     @Volatile private var gatewayCache: Pair<Gateway, Long>? = null
 
+    /** 网关选择 single-flight：预热、文章请求、重试只能共用一次初始化。 */
+    private val gatewayInitLock = Any()
+
+    /** 目标域名解析结果缓存；避免同一启动周期重复查询同一个受保护域名。 */
+    private data class AddressEntry(val addresses: List<InetAddress>, val expireAt: Long)
+    private val addressCache = ConcurrentHashMap<String, AddressEntry>()
+    /** 单航班任务结果；用于合并并发的同 host DNS 查询，互不相关的 host 可并行。 */
+    private val addressFlights = ConcurrentHashMap<String, java.util.concurrent.CompletableFuture<List<InetAddress>>>()
+    private const val ADDRESS_CACHE_TTL_MS = 60_000L
+
+    /** ECH 获取 single-flight：并发请求共享同一份实时配置。 */
+    private val echFetchLock = Any()
+
     /**
      * 从网关池里挑第一个**能解析出地址**的端点。
      *
@@ -286,6 +302,15 @@ object EchDoh {
     private fun currentGateway(): Gateway? {
         val now = System.currentTimeMillis()
         gatewayCache?.let { (g, exp) -> if (exp > now) return g }
+        synchronized(gatewayInitLock) {
+            val lockedNow = System.currentTimeMillis()
+            gatewayCache?.let { (g, exp) -> if (exp > lockedNow) return g }
+            return selectGatewayLocked(lockedNow)
+        }
+    }
+
+    /** 只允许 currentGateway 在 single-flight 锁内调用。 */
+    private fun selectGatewayLocked(now: Long): Gateway? {
         for (spec in gatewayPool()) {
             val host = runCatching { spec.url.toHttpUrl().host }.getOrNull() ?: continue
             // ★ TXT 自带 IP（`URL|IP|IP`）时**直接用它，不做解析** ——
@@ -319,80 +344,10 @@ object EchDoh {
             }
             val g = Gateway(spec.url, host, ips)
             gatewayCache = g to (now + GATEWAY_IP_TTL_MS)
-            Diagnostics.trace("doh.gateway.ok", mapOf("url" to spec.url, "ips" to ips.joinToString(",")))
-            // 诊断：异步把「连网关」拆成 TCP / DoH 两步分别记录（不改行为）
-            runCatching { probeGateway(g) }
+            Diagnostics.trace("doh.gateway.ok", mapOf("url" to spec.url, "ips" to ips.joinToString(","), "ms" to (System.currentTimeMillis() - now)))
             return g
         }
         return null
-    }
-
-    /**
-     * 【诊断专用，不改行为】把「连网关」这件事拆成两步分别测。
-     *
-     * 起因：同一个网关，浏览器能开、App 卡十几秒 —— 说明问题在客户端这条链上，
-     * 而只靠猜参数已经试错太多次。这里把链路切开，失败时能直接看出是哪一步：
-     *   ① probe.tcp   —— TCP 能否连上某个候选 IP（连不上就是链路层）
-     *   ② probe.doh   —— 用同一个 IP 真的发一次 DoH 查询（连得上但查不通就是协议/配置层）
-     * 若 ①② 都成功、而 DnsOverHttps 仍然失败，就能定位到 OkHttp 那层封装。
-     *
-     * 异步执行，不阻塞启动；结果只进 trace。
-     */
-    private fun probeGateway(gw: Gateway) {
-        Thread {
-            val b64 = android.util.Base64.encodeToString(
-                buildQuery(LIVE_SOURCE_HOST, 1),
-                android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE,
-            ).trimEnd('=')
-            for (ip in gw.ips) {
-                // ① TCP
-                val t0 = System.currentTimeMillis()
-                val tcpOk = runCatching {
-                    java.net.Socket().use { s -> s.connect(java.net.InetSocketAddress(ip, 443), 4000) }
-                    true
-                }.getOrDefault(false)
-                Diagnostics.trace(
-                    "probe.tcp",
-                    mapOf("ip" to ip, "ok" to tcpOk, "ms" to (System.currentTimeMillis() - t0))
-                )
-                if (!tcpOk) continue
-
-                // ② 用这个 IP 真的发一次 DoH（SNI/Host 仍是网关域名，靠 dns 覆盖强制走该 IP）
-                val t1 = System.currentTimeMillis()
-                val line = runCatching {
-                    val c = OkHttpClient.Builder()
-                        .proxy(java.net.Proxy.NO_PROXY)
-                        .retryOnConnectionFailure(false)
-                        .connectTimeout(4, TimeUnit.SECONDS)
-                        .readTimeout(4, TimeUnit.SECONDS)
-                        .callTimeout(12, TimeUnit.SECONDS)
-                        .dns(object : Dns {
-                            override fun lookup(hostname: String): List<InetAddress> =
-                                listOf(InetAddress.getByName(ip))
-                        })
-                        .build()
-                    c.newCall(
-                        okhttp3.Request.Builder()
-                            .url("https://${gw.host}/dns-query?dns=$b64")
-                            .header("accept", "application/dns-message")
-                            .build()
-                    ).execute().use { r ->
-                        mapOf(
-                            "ip" to ip, "code" to r.code,
-                            "bytes" to (r.body?.contentLength() ?: -1L),
-                            "ms" to (System.currentTimeMillis() - t1),
-                        )
-                    }
-                }.getOrElse { e ->
-                    mapOf(
-                        "ip" to ip,
-                        "err" to "${e.javaClass.simpleName}: ${e.message}",
-                        "ms" to (System.currentTimeMillis() - t1),
-                    )
-                }
-                Diagnostics.trace("probe.doh", line)
-            }
-        }.apply { isDaemon = true }.start()
     }
 
     /** 网关不可达时调用：丢缓存，下次重新读 TXT 并重新解析（网关可能已换）。 */
@@ -400,6 +355,7 @@ object EchDoh {
         gatewayCache = null
         poolCache = null
         resolverCache = null
+        addressCache.clear()
     }
 
     /**
@@ -737,6 +693,12 @@ object EchDoh {
      * @return null 表示该域名没有 ECH 配置或 DoH 拿不到 —— 调用方据此 fail-closed
      */
     fun echConfigList(host: String): ByteArray? {
+        synchronized(echFetchLock) {
+            return echConfigListLocked(host)
+        }
+    }
+
+    private fun echConfigListLocked(host: String): ByteArray? {
         val now = System.currentTimeMillis()
         echCache[host]?.let {
             if (it.expireAt > now) {
@@ -881,6 +843,41 @@ object EchDoh {
      * 且同一次应答里 echBytes=0。拿它去握手比慢一点糟得多。
      */
     fun resolve(host: String): List<InetAddress> {
+        val startedAt = System.currentTimeMillis()
+        val key = host.lowercase()
+        val now = startedAt
+        addressCache[key]?.let { if (it.expireAt > now) return it.addresses }
+        val flight = java.util.concurrent.CompletableFuture<List<InetAddress>>()
+        val active = addressFlights.putIfAbsent(key, flight)
+        if (active != null) {
+            val addresses = runCatching { active.get(15, TimeUnit.SECONDS) }.getOrDefault(emptyList())
+            Diagnostics.trace("net.resolve.shared", mapOf("host" to host, "n" to addresses.size, "ms" to (System.currentTimeMillis() - startedAt)))
+            return addresses
+        }
+        try {
+            val lockedNow = System.currentTimeMillis()
+            addressCache[key]?.let {
+                if (it.expireAt > lockedNow) {
+                    flight.complete(it.addresses)
+                    return it.addresses
+                }
+            }
+            val addresses = resolveUncached(host)
+            if (addresses.isNotEmpty()) {
+                addressCache[key] = AddressEntry(addresses, System.currentTimeMillis() + ADDRESS_CACHE_TTL_MS)
+            }
+            flight.complete(addresses)
+            return addresses
+        } catch (t: Throwable) {
+            flight.completeExceptionally(t)
+            throw t
+        } finally {
+            addressFlights.remove(key, flight)
+        }
+    }
+
+    private fun resolveUncached(host: String): List<InetAddress> {
+        val startedAt = System.currentTimeMillis()
         // ⚠️ 这里**不再**用国内 DoH 的 HTTPS 地址提示抄近路 —— 实测那是投毒地址。
         //
         // 2026-09-22 真机日志（14:20 那次）抓到确证：
@@ -907,6 +904,7 @@ object EchDoh {
             Diagnostics.trace(
                 "net.resolve.gateway",
                 mapOf("host" to host, "n" to addrs.size,
+                      "ms" to (System.currentTimeMillis() - startedAt),
                       "ips" to addrs.joinToString(",") { it.hostAddress ?: "?" })
             )
             addrs
