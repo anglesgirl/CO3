@@ -60,8 +60,7 @@ function isCFChallenge(html) {
 
 const cloudflareErrorCodes = [
   403, //Unauthorized
-  525, //Supposed to be an SSL error but CF uses it to block automated request sometimes
-  418, //Don't ask me why, I did have an encounter with CF and this error code using tor exit nodes
+  418, //Don't ask me why I did have an encounter with CF and this error code using tor exit nodes
   520, //CF specific, "Unknown error"
   522, //CF specific, "Connection Timed Out"
   503, //Used for CF challenges

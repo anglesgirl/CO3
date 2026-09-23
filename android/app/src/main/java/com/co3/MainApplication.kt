@@ -87,41 +87,11 @@ class MainApplication : Application(), ReactApplication {
         )
       )
     }
-    Thread {
-      runCatching {
-        val t0 = System.currentTimeMillis()
-        val ip = com.co3.ech.EchDoh.resolve(com.co3.ech.EchDoh.WARMUP_HOST)
-          .firstOrNull()?.hostAddress
-        android.util.Log.i("CO-ECH", "warmup resolve ok: $ip")
-        com.co3.Diagnostics.trace(
-          "boot.prewarm.dns",
-          mapOf(
-            "ok" to (ip != null), "ip" to (ip ?: "-"),
-            "ms" to (System.currentTimeMillis() - t0)
-          )
-        )
-
-        val t1 = System.currentTimeMillis()
-        val cfg = com.co3.ech.EchDoh.echConfigList(com.co3.ech.EchDoh.WARMUP_HOST)
-        android.util.Log.i("CO-ECH", "warmup ech ok: ${cfg?.size} bytes")
-        com.co3.Diagnostics.trace(
-          "boot.prewarm.ech",
-          mapOf(
-            "ok" to (cfg != null), "bytes" to (cfg?.size ?: 0),
-            "ms" to (System.currentTimeMillis() - t1)
-          )
-        )
-      }.onFailure {
-        android.util.Log.w("CO-ECH", "warmup failed: ${it.message}")
-        com.co3.Diagnostics.trace(
-          "boot.prewarm.fail",
-          mapOf("err" to "${it.javaClass.simpleName}: ${it.message}")
-        )
-      }
-      // 预热完立刻把启动这批日志送出去 —— 冷启动那几步恰恰是最需要看清的，
-      // 不能等"攒够 20 条或 4 秒"，否则用户复现一次问题却什么都没留下。
-      com.co3.Diagnostics.flushAsync()
-    }.start()
+    // 不在冷启动阶段主动访问网关或解析 AO3。
+    // 之前的后台预热会触发 5～11 秒的网关校验/目标 DoH，占用同一网络资源，
+    // 用户随后点击文章时反而与它争用连接；ECH/IP 已有按需 single-flight 和落盘缓存。
+    com.co3.Diagnostics.trace("boot.prewarm.skip", mapOf("reason" to "按需单航班，避免冷启动争用"))
+    com.co3.Diagnostics.flushAsync()
 
     // 【再兜一道】上面那条只保证"不会因为提前加载 native 而跳过 loadReactNative"。
     // 真机仍在冷启动时偶发同一个崩溃，栈顶是 Fabric 的**预分配**路径：
