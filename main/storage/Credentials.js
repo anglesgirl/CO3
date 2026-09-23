@@ -247,6 +247,14 @@ export async function getPseud() {
   }
 }
 
+export async function deletePseudOnly() {
+  try {
+    await Keychain.resetGenericPassword({ service: 'pseud_only' });
+  } catch (error) {
+    console.error('Failed to delete pseud:', error);
+  }
+}
+
 export async function hasStoredPassword() {
   try {
     const creds = await Keychain.getGenericPassword({ service: 'username_only' });

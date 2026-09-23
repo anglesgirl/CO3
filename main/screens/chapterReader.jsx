@@ -866,23 +866,39 @@ const ChapterReader = ({
         return out;
       }
       function retry(img) {
-        if (!img.getAttribute('data-co3-orig')) {
-          img.setAttribute('data-co3-orig', img.getAttribute('src') || img.src || '');
-        }
-        var orig = img.getAttribute('data-co3-orig');
+        var orig = img.__co3OriginalSrc || img.getAttribute('data-co3-orig') || img.getAttribute('src') || img.src || '';
         if (!orig) return;
+        if (!img.__co3OriginalSrc) img.__co3OriginalSrc = orig;
+        var current = img.getAttribute('src') || '';
+        // 图片站点可能会自行在 src 与 data-src 间切换；只在当前仍是原地址时代理。
+        if (current.indexOf('wsrv.nl/') >= 0) return;
         var cands = proxyChain(orig);
         var tried = img.__co3Tried || 0;
-        if (tried >= cands.length) return;      // 代理链已试尽，放弃（显示坏图）
+        if (tried >= cands.length) return;
         img.__co3Tried = tried + 1;
-        img.src = cands[tried];
+        img.__co3ProxyUrl = cands[tried];
+        img.src = img.__co3ProxyUrl;
       }
       function hook(img) {
-        if (!img || img.__co3Proxy) return;
+        if (!img) return;
+        if (!img.__co3OriginalSrc) {
+          img.__co3OriginalSrc = img.getAttribute('data-co3-orig') || img.getAttribute('src') || img.getAttribute('data-src') || img.src || '';
+        }
+        if (img.__co3Proxy) return;
         img.__co3Proxy = 1;
         img.__co3Tried = 0;
-        img.addEventListener('error', function () { retry(img); });
-        // 注入可能晚于图片失败 —— error 事件已经错过，用 complete 且 naturalWidth=0 补判
+        img.addEventListener('error', function () {
+          if (img.__co3ProxyUrl && (img.getAttribute('src') || '').indexOf('wsrv.nl/') >= 0) {
+            webViewLog('image_proxy_fail host=' + (new URL(img.__co3ProxyUrl)).hostname);
+            return;
+          }
+          retry(img);
+        });
+        img.addEventListener('load', function () {
+          if (img.__co3ProxyUrl && (img.getAttribute('src') || '').indexOf('wsrv.nl/') >= 0) {
+            webViewLog('image_proxy_ok host=wsrv.nl');
+          }
+        });
         if (img.complete && img.naturalWidth === 0) retry(img);
       }
       var list = document.querySelectorAll('img');
@@ -901,7 +917,7 @@ const ChapterReader = ({
               }
             }
           }
-        }).observe(document.body, { childList: true, subtree: true });
+        }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'srcset', 'data-src', 'data-original'] });
       } catch (e) {}
     })();
 

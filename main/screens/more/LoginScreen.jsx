@@ -16,19 +16,20 @@ import login from '../../web/account/login';
 import {
   deleteCredsPasswd,
   deleteCredsToken,
+  deletePseudOnly,
   getCredsPasswd,
   getUsername,
   hasUserCredentials,
   setCredsPasswd,
   setCredsToken,
   setLastLogin,
-  setUsernameOnly,
 } from '../../storage/Credentials';
 import CustomAlert from '../../components/CustomAlert';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppContext } from '../../app';
+import { clearIdentityCache, fetchAccountIdentity } from '../../web/account/accountIdentity';
 
 const LoginScreen = ({ route }) => {
   const { currentTheme } = useContext(AppContext);
@@ -141,15 +142,17 @@ const LoginScreen = ({ route }) => {
       const sessionToken = await login(username, password);
 
       if (sessionToken) {
+        clearIdentityCache();
         await setCredsToken(sessionToken);
 
         if (rememberPassword) {
           await setCredsPasswd(username, password);
         } else {
           await deleteCredsPasswd();
-          await setUsernameOnly(username);
         }
 
+        const identity = await fetchAccountIdentity(true);
+        if (identity?.username) setUsername(identity.username);
         setIsLoggedIn(true);
         await setLastLogin();
         showAlert(t('general_success'), t('screen_account_login_success'));
@@ -174,7 +177,8 @@ const LoginScreen = ({ route }) => {
     try {
       await deleteCredsToken();
       await deleteCredsPasswd();
-
+      await deletePseudOnly();
+      clearIdentityCache();
       setIsLoggedIn(false);
       setUsername('');
       setPassword('');

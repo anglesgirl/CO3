@@ -16,9 +16,10 @@ import { AppContext } from '../../app';
 import {
   deleteCredsToken,
   deleteCredsPasswd,
+  deletePseudOnly,
   hasUserCredentials,
 } from '../../storage/Credentials';
-import { getRealUsername, fetchAccountIdentity } from '../../web/account/accountIdentity';
+import { getRealUsername, fetchAccountIdentity, clearIdentityCache } from '../../web/account/accountIdentity';
 import { queryInviteQueue } from '../../web/account/inviteQueue';
 import { requestPasswordReset } from '../../web/account/passwordReset';
 import { fetchRegisterForm, submitRegister, activateByLink, AO3 } from '../../web/account/inviteFlow';
@@ -409,6 +410,8 @@ export default function AccountCenter() {
                     onPress: async () => {
                       await deleteCredsToken().catch(() => {});
                       await deleteCredsPasswd().catch(() => {});
+                      await deletePseudOnly().catch(() => {});
+                      clearIdentityCache();
                       setLogged(false);
                       setUser('');
                       refresh();
