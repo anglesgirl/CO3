@@ -266,7 +266,6 @@ object EchDoh {
         return DOH_URLS.map { GatewaySpec(it, emptyList()) }.shuffled()
     }
     @Volatile private var gatewayCache: Pair<Gateway, Long>? = null
-    @Volatile private var gatewayCache: Pair<Gateway, Long>? = null
 
     /** 网关选择 single-flight：预热、文章请求、重试只能共用一次初始化。 */
     private val gatewayInitLock = Any()
@@ -289,13 +288,6 @@ object EchDoh {
     private fun currentGateway(): Gateway? {
         val url = DOH_URLS.shuffled().firstOrNull() ?: return null
         return Gateway(url, url.toHttpUrl().host, emptyList())
-        val now = System.currentTimeMillis()
-        gatewayCache?.let { (g, exp) -> if (exp > now) return g }
-        synchronized(gatewayInitLock) {
-            val lockedNow = System.currentTimeMillis()
-            gatewayCache?.let { (g, exp) -> if (exp > lockedNow) return g }
-            return selectGatewayLocked(lockedNow)
-        }
     }
 
     /** 只允许 currentGateway 在 single-flight 锁内调用。 */
@@ -840,15 +832,17 @@ object EchDoh {
      */
     fun resolve(host: String): List<InetAddress> {
         for (url in DOH_URLS.shuffled()) {
-            return runCatching {
-                val gwHost = url.toHttpUrl().host
+            val addrs = runCatching {
                 val req = Request.Builder().url(url + "?name=" + host + "&type=A").build()
                 bootstrapClient.newCall(req).execute().use { resp ->
-                    if (resp.isSuccessful) listOf(InetAddress.getByName(url.toHttpUrl().host)) else emptyList()
+                    if (!resp.isSuccessful) return@runCatching emptyList<String>()
+                    val wire = resp.body?.bytes() ?: ByteArray(0)
+                    parseAddresses(wire)
                 }
-            }.getOrNull() ?: emptyList()
+            }.getOrDefault(emptyList())
+            if (addrs.isNotEmpty()) return addrs.mapNotNull { runCatching { InetAddress.getByName(it) }.getOrNull() }.filterNotNull()
         }
-        return emptyList() // 全部失败，fail-closed 由上层处理
+        return emptyList()
     }
     private fun resolveUncached(host: String): List<InetAddress> {
         val startedAt = System.currentTimeMillis()

@@ -20,157 +20,29 @@ object CoWebViewHelper {
 
     fun intercept(request: WebResourceRequest): WebResourceResponse? {
         val host = request.url.host ?: return null
-        val method = request.method ?: "GET"
         val url = request.url.toString()
-
-        // 登录 POST 完全放行：交给 JS 劫持（postLogin）走原生 ECH POST + 渲染结果
-        if (method == "POST" && url.contains("/users/login")) {
-            Diagnostics.event("webview_login_post_passthrough", mapOf("url" to url.take(80)))
-            return null
-        }
-        // 所有 GET 统一走下方的 OkHttp + Conscrypt ECH；移除独立 H3/quiche 链路。
-        // WebView 的 POST body 取不到，因此 POST 只通过上面的登录 JS 桥处理。
-        if (method != "GET") return null
-
-        // 惰性确保：ready 为 false 时主动初始化一次（幂等、不抛异常）。
-        if (!ConscryptEch.ready && !ConscryptEch.install()) {
-            Diagnostics.event("webview_ech_not_ready", mapOf("host" to host))
-            return null
-        }
-
-        var lastError: String = "unknown"
-        repeat(2) { attempt ->
-            try {
-                var hasSession = false
-                try {
-                    val cmCookie = CookieManager.getInstance().getCookie(url)
-                    hasSession = cmCookie?.contains("_otwarchive_session") == true
-                    Diagnostics.event(
-                        "webview_cookie_send",
-                        mapOf("host" to host, "hasSession" to hasSession.toString(), "len" to (cmCookie?.length ?: 0).toString()),
-                    )
-                } catch (e: Exception) {
-                    Diagnostics.event("webview_cookie_err", mapOf("host" to host, "err" to (e.message ?: "")))
-                }
-
-                val builder = Request.Builder().url(url).get()
-                request.requestHeaders.forEach { (k, v) ->
-                    // Cookie 交给 cookieJar 统一注入；Host/Content-Length 由 OkHttp 自己管
-                    if (k.equals("Host", true) || k.equals("Content-Length", true)) return@forEach
-                    if (k.equals("Cookie", true)) return@forEach
-                    try {
-                        builder.header(k, v)
-                    } catch (_: Exception) {
-                    }
-                }
-
-                EchHttp.client.newCall(builder.build()).execute().use { resp ->
-                    val bodyBytes = resp.body?.bytes() ?: ByteArray(0)
-                    val contentType = resp.header("Content-Type") ?: "text/html"
-                    var mimeType = "text/html"
-                    var encoding = "utf-8"
-                    contentType.split(";").forEachIndexed { idx, part ->
-                        if (idx == 0) mimeType = part.trim().ifEmpty { "text/html" }
-                        else if (part.trim().startsWith("charset=", true)) {
-                            encoding = part.trim().substringAfter("=").trim()
-                        }
-                    }
-
-                    val responseHeaders = LinkedHashMap<String, String>()
-                    for (name in resp.headers.names()) {
-                        responseHeaders[name] = resp.headers.get(name) ?: ""
-                    }
-
-                    // Set-Cookie 诊断（值脱敏只记特征）+ 兼容旧行为的属性改写，确保 WebView 能收下 user_credentials
-                    try {
-                        val cm = CookieManager.getInstance()
-                        var sessionCount = 0
-                        for (raw in resp.headers.values("Set-Cookie")) {
-                            var fixed = raw
-                            fixed = fixed.replace(Regex(";\\s*Domain=[^;]+", RegexOption.IGNORE_CASE), "")
-                            fixed = fixed.replace(Regex(";\\s*Secure", RegexOption.IGNORE_CASE), "")
-                            fixed = fixed.replace(Regex(";\\s*SameSite=[^;]+", RegexOption.IGNORE_CASE), "; SameSite=Lax")
-                            cm.setCookie(url, fixed)
-                            try {
-                                cm.setCookie("https://archiveofourown.org/", fixed)
-                            } catch (_: Exception) {
-                            }
-                            if (raw.contains("_otwarchive_session")) {
-                                sessionCount++
-                                Diagnostics.event("webview_cookie_recv_session", mapOf("host" to host))
-                            }
-                            if (raw.contains("user_credentials")) {
-                                Diagnostics.event("webview_cookie_recv_creds", mapOf("host" to host))
-                            }
-                        }
-                        cm.flush()
-                        if (sessionCount > 0) {
-                            Diagnostics.event("webview_cookie_recv", mapOf("host" to host, "sessionCount" to sessionCount.toString()))
-                        }
-                    } catch (e: Exception) {
-                        Diagnostics.event("webview_cookie_recv_err", mapOf("host" to host, "err" to (e.message ?: "")))
-                    }
-
-                    val redirected = if (resp.priorResponse != null) "yes" else "no"
-                    Diagnostics.event(
-                        "webview_ok",
-                        mapOf(
-                            "host" to host,
-                            "code" to resp.code.toString(),
-                            "len" to bodyBytes.size.toString(),
-                            "redirected" to redirected,
-                            "hasSession" to hasSession.toString(),
-                        ),
-                    )
-                    return WebResourceResponse(
-                        mimeType,
-                        encoding,
-                        resp.code,
-                        resp.message.ifEmpty { "OK" },
-                        responseHeaders,
-                        ByteArrayInputStream(bodyBytes),
-                    )
-                }
-            } catch (e: Exception) {
-                lastError = e.message ?: e.javaClass.simpleName
-                Diagnostics.event("webview_fail", mapOf("host" to host, "attempt" to (attempt + 1).toString(), "err" to lastError.take(120)))
-                if (attempt == 0) {
-                    // ECH 配置可能是旧的：清一次缓存再试（EchRetryInterceptor 也做同样的事，这里是双保险）
-                    EchDoh.invalidateEch(host)
-                    try {
-                        Thread.sleep(300)
-                    } catch (_: Exception) {
-                    }
-                }
+        if (!ConscryptEch.ready && !ConscryptEch.install()) return null
+        try {
+            var builder = Request.Builder().url(url).get()
+            request.requestHeaders.forEach { (k, v) ->
+                if (k.equals("Host", true) || k.equals("Content-Length", true) || k.equals("Cookie", true)) return@forEach
+                try { builder.header(k, v) } catch (_: Exception) {}
             }
-        }
-
-        // ★ fail-closed 只对**受保护域名**生效。
-        //
-        // 以前这里对任何 host 失败都返回「ECH 连接失败」502 HTML —— 后果是：
-        // 第三方 JS/CSS/图床连不上时，浏览器拿到一段「声称是 document 的 HTML」去当 JS 执行，
-        // 页面脚本直接崩，上层表现成「登录坏了 / 页面功能失灵」，而真实原因只是某个无关域名连不上。
-        // **那是把无关故障归因给 ECH。**
-        //
-        // 非保护域失败就如实返回 null，让 WebView 按正常语义处理（它自己的错误页/重试）。
-        if (!EchHosts.isProtected(host)) {
-            Diagnostics.event(
-                "webview_fail_passthrough",
-                mapOf("host" to host, "err" to lastError.take(120), "note" to "非保护域，交回 WebView 处理"),
+            EchHttp.client.newCall(builder.build()).execute().use { resp ->
+                val body = resp.body?.bytes() ?: ByteArray(0)
+                return WebResourceResponse(
+                    resp.header("Content-Type")?.split(";")?.firstOrNull()?.trim() ?: "text/html",
+                    "utf-8", resp.code, resp.message.ifEmpty { "OK" },
+                    resp.headers.toMultimap(), ByteArrayInputStream(body),
+                )
+            }
+        } catch (e: Exception) {
+            if (!EchHosts.isProtected(host)) return null
+            return WebResourceResponse(
+                "text/html", "utf-8", 502, "Bad Gateway",
+                mapOf("Cache-Control" to "no-store"),
+                ByteArrayInputStream("<!DOCTYPE html><html><body><h3>ECH 失败</h3><p>${(e.message?:"").replace("<","&lt;")}</p></body></html>".toByteArray()),
             )
-            return null
         }
-
-        // 受保护域名：fail-closed —— 宁可这个请求失败，也不以明文 SNI 直连
-        Diagnostics.event("ech_fail_webview", mapOf("host" to host, "err" to lastError.take(120)))
-        val page = "<!DOCTYPE html><html><body><h3>ECH 连接失败（fail-closed）</h3><p>${lastError.replace("<", "&lt;")}</p></body></html>"
-        return WebResourceResponse(
-            "text/html",
-            "utf-8",
-            502,
-            "Bad Gateway",
-            mapOf("Cache-Control" to "no-store"),
-            ByteArrayInputStream(page.toByteArray()),
-        )
     }
 }
