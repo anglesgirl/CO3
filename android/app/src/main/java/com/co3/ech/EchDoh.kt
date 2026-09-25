@@ -27,7 +27,13 @@ object EchDoh {
     private const val TAG = "CO-ECH-DOH"
 
     /** 云端 DoH 网关的**内置默认**；实际用哪个由网关池（TXT）决定。 */
-    const val DOH_URL = "https://82sew1c85i.cloudflare-gateway.com/dns-query"
+    val DOH_URLS = listOf(
+        "https://pieqllv9i7.cloudflare-gateway.com/dns-query",
+        "https://m2b4x7vw98.cloudflare-gateway.com/dns-query",
+        "https://dz1598pphb.cloudflare-gateway.com/dns-query",
+        "https://296ysnqe05.cloudflare-gateway.com/dns-query"
+    )
+    const val DOH_URL = "https://pieqllv9i7.cloudflare-gateway.com/dns-query" // 保留兼容
 
     /**
      * 配置域名：TXT 记录里发布**网关池**（一行一个 DoH 端点 URL）。
@@ -84,19 +90,12 @@ object EchDoh {
     )
 
     private val bootstrapClient: OkHttpClient = OkHttpClient.Builder()
-        // ⚠️ 禁用代理。默认的 proxySelector 是 ProxySelector.getDefault()（系统代理），
-        // 手机上只要装过代理/VPN 类 App 或 APN 里配了代理，DoH 请求就会走它 ——
-        // 而代理不通的表现是**卡死**，不是快速报错。bangumi-ech 显式禁用了两次，
-        // 这正是"同一个套路、不同 App 效果不一样"的差别之一。
         .proxy(java.net.Proxy.NO_PROXY)
-        // ⚠️ 关掉自动重试。OkHttp 默认 true 会静默重试，把一次超时放大成两倍 ——
-        // CO3 日志里那个 21.45 秒正是「8s 超时 × 重试」的形状；bangumi 关掉后 10s 就快速失败。
         .retryOnConnectionFailure(false)
         .connectTimeout(4, TimeUnit.SECONDS)
         .readTimeout(4, TimeUnit.SECONDS)
-        // ⚠️ 总时限兜底。DnsOverHttps 内部是 latch.await()（无超时参数），
-        // 没有 callTimeout 就可能无限等；bangumi 给了 15s。
         .callTimeout(12, TimeUnit.SECONDS)
+        .dns(DnsOverHttps.Builder().client(OkHttpClient()).url(DOH_URLS.first().toHttpUrl()).bootstrapDnsHosts(DOH_URLS.first()).includeIPv6(true).build())
         .build()
 
     /**
@@ -264,20 +263,9 @@ object EchDoh {
 
     /** 网关池（带 TTL 缓存）；TXT 读不到就用内置默认。 */
     private fun gatewayPool(): List<GatewaySpec> {
-        val now = System.currentTimeMillis()
-        poolCache?.let { (u, exp) -> if (exp > now && u.isNotEmpty()) return u }
-        val specs = fetchGatewayPool()
-        if (specs.isEmpty()) {
-            Diagnostics.trace("doh.pool.fallback", mapOf("url" to DOH_URL))
-            return listOf(GatewaySpec(DOH_URL, emptyList()))
-        }
-        poolCache = specs to (now + GATEWAY_POOL_TTL_MS)
-        return specs
+        return DOH_URLS.map { GatewaySpec(it, emptyList()) }.shuffled()
     }
-
-    /** 选定的网关：URL + 域名 + bootstrap 地址。 */
-    private class Gateway(val url: String, val host: String, val ips: List<String>)
-
+    @Volatile private var gatewayCache: Pair<Gateway, Long>? = null
     @Volatile private var gatewayCache: Pair<Gateway, Long>? = null
 
     /** 网关选择 single-flight：预热、文章请求、重试只能共用一次初始化。 */
@@ -299,6 +287,8 @@ object EchDoh {
      * 换网关只要改 TXT —— 池里哪个能用就用哪个；全都不行才回落内置默认。
      */
     private fun currentGateway(): Gateway? {
+        val url = DOH_URLS.shuffled().firstOrNull() ?: return null
+        return Gateway(url, url.toHttpUrl().host, emptyList())
         val now = System.currentTimeMillis()
         gatewayCache?.let { (g, exp) -> if (exp > now) return g }
         synchronized(gatewayInitLock) {
@@ -692,11 +682,18 @@ object EchDoh {
      * @return null 表示该域名没有 ECH 配置或 DoH 拿不到 —— 调用方据此 fail-closed
      */
     fun echConfigList(host: String): ByteArray? {
-        synchronized(echFetchLock) {
-            return echConfigListLocked(host)
+        for (url in DOH_URLS.shuffled()) {
+            val cfg = runCatching {
+                val req = Request.Builder().url(url + "?name=" + host + "&type=65").header("Accept", "application/dns-message").build()
+                bootstrapClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) return null
+                    resp.body?.bytes()
+                }
+            }.getOrNull()
+            if (cfg != null && cfg.isNotEmpty()) return cfg
         }
+        return null // 全部失败，fail-closed 由上层处理
     }
-
     private fun echConfigListLocked(host: String): ByteArray? {
         val now = System.currentTimeMillis()
         echCache[host]?.let {
@@ -842,39 +839,17 @@ object EchDoh {
      * 且同一次应答里 echBytes=0。拿它去握手比慢一点糟得多。
      */
     fun resolve(host: String): List<InetAddress> {
-        val startedAt = System.currentTimeMillis()
-        val key = host.lowercase()
-        val now = startedAt
-        addressCache[key]?.let { if (it.expireAt > now) return it.addresses }
-        val flight = java.util.concurrent.CompletableFuture<List<InetAddress>>()
-        val active = addressFlights.putIfAbsent(key, flight)
-        if (active != null) {
-            val addresses = runCatching { active.get(15, TimeUnit.SECONDS) }.getOrDefault(emptyList())
-            Diagnostics.trace("net.resolve.shared", mapOf("host" to host, "n" to addresses.size, "ms" to (System.currentTimeMillis() - startedAt)))
-            return addresses
-        }
-        try {
-            val lockedNow = System.currentTimeMillis()
-            addressCache[key]?.let {
-                if (it.expireAt > lockedNow) {
-                    flight.complete(it.addresses)
-                    return it.addresses
+        for (url in DOH_URLS.shuffled()) {
+            return runCatching {
+                val gwHost = url.toHttpUrl().host
+                val req = Request.Builder().url(url + "?name=" + host + "&type=A").build()
+                bootstrapClient.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) listOf(InetAddress.getByName(url.toHttpUrl().host)) else emptyList()
                 }
-            }
-            val addresses = resolveUncached(host)
-            if (addresses.isNotEmpty()) {
-                addressCache[key] = AddressEntry(addresses, System.currentTimeMillis() + ADDRESS_CACHE_TTL_MS)
-            }
-            flight.complete(addresses)
-            return addresses
-        } catch (t: Throwable) {
-            flight.completeExceptionally(t)
-            throw t
-        } finally {
-            addressFlights.remove(key, flight)
+            }.getOrNull() ?: emptyList()
         }
+        return emptyList() // 全部失败，fail-closed 由上层处理
     }
-
     private fun resolveUncached(host: String): List<InetAddress> {
         val startedAt = System.currentTimeMillis()
         // ⚠️ 这里**不再**用国内 DoH 的 HTTPS 地址提示抄近路 —— 实测那是投毒地址。
