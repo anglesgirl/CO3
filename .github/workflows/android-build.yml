@@ -81,12 +81,28 @@ jobs:
         with:
           name: co3-release-apk
           path: /tmp/apk
-      - name: Attach APKs to GitHub Release
-        if: github.event_name == 'release'
+      # 【自动发布到 Release 页】每次构建成功都把 APK 推到一个 pre-release
+      #（tag = ech-<commit sha>，唯一不冲突）。用户直接从 Release 页下载，
+      # 比 GitHub Actions artifact 在国内快得多（2026-09-27 用户实测反馈）。
+      - name: Publish APKs to GitHub Release
+        if: success()
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ech-${{ github.sha }}
+          name: "ECH Build ${{ github.sha }}"
+          body: |
+            CO3 ECH 自动构建（pre-release）
+
+            Commit: `${{ github.sha }}`
+            包含：Conscrypt ECH 网络栈 + LocalEchProxy + 一键日志导出
+            + 登录闭环修复（proxy_notice=0 / Set-Cookie 双写）
+
+            按 ABI 下载对应 APK（arm64-v8a 用于绝大多数现代手机）。
+          files: /tmp/apk/*.apk
+          prerelease: true
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "Attach APK to release ${{ github.event.release.tag_name }}"
       - name: Notify build result
         if: always()
         run: echo "Build completed (check artifacts)"
