@@ -260,17 +260,53 @@ object LocalEchProxy {
                     // 302 的 Location 也改写，跳转继续走本地
                     val loc = resp.header("Location")
                     if (loc != null) sb.append("Location: ").append(rewriteWebUrl(loc)).append("\r\n")
-                    // 业务头透传；Set-Cookie 不给 WebView（cookie 在 OkHttp cookieJar 统一管理），
+                    // Set-Cookie 不再全部剥掉：改写后转给 WebView。
+                    // WebView 需要 user_credentials 才能让原生 LoginSuccess 检测触发
+                    //（登录成功 → EchBrowser 自动返回 App + 账号中心刷新），此前全剥导致
+                    // 登录成功也回不来（2026-09-27 用户实测）。改写规则与 Go 代理
+                    // (echproxy.go rewriteCookieForWebView) 一致：去 Domain(host-only 按
+                    // 127.0.0.1 存) + 去 Secure + SameSite=None→Lax（SameSite=None 强制
+                    // 要求 Secure，http 页面会拒收）。OkHttp jar 不受影响：
+                    // EchHttp.client 的 cookieJar 已按原始 Set-Cookie 存好(archiveofourown.org 域)。
                     // 传输层/压缩/安全头一律不转发
                     for (i in 0 until resp.headers.size) {
                         val name = resp.headers.name(i)
                         val value = resp.headers.value(i)
                         when (name.lowercase()) {
-                            "content-type", "content-length", "location", "set-cookie",
+                            "content-type", "content-length", "location" -> {}
+                            "set-cookie" -> {
+                                val rewritten = rewriteCookieForWebView(value)
+                                sb.append("Set-Cookie: ").append(rewritten).append("\r\n")
+                                // 双写 CookieManager（AO3 域）：原生 LoginSuccess 检测与
+                                // CoCookieModule.hasUserCredentials 都读
+                                // CookieManager.getCookie("https://archiveofourown.org/")，
+                                // 只写 127 域(host-only)它们查不到 → 登录成功也检测不到、
+                                // 账号中心不刷新（2026-09-27 实测断链）。只双写登录判定
+                                // cookie(user_credentials/_otwarchive_session)，其余仅 127 域。
+                                if (rewritten.contains("user_credentials") || rewritten.contains("_otwarchive_session")) {
+                                    try {
+                                        val cm = android.webkit.CookieManager.getInstance()
+                                        cm.setCookie("https://archiveofourown.org/", rewritten)
+                                        cm.flush()
+                                        com.co3.Diagnostics.event("proxy_set_cookie_dual", mapOf(
+                                            "hasCred" to rewritten.contains("user_credentials").toString(),
+                                            "hasSession" to rewritten.contains("_otwarchive_session").toString(),
+                                        ))
+                                    } catch (_: Exception) {}
+                                }
+                            }
                             "transfer-encoding", "connection", "content-encoding", "date",
                             "server", "strict-transport-security" -> {}
                             else -> sb.append(name).append(": ").append(value).append("\r\n")
                         }
+                    }
+                    // 注入 AO3 官方代理后门 cookie proxy_notice=0：前端反钓鱼 JS 检测到
+                    // location.hostname 是 127.0.0.1 会插入 proxy-notice 警告横幅并禁用登录表单，
+                    // 检测到该 cookie 直接放行（Go 代理实测有效）。host-only 无 Domain → 按
+                    // 127.0.0.1 域存，WebView 可收。上游已带该 cookie 时不覆盖（保留用户值）。
+                    if (!resp.headers.values("Set-Cookie").any { it.trimStart().startsWith("proxy_notice=", ignoreCase = true) }) {
+                        sb.append("Set-Cookie: proxy_notice=0; Path=/\r\n")
+                        com.co3.Diagnostics.event("proxy_notice_inject", mapOf("ok" to "true"))
                     }
                     sb.append("\r\n")
                     output.write(sb.toString().toByteArray(StandardCharsets.ISO_8859_1))
@@ -281,6 +317,21 @@ object LocalEchProxy {
                 Log.w(TAG, "forward err: ${e.message}")
                 try { writeError(output, 502, "forward failed") } catch (_: Exception) {}
             }
+        }
+
+        /**
+         * 把上游 Set-Cookie 改写成 WebView(127.0.0.1 页面)能收能发的形式：
+         * 去掉 Domain(host-only，按页面域 127.0.0.1 存)、去掉 Secure、
+         * SameSite=None→Lax(SameSite=None 强制要求 Secure，不改成 http 页面会拒收)。
+         * 值/Expires/Max-Age/Path/HttpOnly 保留。
+         * 与 Go 代理 echproxy.go rewriteCookieForWebView 对齐。
+         */
+        private fun rewriteCookieForWebView(sc: String): String {
+            var out = sc
+            out = out.replace(Regex(";\\s*Domain=[^;]*", RegexOption.IGNORE_CASE), "")
+            out = out.replace(Regex(";\\s*Secure\\b", RegexOption.IGNORE_CASE), "")
+            out = out.replace(Regex(";\\s*SameSite=None", RegexOption.IGNORE_CASE), "; SameSite=Lax")
+            return out
         }
 
         /** 逐字节读一行（必须用 InputStream 手读，不能用 BufferedReader —— 会预读 body）。 */
