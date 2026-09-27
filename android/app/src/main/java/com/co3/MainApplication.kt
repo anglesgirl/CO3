@@ -110,5 +110,19 @@ class MainApplication : Application(), ReactApplication {
     } catch (t: Throwable) {
       android.util.Log.w("CO-ECH", "Fresco ensure failed: " + t.message)
     }
+
+    // 进程内 ECH 本地转发服务：WebView 浏览/登录统一走 http://127.0.0.1:<port>
+    // （明文仅本机回环），转发服务还原 Host/SNI/Origin 后经 Conscrypt ECH 发往 AO3。
+    // 后台线程启动（幂等）；8080 被占自动尝试 8081..8090。
+    // 不依赖 RN —— 纯 JVM + Conscrypt（懒初始化），即使 RN 尚未就绪也可安全启动。
+    runCatching {
+      Thread {
+        runCatching { com.co3.ech.LocalEchProxy.start() }
+          .onFailure { android.util.Log.w("CO-ECH", "local ECH proxy start failed: " + it.message) }
+      }.apply {
+        isDaemon = true
+        name = "co-local-proxy-boot"
+      }.start()
+    }
   }
 }

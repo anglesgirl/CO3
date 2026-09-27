@@ -23,6 +23,11 @@ object CoWebViewHelper {
         val method = request.method ?: "GET"
         val url = request.url.toString()
 
+        // ★ 本地转发服务直连放行：WebView 页面/资源/表单全走 http://127.0.0.1:<port>
+        // （LocalEchProxy），由转发服务还原 Host/SNI/Origin 后经 Conscrypt ECH 转发 ——
+        // WebView 原生栈直接访问本地回环即可，无需（也不该）在此再拦一层。
+        if (host == "127.0.0.1" || host == "localhost") return null
+
         // 登录 POST 完全放行：交给 JS 劫持（postLogin）走原生 ECH POST + 渲染结果
         if (method == "POST" && url.contains("/users/login")) {
             Diagnostics.event("webview_login_post_passthrough", mapOf("url" to url.take(80)))

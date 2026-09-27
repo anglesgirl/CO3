@@ -18,6 +18,10 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
     private var reactContext: ThemedReactContext? = null
     override fun getName() = "EchWebView"
 
+    /** 页面是否属于 AO3 浏览（本地转发地址 127.0.0.1 或原始 AO3 域）。 */
+    private fun isLocalPage(url: String): Boolean =
+        url.startsWith(LocalEchProxy.baseUrl) || url.contains("archiveofourown.org")
+
     override fun createViewInstance(reactContext: ThemedReactContext): WebView {
         this.reactContext = reactContext
         val wv = WebView(reactContext)
@@ -39,22 +43,20 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
             }
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                 super.onPageStarted(view, url, favicon)
-                // ★ 尽早注入：表单监听必须在用户能操作之前装好。
-                //   只靠 onPageFinished 会有一个窗口期 —— 用户在这个窗口里点登录，
-                //   表单就走 WebView 原生栈提交（没有 ECH，SNI 被墙）→ 登录必然失败。
-                //   注入是幂等的（脚本里判 window.__coLoginHijack），重复调用无害。
-                if (url != null && url.contains("archiveofourown.org")) {
-                    injectLoginHijack(view)
+                // ★ 尽早注入：运行时 JS 请求改写必须在页面脚本运行前装好。
+                //   注入是幂等的（脚本里判 window.__coLocalRewrite），重复调用无害。
+                if (url != null && isLocalPage(url)) {
+                    injectLocalRewrite(view)
                 }
             }
             override fun onPageFinished(view: WebView, url: String?) {
                 super.onPageFinished(view, url)
-                if (url != null && url.contains("archiveofourown.org")) {
-                    injectLoginHijack(view)
+                if (url != null && isLocalPage(url)) {
+                    injectLocalRewrite(view)
                     // 登录成功检测：页面跳离登录页 且 CookieManager 里有 user_credentials（AO3 登录成功才下发）
-                    // 这才是"WebView 登录成功 → App 取到登录信息"的正确路径，不依赖 postLogin 劫持判定
+                    // 这才是"WebView 登录成功 → App 取到登录信息"的正确路径
                     if (!url.contains("/users/login") && !url.contains("/login") &&
-                        (url.contains("/users/") || url.contains("/works") || url.contains("/series") || url.contains("/collections") || url.endsWith("archiveofourown.org/") || url.endsWith("archiveofourown.org"))) {
+                        (url.contains("/users/") || url.contains("/works") || url.contains("/series") || url.contains("/collections") || url.endsWith("${LocalEchProxy.baseUrl}/") || url.endsWith("${LocalEchProxy.baseUrl}"))) {
                         try {
                             val cm = CookieManager.getInstance()
                             val cookie = cm.getCookie("https://archiveofourown.org/") ?: ""
@@ -73,58 +75,52 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
         return wv
     }
 
-    private fun injectLoginHijack(view: WebView) {
+    private fun injectLocalRewrite(view: WebView) {
+        // ★ 页面走 http://127.0.0.1:<port>（本地转发服务）后，静态 HTML 里的
+        //   https://archiveofourown.org 已由转发服务改写成本地地址；这里兜底处理
+        //   **运行时** JS 动态生成的请求（fetch / XHR / location 跳转）——
+        //   它们若仍以 https://archiveofourown.org 为地址，会被 WebView 原生栈
+        //   明文直连（SNI 暴露）。注入后一律改写回本地转发服务。
+        // 幂等：onPageStarted 与 onPageFinished 都会调用，重复注入只装一次。
+        // 不做表单劫持：表单提交由浏览器原生 POST 到本地（body 完整、参数不缺），
+        //   本地服务会还原 Host/SNI/Origin/Referer 后经 Conscrypt ECH 转发。
         try {
             view.evaluateJavascript(
                 """
                 (function(){
-                  // 幂等：onPageStarted 与 onPageFinished 都会调用，重复注入只装一次
-                  if (window.__coLoginHijack) return;
-                  window.__coLoginHijack = 1;
-
-                  function isLoginForm(f){
-                    if (!f || f.tagName !== 'FORM') return false;
-                    if (f.id === 'new_user') return true;
-                    var a = (f.getAttribute && f.getAttribute('action')) || '';
-                    return a.indexOf('/users/login') >= 0;
+                  if (window.__coLocalRewrite) return;
+                  window.__coLocalRewrite = 1;
+                  var base = 'http://127.0.0.1:${LocalEchProxy.port}';
+                  function rewrite(u){
+                    if (typeof u !== 'string') return u;
+                    return u
+                      .replace('https://www.archiveofourown.org', base)
+                      .replace('https://archiveofourown.org', base);
                   }
-
-                  function hijack(f){
-                    try {
-                      var fd = new FormData(f);
-                      var params = new URLSearchParams();
-                      for (var pair of fd.entries()) { params.append(pair[0], pair[1]); }
-                      var body = params.toString();
-                      try { window.CoBridge.onLoginHijacked('hijack:' + (f.id || f.action || 'form') + ' len=' + body.length); } catch(e){}
-                      window.CoBridge.postLogin(f.action || window.location.href, body);
-                    } catch (err) {
-                      // ★ 绝不退回 f.submit()：WebView 原生网络栈没有 ECH，
-                      //   到 archiveofourown.org 的 POST 会被 SNI 阻断，等于必然失败。
-                      //   fail-closed：就地报错，让上层看到失败原因，而不是静默交给一堵墙。
-                      try { window.CoBridge.onLoginHijacked('hijack err:' + err); } catch(e){}
-                    }
-                  }
-
-                  // 文档级捕获监听：不管表单何时出现、id 是什么、被谁替换，
-                  // 只要有表单提交就接住 —— 不依赖 onPageFinished 的时机，也不依赖具体元素。
-                  document.addEventListener('submit', function(e){
-                    var f = e.target;
-                    if (!isLoginForm(f)) return;
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (e.stopImmediatePropagation) { e.stopImmediatePropagation(); }
-                    hijack(f);
-                  }, true);
-
-                  // 兜底：极少数走 requestSubmit()/程序化提交的路径也观察一下
+                  // fetch
                   try {
-                    new MutationObserver(function(){
-                      var f = document.getElementById('new_user');
-                      if (f && !f._coHijacked) {
-                        f._coHijacked = true;
-                        try { window.CoBridge.onLoginHijacked('found new_user'); } catch(e){}
-                      }
-                    }).observe(document, {childList: true, subtree: true});
+                    var nf = window.fetch;
+                    if (nf) window.fetch = function(input, init){
+                      return nf(rewrite(input), init);
+                    };
+                  } catch(e){}
+                  // XMLHttpRequest
+                  try {
+                    var origOpen = window.XMLHttpRequest.prototype.open;
+                    window.XMLHttpRequest.prototype.open = function(m, u, a){
+                      return origOpen.call(this, m, rewrite(u), a !== undefined ? a : true);
+                    };
+                  } catch(e){}
+                  // location.assign / replace
+                  try {
+                    var na = window.location.assign;
+                    if (na) window.location.assign = function(u){
+                      return na.call(window.location, rewrite(u));
+                    };
+                    var nr = window.location.replace;
+                    if (nr) window.location.replace = function(u){
+                      return nr.call(window.location, rewrite(u));
+                    };
                   } catch(e){}
                 })();
                 """.trimIndent(), null,
@@ -134,13 +130,21 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
     }
 
     class Bridge(private val webView: WebView, private val reactContext: ThemedReactContext?) {
+        /** 从本地地址还原回 AO3 https（postLogin 兜底入口兼容 127 URL）。 */
+        private fun unrewrite(url: String): String {
+            val b = LocalEchProxy.baseUrl
+            if (url.startsWith(b)) return "https://archiveofourown.org" + url.substringAfter(b)
+            return url
+        }
+
         @JavascriptInterface fun onLoginHijacked(msg: String) {
             android.util.Log.i("CO-ECH", "login hijack: "+msg.take(120))
             try { com.co3.Diagnostics.event("webview_login_hijack", mapOf("msg" to msg.take(120))) } catch(_:Exception){}
         }
         @JavascriptInterface fun postLogin(url: String, body: String) {
-            // ① 入口立即把 url 规范化为绝对 URL（JS 传来的 f.action 可能是相对路径 "/users/login"）
-            val absoluteUrl = if (url.startsWith("http")) url else "https://archiveofourown.org" + url
+            // ① 入口立即把 url 规范化为绝对 AO3 URL（JS 传来的 f.action 可能是相对路径 "/users/login"，
+            //    也可能是本地转发地址 http://127.0.0.1:8080/users/login —— 一并还原）
+            val absoluteUrl = unrewrite(if (url.startsWith("http")) url else "https://archiveofourown.org" + url)
             android.util.Log.i("CO-ECH", "postLogin "+absoluteUrl+" bodyLen="+body.length)
             try { com.co3.Diagnostics.event("webview_postLogin", mapOf("url" to absoluteUrl.take(80), "len" to body.length.toString(), "hasToken" to body.contains("authenticity_token").toString(), "hasLogin" to body.contains("user%5Blogin%5D").toString())) } catch(_:Exception){}
             Thread {
@@ -230,7 +234,7 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                             if (isWrongPassword) {
                                 // 密码错误：明确提示，不要渲染成"看起来成功"
                                 webView.evaluateJavascript("alert('用户名或密码错误，请重试');", null)
-                                webView.loadUrl("https://archiveofourown.org/users/login")
+                                webView.loadUrl(LocalEchProxy.rewriteWebUrl("https://archiveofourown.org/users/login"))
                             } else if (loginSuccess) {
                                 // 登录成功：回传 RN 刷新登录状态（全局事件，兼容 RN 0.85）
                                 try {
@@ -239,25 +243,25 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                                 } catch (_: Exception) {}
                                 try { com.co3.Diagnostics.event("login_success_notify", mapOf("status" to statusCode.toString())) } catch(_:Exception){}
                                 // 关键：不能 loadDataWithBaseURL 渲染静态 HTML（JS 不执行、cookie 不同步，右上角不更新）。
-                                // 重新 loadUrl 真实页面 → 走 ECH 拦截 + CookieManager 注入 cookie → 页面正常显示登录态
+                                // 重新 loadUrl 真实页面（改写为本地转发）→ 转发服务带 CookieManager 的 cookie → 页面正常显示登录态
                                 val target = if (location != null && (location!!.startsWith("http"))) location!!
                                     else if (location != null) "https://archiveofourown.org" + location!!
                                     else "https://archiveofourown.org/"
-                                webView.loadUrl(target)
+                                webView.loadUrl(LocalEchProxy.rewriteWebUrl(target))
                             } else if (statusCode in 300..399 && location != null) {
                                 val target = if (location!!.startsWith("http")) location!! else "https://archiveofourown.org" + location!!
-                                webView.loadUrl(target)
+                                webView.loadUrl(LocalEchProxy.rewriteWebUrl(target))
                             } else if (html.isNotEmpty()) {
-                                webView.loadDataWithBaseURL(absoluteUrl, html, "text/html", "utf-8", absoluteUrl)
+                                webView.loadDataWithBaseURL(LocalEchProxy.rewriteWebUrl(absoluteUrl), html, "text/html", "utf-8", LocalEchProxy.rewriteWebUrl(absoluteUrl))
                             } else {
-                                webView.loadUrl(absoluteUrl)
+                                webView.loadUrl(LocalEchProxy.rewriteWebUrl(absoluteUrl))
                             }
                         } catch(e:Exception){ android.util.Log.e("CO-ECH", "load result err "+e.message) }
                     }
                 } catch (e: Exception) {
                     android.util.Log.e("CO-ECH", "postLogin failed "+e.message)
                     try { com.co3.Diagnostics.event("webview_postLogin_fail", mapOf("err" to (e.message?:"unknown").take(120))) } catch(_:Exception){}
-                    webView.post { try { webView.loadUrl(absoluteUrl) } catch(_:Exception){} }
+                    webView.post { try { webView.loadUrl(LocalEchProxy.rewriteWebUrl(absoluteUrl)) } catch(_:Exception){} }
                 }
             }.start()
         }
@@ -265,6 +269,20 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
 
     @ReactProp(name = "sourceUrl")
     fun setSourceUrl(view: WebView, url: String?) {
-        if (!url.isNullOrEmpty()) view.loadUrl(url)
+        // 入口改写：AO3 的 https URL → http://127.0.0.1:<port>/<原路径>，
+        // WebView 全程只访问本地转发服务（ECH 由服务侧 Conscrypt 完成），
+        // 登录 POST 是浏览器原生提交（body 完整），不再依赖 JS 劫持拼参数。
+        if (!url.isNullOrEmpty()) {
+            // 竞态保护：MainApplication 后台线程启动服务可能晚于用户首次打开浏览器，
+            // 这里幂等确保服务已就绪；起不来则 fail-closed（绝不回退明文直连 AO3）。
+            if (!LocalEchProxy.start()) {
+                android.util.Log.e("CO-ECH", "local ECH proxy unavailable, refusing to load $url")
+                view.loadUrl("about:blank")
+                return
+            }
+            val rewritten = LocalEchProxy.rewriteWebUrl(url)
+            android.util.Log.i("CO-ECH", "load $url -> $rewritten")
+            view.loadUrl(rewritten)
+        }
     }
 }
