@@ -176,7 +176,7 @@ object Diagnostics {
             runCatching {
                 val f = File(ctx.filesDir, TRACE_FILE_NAME)
                 if (f.exists() && f.length() > TRACE_FILE_MAX) {
-                    f.writeBytes(f.readBytes().takeLast(TRACE_FILE_MAX / 2))
+                    f.writeBytes(f.readBytes().takeLast(TRACE_FILE_MAX / 2).toByteArray())
                 }
                 f.appendText(line + "\n")
             }
