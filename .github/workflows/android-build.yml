@@ -72,13 +72,15 @@ jobs:
       - name: Rename artifacts
         if: always()
         run: |
-          mv android/app/build/outputs/apk/release/app-release.apk /tmp/app-release.apk || true
+          mkdir -p /tmp/apk
+          cp android/app/build/outputs/apk/release/*.apk /tmp/apk/ 2>/dev/null || true
+          ls -la /tmp/apk/
       - name: Upload APK artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: co3-release-apk
-          path: /tmp/app-release.apk
+          path: /tmp/apk
       - name: Attach APKs to GitHub Release
         if: github.event_name == 'release'
         env:
