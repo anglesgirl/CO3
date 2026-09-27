@@ -104,13 +104,27 @@ export async function buildDiagnosticText() {
 }
 
 /**
- * 导出并分享。返回 'shared'（拉起系统分享）或 'copied'（分享不可用，已复制剪贴板）。
+ * 导出诊断日志。
+ *   mode='share'（默认）：写文件拉起系统分享；豆包等不吃附件的接收端，
+ *                        文字里也带 12KB 摘要。
+ *   mode='copy'：完整日志直接复制到剪贴板，用户粘贴到任意对话发回。
+ * 返回 'shared' / 'copied' / 'copy-failed' / 'unavailable'。
  */
-export async function exportDiagnostics() {
+export async function exportDiagnostics(mode = 'share') {
   const text = await buildDiagnosticText();
+  const mod = NativeModules.CoDiag;
+  if (!mod) return 'unavailable';
+  if (mode === 'copy') {
+    try {
+      if (typeof mod.copyText === 'function') {
+        await mod.copyText('CO3 诊断日志', text);
+        return 'copied';
+      }
+    } catch {}
+    return 'copy-failed';
+  }
   let ok = false;
   try {
-    const mod = NativeModules.CoDiag;
     if (mod && typeof mod.shareText === 'function') {
       ok = await mod.shareText('CO3 诊断日志', text);
     }

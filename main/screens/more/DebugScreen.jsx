@@ -50,39 +50,69 @@ export default function DebugScreen({ route }) {
         </Text>
         <Text style={{ marginTop: 4, fontSize: 12, color: '#555' }}>
           会当场发一次 AO3 请求（8s 超时）复现问题，再把原生+JS 全部日志拼成一个文本分享/复制。
+          豆包等聊天软件可能收不到附件 —— 用下面「复制日志」直接粘贴发回最稳。
         </Text>
-        <TouchableOpacity
-          style={{
-            marginTop: 8,
-            paddingVertical: 8,
-            paddingHorizontal: 12,
-            borderRadius: 6,
-            backgroundColor: exporting ? '#a5d8ff' : '#1c7ed6',
-            alignSelf: 'flex-start',
-          }}
-          onPress={async () => {
-            if (exporting) return;
-            setExporting(true);
-            addLog('cmd', '> 导出诊断日志…');
-            try {
-              const result = await exportDiagnostics();
-              addLog(
-                'success',
-                result === 'copied'
-                  ? '分享不可用，日志已复制到剪贴板（可直接粘贴发送）'
-                  : '已拉起系统分享，把日志发回给开发者即可',
-              );
-            } catch (e) {
-              addLog('error', `导出失败: ${e.message}`);
-            } finally {
-              setExporting(false);
-            }
-          }}
-        >
-          <Text style={{ color: '#fff', fontWeight: '600' }}>
-            {exporting ? '正在导出…' : '导出诊断日志（分享）'}
-          </Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', marginTop: 8 }}>
+          <TouchableOpacity
+            style={{
+              paddingVertical: 8,
+              paddingHorizontal: 12,
+              borderRadius: 6,
+              backgroundColor: exporting ? '#a5d8ff' : '#1c7ed6',
+              marginRight: 8,
+            }}
+            onPress={async () => {
+              if (exporting) return;
+              setExporting(true);
+              addLog('cmd', '> 导出诊断日志…');
+              try {
+                const result = await exportDiagnostics('share');
+                addLog(
+                  'success',
+                  result === 'copied'
+                    ? '分享不可用，日志已复制到剪贴板（可直接粘贴发送）'
+                    : '已拉起系统分享；若对方收不到附件，改用「复制日志」',
+                );
+              } catch (e) {
+                addLog('error', `导出失败: ${e.message}`);
+              } finally {
+                setExporting(false);
+              }
+            }}
+          >
+            <Text style={{ color: '#fff', fontWeight: '600' }}>
+              {exporting ? '正在导出…' : '导出日志（分享）'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={{
+              paddingVertical: 8,
+              paddingHorizontal: 12,
+              borderRadius: 6,
+              backgroundColor: '#868e96',
+            }}
+            onPress={async () => {
+              if (exporting) return;
+              setExporting(true);
+              addLog('cmd', '> 复制诊断日志…');
+              try {
+                const result = await exportDiagnostics('copy');
+                addLog(
+                  'success',
+                  result === 'copied'
+                    ? '完整日志已复制到剪贴板，直接粘贴到对话发回即可'
+                    : `复制失败: ${result}`,
+                );
+              } catch (e) {
+                addLog('error', `复制失败: ${e.message}`);
+              } finally {
+                setExporting(false);
+              }
+            }}
+          >
+            <Text style={{ color: '#fff', fontWeight: '600' }}>复制日志（粘贴发回）</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <Text style={{ marginTop: 16 }}>Run SQL cmd</Text>

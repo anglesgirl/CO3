@@ -79,7 +79,15 @@ class CoDiagModule(private val ctx: ReactApplicationContext) :
             val intent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
                 putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_TEXT, "CO3 诊断日志（附件，可发回给开发者）")
+                // 豆包等接收端不吃 EXTRA_STREAM 附件，只带文字（2026-09-28 用户实测：
+                // 分享给豆包只有标题文字、无文件；QQ 正常）。所以 EXTRA_TEXT 同时塞
+                // 日志摘要（约前 12KB），附件收不到时至少核心信息在文字里。
+                putExtra(
+                    Intent.EXTRA_TEXT,
+                    "CO3 诊断日志（完整内容见附件，约 ${text.length} 字符）\n\n" +
+                        text.take(12000) +
+                        "\n\n…（摘要截断，完整日志见附件）",
+                )
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             appCtx.startActivity(
@@ -96,6 +104,21 @@ class CoDiagModule(private val ctx: ReactApplicationContext) :
             } catch (t2: Throwable) {
                 promise.reject("SHARE_FAIL", t2.message ?: "share failed")
             }
+        }
+    }
+
+    /**
+     * 完整日志直接复制到剪贴板（不拉起分享面板）。
+     * 豆包接收端不吃附件时，用户粘贴到对话即可发回 —— 最可靠的路径。
+     */
+    @ReactMethod
+    fun copyText(title: String, text: String, promise: Promise) {
+        try {
+            val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText(title, text))
+            promise.resolve(true)
+        } catch (t: Throwable) {
+            promise.reject("COPY_FAIL", t.message ?: "copy failed")
         }
     }
 }
