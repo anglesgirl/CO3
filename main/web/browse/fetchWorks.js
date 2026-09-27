@@ -67,36 +67,48 @@ function extractRequiredTags(workElement) {
 }
 
 function categorizeTagsByClass(workElement) {
-    const tagsContainer = workElement.getElementsByClassName("tags commas")[0];
-    if (!tagsContainer) return { warnings: [], relationships: [], characters: [], freeforms: [] };
+  const tagsContainer = workElement.getElementsByClassName('tags commas')[0];
+  const fandomContainer = workElement.getElementsByClassName('fandoms heading')[0];
+  if (!tagsContainer)
+    {
+      return { warnings: [], relationships: [], characters: [], freeforms: [] };
+    }
 
-    const tagItems = Array.from(tagsContainer.getElementsByTagName("li"));
-    const categorized = {
-        warnings: [],
-        relationships: [],
-        characters: [],
-        freeforms: []
-    };
 
-    tagItems.forEach(item => {
-        const className = item.getAttribute("class") || "";
-        const linkElement = item.getElementsByTagName("a")[0];
-        const tagText = getElementText(linkElement);
+  const categorized = {
+    fandoms: [],
+    warnings: [],
+    relationships: [],
+    characters: [],
+    freeforms: [],
+  };
+  const tagItems = Array.from(tagsContainer.getElementsByTagName('li'));
 
-        if (tagText) {
-            if (className.includes("warnings")) {
-                categorized.warnings.push(tagText);
-            } else if (className.includes("relationships")) {
-                categorized.relationships.push(tagText);
-            } else if (className.includes("characters")) {
-                categorized.characters.push(tagText);
-            } else if (className.includes("freeforms")) {
-                categorized.freeforms.push(tagText);
-            }
-        }
-    });
+  let fandomAelements = Array.from(fandomContainer.getElementsByTagName('a'));
+  for (let i = 0; i < fandomAelements.length ; i++) {
+    categorized.fandoms.push(getElementText(fandomAelements[i]));
+    console.log(fandomAelements[i]);
+  }
 
-    return categorized;
+  tagItems.forEach(item => {
+    const className = item.getAttribute('class') || '';
+    const linkElement = item.getElementsByTagName('a')[0];
+    const tagText = getElementText(linkElement);
+
+    if (tagText) {
+      if (className.includes('warnings')) {
+        categorized.warnings.push(tagText);
+      } else if (className.includes('relationships')) {
+        categorized.relationships.push(tagText);
+      } else if (className.includes('characters')) {
+        categorized.characters.push(tagText);
+      } else if (className.includes('freeforms')) {
+        categorized.freeforms.push(tagText);
+      }
+    }
+  });
+
+  return categorized;
 }
 
 export function extractPaginationInfo(doc) {
@@ -140,6 +152,7 @@ export function parseWorkElements(workElements) {
     const categorizedTags = categorizeTagsByClass(workElement);
 
     const allTags = [
+      ...categorizedTags.fandoms,
       ...categorizedTags.relationships,
       ...categorizedTags.characters,
       ...categorizedTags.freeforms

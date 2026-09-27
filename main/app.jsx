@@ -90,6 +90,7 @@ import CategoryScreen from './screens/more/CategoryScreen';
 import BookmarksScreen from './screens/more/BookmarksScreen';
 import AboutScreen from './screens/more/AboutScreen';
 import WordReplacer from './screens/more/WordReplacer';
+import {JSErrorScreen} from "./screens/JSErrorScreen";
 
 export const AppContext = createContext();
 const Stack = createNativeStackNavigator();
@@ -281,49 +282,51 @@ const AppWrapper = () => {
         <Host>
           <GestureHandlerRootView>
             <SafeAreaProvider style={{ flex: 1 }}>
-              <NavigationContainer ref={navigationRef}>
-                <Stack.Navigator
-                  screenOptions={{ headerShown: false }}
-                  initialRouteName={'Home'}
-                >
-                  <Stack.Screen name={'Home'} component={App} />
-                  <Stack.Screen name={'Work'} component={ChapterInfoScreen} />
-                  <Stack.Screen name={'Reader'} component={ReaderWrapper} />
-                  <Stack.Screen name={'User'} component={UserInfoScreen} />
-                  <Stack.Screen name={'UserWork'} component={UserWorkScreen} />
-                  <Stack.Screen name={'Storage'} component={StorageScreen} />
-                  <Stack.Screen name={'Statistics'} component={StatsScreen} />
-                  <Stack.Screen
-                    name={'ReadLater'}
-                    component={ReadLaterScreen}
-                  />
-                  <Stack.Screen
-                    name={'Preferences'}
-                    component={PreferencesScreen}
-                  />
-                  <Stack.Screen name={'Account'} component={AccountCenter} />
-                  <Stack.Screen name={'Login'} component={LoginScreen} />
-                  <Stack.Screen
-                    name={'KudosHistory'}
-                    component={KudoHistoryScreen}
-                  />
-                  <Stack.Screen name={'Help'} component={HelpScreen} />
-                  <Stack.Screen name={'Debug'} component={DebugScreen} />
-                  <Stack.Screen
-                    name={'Categories'}
-                    component={CategoryScreen}
-                  />
-                  <Stack.Screen
-                    name={'Bookmarks'}
-                    component={BookmarksScreen}
-                  />
-                  <Stack.Screen name={'About'} component={AboutScreen} />
-                  <Stack.Screen
-                    name={'WordReplacer'}
-                    component={WordReplacer}
-                  />
-                </Stack.Navigator>
-              </NavigationContainer>
+              <JSErrorScreen currentTheme={currentTheme}>
+                <NavigationContainer ref={navigationRef}>
+                  <Stack.Navigator
+                    screenOptions={{ headerShown: false }}
+                    initialRouteName={'Home'}
+                  >
+                    <Stack.Screen name={'Home'} component={App} />
+                    <Stack.Screen name={'Work'} component={ChapterInfoScreen} />
+                    <Stack.Screen name={'Reader'} component={ReaderWrapper} />
+                    <Stack.Screen name={'User'} component={UserInfoScreen} />
+                    <Stack.Screen name={'UserWork'} component={UserWorkScreen} />
+                    <Stack.Screen name={'Storage'} component={StorageScreen} />
+                    <Stack.Screen name={'Statistics'} component={StatsScreen} />
+                    <Stack.Screen
+                      name={'ReadLater'}
+                      component={ReadLaterScreen}
+                    />
+                    <Stack.Screen
+                      name={'Preferences'}
+                      component={PreferencesScreen}
+                    />
+                    <Stack.Screen name={'Account'} component={AccountCenter} />
+                    <Stack.Screen name={'Login'} component={LoginScreen} />
+                    <Stack.Screen
+                      name={'KudosHistory'}
+                      component={KudoHistoryScreen}
+                    />
+                    <Stack.Screen name={'Help'} component={HelpScreen} />
+                    <Stack.Screen name={'Debug'} component={DebugScreen} />
+                    <Stack.Screen
+                      name={'Categories'}
+                      component={CategoryScreen}
+                    />
+                    <Stack.Screen
+                      name={'Bookmarks'}
+                      component={BookmarksScreen}
+                    />
+                    <Stack.Screen name={'About'} component={AboutScreen} />
+                    <Stack.Screen
+                      name={'WordReplacer'}
+                      component={WordReplacer}
+                    />
+                  </Stack.Navigator>
+                </NavigationContainer>
+              </JSErrorScreen>
             </SafeAreaProvider>
           </GestureHandlerRootView>
           <WebviewFetcher />

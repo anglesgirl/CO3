@@ -95,40 +95,51 @@ function extractWorkMetadata(doc) {
       }
     } else if (dtClass === "language") {
       result.language = getElementText(ddElement);
-    } else if (dtClass === "relationship tags" || dtClass === "freeform tags") {
-      const tagLinks = ddElement.getElementsByTagName("a");
+    } else if (
+      dtClass === 'fandom tags' ||
+      dtClass === 'relationship tags' ||
+      dtClass === 'character tags' ||
+      dtClass === 'freeform tags'
+    ) {
+      const tagLinks = ddElement.getElementsByTagName('a');
       for (let j = 0; j < tagLinks.length; j++) {
         const tagText = getElementText(tagLinks[j]);
         if (tagText) {
           result.tags.push(tagText);
         }
       }
-    } else if (dtClass === "stats") {
-      const statsDL = ddElement.getElementsByTagName("dl")?.[0];
+    } else if (dtClass === 'stats') {
+      const statsDL = ddElement.getElementsByTagName('dl')?.[0];
       if (statsDL) {
-        const statsDTs = statsDL.getElementsByTagName("dt");
-        const statsDDs = statsDL.getElementsByTagName("dd");
+        const statsDTs = statsDL.getElementsByTagName('dt');
+        const statsDDs = statsDL.getElementsByTagName('dd');
 
         for (let j = 0; j < statsDTs.length && j < statsDDs.length; j++) {
-          const statClass = statsDTs[j].getAttribute("class");
+          const statClass = statsDTs[j].getAttribute('class');
           const statText = getElementText(statsDDs[j]);
 
-          if (statClass === "published") {
+          if (statClass === 'published') {
             result.published = parseDate(statText);
-          } else if (statClass === "words") {
-            result.words = parseInt(statText?.replace(/,/g, '') || '0', 10) || 0;
-          } else if (statClass === "chapters") {
+          } else if (statClass === 'words') {
+            result.words =
+              parseInt(statText?.replace(/,/g, '') || '0', 10) || 0;
+          } else if (statClass === 'chapters') {
             result.chapters = statText;
-          } else if (statClass === "hits") {
+          } else if (statClass === 'hits') {
             result.hits = parseInt(statText?.replace(/,/g, '') || '0', 10) || 0;
-          } else if (statClass === "comments") {
-            result.comments = parseInt(statText?.replace(/,/g, '') || '0', 10) || 0;
-          } else if (statClass === "kudos") {
-            result.kudos = parseInt(statText?.replace(/,/g, '') || '0', 10) || 0;
-          } else if (statClass === "bookmarks") {
-            const bookmarkLink = statsDDs[j].getElementsByTagName("a")?.[0];
-            const bookmarkText = bookmarkLink ? getElementText(bookmarkLink) : statText;
-            result.bookmarks = parseInt(bookmarkText?.replace(/,/g, '') || '0', 10) || 0;
+          } else if (statClass === 'comments') {
+            result.comments =
+              parseInt(statText?.replace(/,/g, '') || '0', 10) || 0;
+          } else if (statClass === 'kudos') {
+            result.kudos =
+              parseInt(statText?.replace(/,/g, '') || '0', 10) || 0;
+          } else if (statClass === 'bookmarks') {
+            const bookmarkLink = statsDDs[j].getElementsByTagName('a')?.[0];
+            const bookmarkText = bookmarkLink
+              ? getElementText(bookmarkLink)
+              : statText;
+            result.bookmarks =
+              parseInt(bookmarkText?.replace(/,/g, '') || '0', 10) || 0;
           }
         }
       }

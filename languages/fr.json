@@ -579,5 +579,14 @@
   "component_rule_edit_case_sensitive": "Respecter la casse",
   "component_rule_edit_regex": "Utiliser une expression régulière",
   "component_rule_edit_case_sensitive_label": "Respecter les maj",
-  "component_rule_edit_regex_label": "Regex"
+  "component_rule_edit_regex_label": "Regex",
+
+  "screen_js_error_h1": "Oups !",
+  "screen_js_error_h2": "CO3 a planté ! Mais pas de panique ! On pourrait peut-être s'en sortir.",
+  "screen_js_error_unknown": "Erreur inconnue",
+  "screen_js_error_github": "GitHub",
+  "screen_js_error_discord": "Discord",
+  "screen_js_error_copy": "Copier",
+  "screen_js_error_close": "Fermer l'application",
+  "screen_js_error_recover": "Essayer de récupérer"
 }

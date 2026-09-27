@@ -50,9 +50,9 @@ android {
         applicationId "com.anglesgirl.co3"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 20
+        versionCode 21
         // 正式版标识：加 ECH 标记，与内部测试包（B0.0.xx）区分
-        versionName "1.0.0-ech"
+        versionName "1.1.0-ech"
     }
 
     splits {
