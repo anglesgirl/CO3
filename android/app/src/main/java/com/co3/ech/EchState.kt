@@ -65,4 +65,15 @@ object EchState {
         } catch (_: Throwable) {
         }
     }
+
+    /** 供诊断导出：描述某 host 的落盘配置状态（有效/过期/无）。 */
+    fun describe(host: String): String {
+        val p = prefs() ?: return "prefs unavailable"
+        val s = p.getString(KEY_PREFIX + host, null) ?: return "$host: 无落盘配置"
+        val parts = s.split('|', limit = 2)
+        if (parts.size != 2) return "$host: 格式异常"
+        val expireAt = parts[0].toLongOrNull() ?: return "$host: 时间戳异常"
+        val leftSec = (expireAt - System.currentTimeMillis()) / 1000
+        return "$host: ${if (leftSec > 0) "有效(剩 ${leftSec}s)" else "已过期"} bytes=${parts[1].length}"
+    }
 }

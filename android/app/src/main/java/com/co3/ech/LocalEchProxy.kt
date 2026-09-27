@@ -50,6 +50,8 @@ object LocalEchProxy {
     @Volatile
     private var server: LocalHttpServer? = null
 
+    val isRunning: Boolean get() = server != null
+
     @Volatile
     var port: Int = DEFAULT_PORT
         private set

@@ -7,11 +7,13 @@ import {
 } from 'react-native';
 import { useState } from 'react';
 import { useNavigation } from '@react-navigation/native';
+import { exportDiagnostics } from '../../utils/logExport';
 
 export default function DebugScreen({ route }) {
   const { db, setScreens } = route.params;
   const [sqlCmd, setSqlCmd] = useState('');
   const [logs, setLogs] = useState([]);
+  const [exporting, setExporting] = useState(false);
 
   const addLog = (type, message) => {
     setLogs(prev => [
@@ -31,6 +33,57 @@ export default function DebugScreen({ route }) {
       <TouchableOpacity onPress={() => navigation.goBack()}>
         <Text style={{ color: '#ff0000' }}>Close debug menu</Text>
       </TouchableOpacity>
+
+      {/* 一键导出诊断日志：原生 trace + JS 配置 + 快速自检 + console，系统分享发走 */}
+      <View
+        style={{
+          marginTop: 16,
+          padding: 12,
+          borderRadius: 8,
+          backgroundColor: '#e7f5ff',
+          borderWidth: 1,
+          borderColor: '#4dabf7',
+        }}
+      >
+        <Text style={{ fontSize: 15, fontWeight: '700', color: '#1c7ed6' }}>
+          网络/ECH 有问题？先导日志
+        </Text>
+        <Text style={{ marginTop: 4, fontSize: 12, color: '#555' }}>
+          会当场发一次 AO3 请求（8s 超时）复现问题，再把原生+JS 全部日志拼成一个文本分享/复制。
+        </Text>
+        <TouchableOpacity
+          style={{
+            marginTop: 8,
+            paddingVertical: 8,
+            paddingHorizontal: 12,
+            borderRadius: 6,
+            backgroundColor: exporting ? '#a5d8ff' : '#1c7ed6',
+            alignSelf: 'flex-start',
+          }}
+          onPress={async () => {
+            if (exporting) return;
+            setExporting(true);
+            addLog('cmd', '> 导出诊断日志…');
+            try {
+              const result = await exportDiagnostics();
+              addLog(
+                'success',
+                result === 'copied'
+                  ? '分享不可用，日志已复制到剪贴板（可直接粘贴发送）'
+                  : '已拉起系统分享，把日志发回给开发者即可',
+              );
+            } catch (e) {
+              addLog('error', `导出失败: ${e.message}`);
+            } finally {
+              setExporting(false);
+            }
+          }}
+        >
+          <Text style={{ color: '#fff', fontWeight: '600' }}>
+            {exporting ? '正在导出…' : '导出诊断日志（分享）'}
+          </Text>
+        </TouchableOpacity>
+      </View>
 
       <Text style={{ marginTop: 16 }}>Run SQL cmd</Text>
       <TextInput

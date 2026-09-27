@@ -1,13 +1,16 @@
 package com.co3
 
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.time.Instant
@@ -154,7 +157,87 @@ object Diagnostics {
             if (buffer.size >= BUFFER_MAX) buffer.removeAt(0) // 环形：牺牲最旧的
             buffer.add(line)
         }
+        persistTrace(line)
         maybeFlush()
+    }
+
+    // ==================== trace 落盘（供一键导出） ====================
+    //
+    // 为什么需要落盘：内存 buffer 在 App 被杀后就没了 —— 用户复现问题 → 截图 → 被杀进程
+    // → 重开 App，现场全丢。这里把每条 trace 同步追加到 filesDir/co3-trace.log，
+    // **重启后依然能导出上次会话的日志**。文件超限时截断保留最近一半（环形）。
+    private const val TRACE_FILE_NAME = "co3-trace.log"
+    private const val TRACE_FILE_MAX = 512 * 1024
+    private val fileLock = Any()
+
+    private fun persistTrace(line: String) {
+        val ctx = appContext ?: return
+        synchronized(fileLock) {
+            runCatching {
+                val f = File(ctx.filesDir, TRACE_FILE_NAME)
+                if (f.exists() && f.length() > TRACE_FILE_MAX) {
+                    f.writeBytes(f.readBytes().takeLast(TRACE_FILE_MAX / 2))
+                }
+                f.appendText(line + "\n")
+            }
+        }
+    }
+
+    private fun appVersion(): String = runCatching {
+        val ctx = appContext ?: return ""
+        @Suppress("DEPRECATION")
+        val info = if (Build.VERSION.SDK_INT >= 33)
+            ctx.packageManager.getPackageInfo(ctx.packageName, PackageManager.PackageInfoFlags.of(0))
+        else ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+        "${info.versionName} (code ${info.versionCode})"
+    }.getOrDefault("(unknown)")
+
+    /**
+     * 生成完整诊断文本（调试页"导出诊断日志"用）。
+     *
+     * 内容：环境信息 + 系统代理 + ECH 状态 + LocalEchProxy 状态 + crash.log +
+     * 落盘 trace（含上次会话）+ 本会话内存缓冲。调用方应放在非主线程（CoDiagModule 桥线程）。
+     */
+    fun snapshotText(): String {
+        val ctx = appContext ?: return "appContext 未初始化（Diagnostics.initialize 未调用）"
+        val sb = StringBuilder()
+        sb.append("===== CO3 诊断导出 =====\n")
+        sb.append("时间: ").append(Instant.now().toString()).append('\n')
+        sb.append("App: ").append(appVersion()).append(", applicationId ").append(ctx.packageName).append('\n')
+        sb.append("设备: ").append(Build.MANUFACTURER).append(' ').append(Build.MODEL)
+            .append(", Android SDK ").append(Build.VERSION.SDK_INT).append('\n')
+        sb.append("远程上报: ").append(if (isEnabled()) "on" else "off").append('\n')
+        runCatching {
+            val proxy = Settings.Global.getString(ctx.contentResolver, "http_proxy")
+            sb.append("系统代理(global http_proxy): ").append(proxy ?: "(未设置)").append('\n')
+        }
+        sb.append("Conscrypt ECH ready: ").append(com.co3.ech.ConscryptEch.ready).append('\n')
+        sb.append("LocalEchProxy: ").append(
+            if (com.co3.ech.LocalEchProxy.isRunning)
+                "running on 127.0.0.1:${com.co3.ech.LocalEchProxy.port}"
+            else "NOT running"
+        ).append('\n')
+        runCatching {
+            sb.append("ECH 落盘: ").append(com.co3.ech.EchState.describe("archiveofourown.org")).append('\n')
+        }
+
+        sb.append("\n----- crash.log -----\n")
+        runCatching {
+            val f = File(ctx.filesDir, "crash.log")
+            if (f.exists()) sb.append(f.readText()) else sb.append("(无崩溃记录)\n")
+        }
+
+        sb.append("\n----- trace.log（落盘，含上次会话） -----\n")
+        runCatching {
+            val f = File(ctx.filesDir, TRACE_FILE_NAME)
+            if (f.exists()) sb.append(f.readText()) else sb.append("(空)\n")
+        }
+
+        sb.append("\n----- trace 缓冲（本会话） -----\n")
+        synchronized(bufferLock) {
+            if (buffer.isEmpty()) sb.append("(空)\n") else sb.append(buffer.joinToString("\n")).append('\n')
+        }
+        return sb.toString()
     }
 
     private fun maybeFlush() {

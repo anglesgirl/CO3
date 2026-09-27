@@ -101,6 +101,8 @@ dependencies {
     implementation "com.facebook.react:react-android"
     implementation "androidx.work:work-runtime:2.11.2"
     implementation "androidx.lifecycle:lifecycle-process:2.11.0"
+    // FileProvider：诊断日志分享导出用
+    implementation "androidx.core:core:1.13.1"
     // ECH 传输层：Conscrypt = BoringSSL 的 JSSE provider（in-process，无外挂线程/无本地端口）
     implementation "org.conscrypt:conscrypt-android:2.7.0"
     // DoH：用 OkHttp 官方实现（A/AAAA + TTL 缓存 + bootstrapDnsHosts 钉 IP）
