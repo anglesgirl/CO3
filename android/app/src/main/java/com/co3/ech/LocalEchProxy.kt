@@ -240,7 +240,18 @@ object LocalEchProxy {
                     }
                 }
 
-                EchHttp.client.newCall(req.build()).execute().use { resp ->
+                // 【登录闭环关键】POST（登录表单提交）用「不跟随重定向」的 client：
+                // 302 + Set-Cookie(user_credentials) 必须原样回到转发层（双写
+                // CookieManager + Location 改写给 WebView 跟随）。若用默认
+                // followRedirects=true，OkHttp 在内部就把 302 消费了，LocalEchProxy
+                // 看不到它 → CookieManager 永远没有 user_credentials →
+                // onPageFinished 的 LoginSuccess 检测不触发 → 用户必须手动点 logo
+                // 再加载一次页面才能把登录态传给 App（2026-09-28 用户实测反馈）。
+                // GET 302 无妨（下次页面加载会补），只改 POST 最小面。
+                val callClient = if (method == "POST")
+                    EchHttp.client.newBuilder().followRedirects(false).followSslRedirects(false).build()
+                else EchHttp.client
+                callClient.newCall(req.build()).execute().use { resp ->
                     val statusCode = resp.code
                     val statusText = resp.message.ifEmpty { "OK" }
                     val mime = resp.header("Content-Type") ?: "text/html"
