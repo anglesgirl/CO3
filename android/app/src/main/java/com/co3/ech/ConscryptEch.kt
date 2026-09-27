@@ -21,6 +21,7 @@ import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.TrustManager
 import javax.net.ssl.TrustManagerFactory
+import javax.net.ssl.X509ExtendedTrustManager
 import javax.net.ssl.X509TrustManager
 
 /** 哪些域名必须走 ECH（与旧拦截器里的判定保持一致） */
@@ -100,12 +101,69 @@ object ConscryptEch {
         }
     }
 
-    class PolicyTrustManager(private val delegate: X509TrustManager) : X509TrustManager {
+    /**
+     * ECH（domain encryption）要求 TrustManager 具备 **hostname-aware** 校验能力：
+     * Conscrypt 在握手时对启用 domain encryption 的主机调用
+     * `checkServerTrusted(chain, authType, hostname)`（3 参/4 参版本）。
+     *
+     * 之前这里只实现了 2 参版本 → 每次握手都抛
+     * `SSLHandshakeException: Domain specific configurations require that hostname
+     *  aware checkServerTrusted(X509Certificate[], String, String) is used`
+     * （2026-09-27 用户真机日志实锤，DoH/ECH 配置全正常，死在最后一步）。
+     *
+     * 修复：继承 X509ExtendedTrustManager，4 参版本优先委托给系统实现
+     * （Android 的 TrustManagerImpl 支持 3 参 hostname-aware），
+     * 拿不到就反射调用，实在没有才退化 2 参（至少不崩）。
+     */
+    class PolicyTrustManager(private val delegate: X509TrustManager) : X509ExtendedTrustManager() {
         override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {
             delegate.checkClientTrusted(chain, authType)
         }
 
         override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {
+            delegate.checkServerTrusted(chain, authType)
+        }
+
+        override fun checkClientTrusted(
+            chain: Array<out X509Certificate>?,
+            authType: String?,
+            socket: Socket?,
+            hostname: String?,
+        ) {
+            if (delegate is X509ExtendedTrustManager) {
+                delegate.checkClientTrusted(chain, authType, socket, hostname)
+            } else {
+                delegate.checkClientTrusted(chain, authType)
+            }
+        }
+
+        override fun checkServerTrusted(
+            chain: Array<out X509Certificate>?,
+            authType: String?,
+            socket: Socket?,
+            hostname: String?,
+        ) {
+            if (delegate is X509ExtendedTrustManager) {
+                delegate.checkServerTrusted(chain, authType, socket, hostname)
+                return
+            }
+            if (hostname != null) {
+                // Android 系统 TrustManagerImpl 的 3 参重载（隐藏 API，反射调用）
+                try {
+                    val m = delegate.javaClass.getMethod(
+                        "checkServerTrusted",
+                        Array<X509Certificate>::class.java,
+                        String::class.java,
+                        String::class.java,
+                    )
+                    m.invoke(delegate, chain, authType, hostname)
+                    return
+                } catch (_: NoSuchMethodException) {
+                    // 系统实现不支持 hostname-aware：退化 2 参（只做证书链校验）
+                } catch (e: java.lang.reflect.InvocationTargetException) {
+                    throw (e.cause ?: e)
+                }
+            }
             delegate.checkServerTrusted(chain, authType)
         }
 
