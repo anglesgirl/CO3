@@ -621,5 +621,7 @@
   "screen_js_error_discord": "Discord",
   "screen_js_error_copy": "Copy Error",
   "screen_js_error_close": "Close the app",
-  "screen_js_error_recover": "Try recovering"
+  "screen_js_error_recover": "Try recovering",
+  "ech_browser_hint_title": "Page notice",
+  "ech_browser_hint_ok": "Got it"
 }

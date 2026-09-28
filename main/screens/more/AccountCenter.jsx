@@ -22,8 +22,8 @@ import {
 import { getRealUsername, fetchAccountIdentity, clearIdentityCache } from '../../web/account/accountIdentity';
 import { queryInviteQueue } from '../../web/account/inviteQueue';
 import { requestPasswordReset } from '../../web/account/passwordReset';
-import { fetchRegisterForm, submitRegister, activateByLink, AO3 } from '../../web/account/inviteFlow';
-import { submitInviteRequest, getCooldownLeft } from '../../web/account/inviteRequest';
+import { AO3 } from '../../web/account/inviteFlow';
+import { markInviteRequestOpened, getCooldownLeft } from '../../web/account/inviteRequest';
 import getUrl from '../../web/requestManager';
 import { openEchBrowser, onEchLoginSuccess } from '../../components/EchBrowser';
 
@@ -66,18 +66,8 @@ export default function AccountCenter() {
   const [pwEmail, setPwEmail] = useState('');
   const [pwSending, setPwSending] = useState(false);
   const [pwResult, setPwResult] = useState(null);
-  // 注册：字段与值都来自 AO3 注册页的实际表单（不写死字段名）
-  const [regFields, setRegFields] = useState([]);
-  const [regValues, setRegValues] = useState({});
-  const [regLoading, setRegLoading] = useState(false);
-  const [regSubmitting, setRegSubmitting] = useState(false);
-  const [regResult, setRegResult] = useState(null);
-  const [actLoading, setActLoading] = useState(false);
-  const [actResult, setActResult] = useState(null);
   // 申请邀请（排队）—— 含"被繁忙后自我暂停"的冷却状态
-  const [reqEmail, setReqEmail] = useState('');
   const [reqSubmitting, setReqSubmitting] = useState(false);
-  const [reqResult, setReqResult] = useState(null);
   const [reqCooldownLeft, setReqCooldownLeft] = useState(0);
 
   /** 毫秒 → "4分32秒"（冷却倒计时用）。 */
@@ -195,97 +185,43 @@ export default function AccountCenter() {
     return s;
   };
 
-  const regFallbackUrl = () => normalizeInviteUrl(inviteLink);
-
   /**
-   * 应用内拉取注册页 → 按页面真实字段渲染窗体。
-   * 用户要求："不走网页模式，而是app本体，这样没那么大割裂感"；
-   * 只有 app 真的做不到（例如人机验证）才回退浏览器。
+   * 注册：不再用 App 内自建表单（AO3 风控会拦 App 表单提交，用户实测：
+   * "注册、登录、激活，这里不应该使用APP表单的方式，风控很严重，不使用浏览器，
+   * 它根本不让你操作"）。改为**和登录页一样**的方式：EchBrowser 打开官方注册页，
+   * WebView 内走 ECH 通道 + Cloudflare 验证（登录能过，注册同样能过）。
+   * 提交后页面返回结果 → 原生提取文本 → App 外小窗体翻译提示。
    */
-  const doLoadRegisterForm = async () => {
+  const doOpenRegister = () => {
     const url = normalizeInviteUrl(inviteLink);
     if (!url) return Alert.alert(t('screen_account_center_paste_empty'));
-    setRegLoading(true);
-    setRegResult(null);
-    setRegFields([]);
-    try {
-      const r = await fetchRegisterForm(url.replace(/^.*invitation_token=/, ''));
-      if (!r.ok) {
-        setRegResult({ ok: false, message: r.message });
-        return;
-      }
-      setRegFields(r.fields);
-      setRegResult(null);
-    } catch (e) {
-      setRegResult({ ok: false, message: e.message });
-    } finally {
-      setRegLoading(false);
-    }
-  };
-
-  const doSubmitRegister = async () => {
-    setRegSubmitting(true);
-    setRegResult(null);
-    try {
-      const url = normalizeInviteUrl(inviteLink);
-      const form = await fetchRegisterForm(url.replace(/^.*invitation_token=/, ''));
-      if (!form.ok) {
-        setRegResult({ ok: false, message: form.message });
-        return;
-      }
-      const r = await submitRegister({
-        action: form.action,
-        token: form.token,
-        fields: form.fields,
-        values: regValues,
-      });
-      setRegResult(r);
-    } catch (e) {
-      setRegResult({ ok: false, message: e.message });
-    } finally {
-      setRegSubmitting(false);
-    }
+    openEchBrowser(url);
   };
 
   /**
-   * 提交"申请邀请"。**只提交一次，绝不做任何自动重试。**
-   * 用户明确要求："提交被繁忙以后，直接帮官方暂停，需要等至少5分钟以后再提交，
-   * 要不然我们就成了攻击官方的工具了。"
-   * 所以这里既没有 while 也没有递归 —— 何时再试由人决定，不由代码替用户决定。
+   * 激活：改为 EchBrowser 打开激活链接页面（激活是 GET，访问即生效），
+   * 页面结果由小窗体翻译提示。不再用 App 内直连请求（同样会被风控拦）。
    */
-  const doSubmitInviteRequest = async () => {
-    const emailClean = reqEmail.trim();
-    if (!emailClean || !emailClean.includes('@')) {
-      Alert.alert(t('screen_account_center_queue_bad_email'));
-      return;
-    }
-    if (reqCooldownLeft > 0) return; // 冷却期内连请求都不发
-    setReqSubmitting(true);
-    setReqResult(null);
-    try {
-      const r = await submitInviteRequest(emailClean);
-      setReqResult(r);
-      if (r.waitMs) setReqCooldownLeft(r.waitMs);
-    } catch (e) {
-      setReqResult({ ok: false, message: e.message });
-    } finally {
-      setReqSubmitting(false);
-    }
-  };
-
-  /** 激活：链接本身是 GET，应用内直接请求（不打开任何浏览器）。 */
-  const doActivate = async () => {
+  const doOpenActivate = () => {
     const url = activateLink.trim();
     if (!url) return Alert.alert(t('screen_account_center_paste_empty'));
-    setActLoading(true);
-    setActResult(null);
+    openEchBrowser(url);
+  };
+
+  /**
+   * 申请邀请（排队）：改为打开 AO3 排队页（EchBrowser，能过 CF 验证）。
+   * 打开即记本地冷却（防滥用：用户要求"不成为攻击官方的工具"，AO3 页面
+   * 自身还有 5 分钟倒计时，双保险）。提交后页面结果由小窗体翻译提示。
+   */
+  const doOpenInviteRequest = async () => {
+    if (reqCooldownLeft > 0) return; // 冷却期内不开页面
+    setReqSubmitting(true);
     try {
-      const r = await activateByLink(url);
-      setActResult(r);
-    } catch (e) {
-      setActResult({ ok: false, message: e.message });
+      await markInviteRequestOpened();
+      setReqCooldownLeft(await getCooldownLeft());
+      openEchBrowser(`${AO3}/invite_requests`);
     } finally {
-      setActLoading(false);
+      setReqSubmitting(false);
     }
   };
 
@@ -332,10 +268,6 @@ export default function AccountCenter() {
   /** 打开官方登录页：原生 EchWebView 负责劫持登录表单并检测成功，回来时 refresh 同步。 */
   const doLogin = () => {
     openEchBrowser('https://archiveofourown.org/users/login');
-  };
-
-  const open = (url) => {
-    openEchBrowser(url);
   };
 
 
@@ -530,75 +462,15 @@ export default function AccountCenter() {
               autoCorrect={false}
             />
             <TouchableOpacity
-              onPress={doLoadRegisterForm}
+              onPress={doOpenRegister}
               style={[styles.btnInline, { backgroundColor: currentTheme.primaryColor }]}
             >
-              {regLoading ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.btnText}>{t('screen_account_center_open')}</Text>
-              )}
+              <Text style={styles.btnText}>{t('screen_account_center_open')}</Text>
             </TouchableOpacity>
           </View>
 
-          {/* 注册表单：字段按 AO3 页面实际内容动态生成（不写死字段名） */}
-          {regFields.length > 0 ? (
-            <View style={{ marginTop: 10 }}>
-              {regFields.map((f) => (
-                <TextInput
-                  key={f.name}
-                  placeholder={f.label}
-                  placeholderTextColor={currentTheme.placeholderColor}
-                  value={regValues[f.name] || ''}
-                  onChangeText={(v) => setRegValues((s) => ({ ...s, [f.name]: v }))}
-                  secureTextEntry={f.type === 'password'}
-                  style={[
-                    styles.input,
-                    {
-                      borderColor: currentTheme.borderColor,
-                      color: currentTheme.textColor,
-                      marginTop: 8,
-                    },
-                  ]}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-              ))}
-              <TouchableOpacity
-                onPress={doSubmitRegister}
-                style={[
-                  styles.btnInline,
-                  { backgroundColor: currentTheme.primaryColor, marginTop: 10, alignSelf: 'flex-start', marginLeft: 0 },
-                ]}
-              >
-                {regSubmitting ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.btnText}>{t('screen_account_center_submit')}</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          ) : null}
-
-          {regResult ? (
-            <Text style={{ color: currentTheme.textColor, marginTop: 8, fontSize: 12 }}>
-              {regResult.ok
-                ? t('screen_account_center_register_done')
-                : regResult.detail || t('screen_account_center_register_failed')}
-            </Text>
-          ) : null}
-
-          {/* 兜底：app 提交拿不到结果（人机验证/令牌失效等）时，才提供"改用浏览器打开" */}
-          {regResult && !regResult.ok ? (
-            <TouchableOpacity
-              onPress={() => open(regFallbackUrl())}
-              style={{ marginTop: 8, alignSelf: 'flex-start' }}
-            >
-              <Text style={{ color: currentTheme.primaryColor, fontSize: 12 }}>
-                {t('screen_account_center_use_browser')}
-              </Text>
-            </TouchableOpacity>
-          ) : null}
+          {/* 注册在 EchBrowser 内打开官方注册页完成（能过 Cloudflare 验证），
+              提交后页面结果由 App 外小窗体翻译提示（见 EchBrowser 的翻译浮窗）。 */}
         </View>
 
         <View
@@ -631,44 +503,15 @@ export default function AccountCenter() {
               autoCorrect={false}
             />
             <TouchableOpacity
-              onPress={doActivate}
+              onPress={doOpenActivate}
               style={[styles.btnInline, { backgroundColor: currentTheme.primaryColor }]}
             >
-              {actLoading ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.btnText}>{t('screen_account_center_open')}</Text>
-              )}
+              <Text style={styles.btnText}>{t('screen_account_center_open')}</Text>
             </TouchableOpacity>
           </View>
 
-          {/* 激活链接本身就是一个 GET（访问即生效），app 内直接请求即可，
-              不需要窗体，也不需要打开浏览器。 */}
-          {actResult ? (
-            <Text style={{ color: currentTheme.textColor, marginTop: 8, fontSize: 12 }}>
-              {actResult.ok
-                ? actResult.message === 'already'
-                  ? t('screen_account_center_activate_already')
-                  : t('screen_account_center_activate_done')
-                : t('screen_account_center_activate_failed')}
-            </Text>
-          ) : null}
-
-          {/* 兜底：链路里出现人机验证等 app 处理不了的情况，才让用户走浏览器 */}
-          {actResult && !actResult.ok ? (
-            <TouchableOpacity
-              onPress={() => {
-                const u = activateLink.trim();
-                if (!u) return Alert.alert(t('screen_account_center_paste_empty'));
-                open(u);
-              }}
-              style={{ marginTop: 8, alignSelf: 'flex-start' }}
-            >
-              <Text style={{ color: currentTheme.primaryColor, fontSize: 12 }}>
-                {t('screen_account_center_use_browser')}
-              </Text>
-            </TouchableOpacity>
-          ) : null}
+          {/* 激活在 EchBrowser 内打开激活链接完成（访问即生效），
+              页面结果由 App 外小窗体翻译提示。 */}
         </View>
 
         {/* 申请邀请（加入排队）—— 应用内提交，但**严格自我限流**。
@@ -692,58 +535,32 @@ export default function AccountCenter() {
           <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>
             {t('screen_account_center_request_invite_desc')}
           </Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 } }>
-            <TextInput
-              placeholder={t('screen_account_center_request_email')}
-              placeholderTextColor={currentTheme.placeholderColor}
-              value={reqEmail}
-              onChangeText={setReqEmail}
-              editable={reqCooldownLeft === 0}
-              style={[
-                styles.input,
-                { borderColor: currentTheme.borderColor, color: currentTheme.textColor },
-              ]}
-              autoCapitalize="none"
-              keyboardType="email-address"
-            />
-            <TouchableOpacity
-              onPress={doSubmitInviteRequest}
-              disabled={reqSubmitting || reqCooldownLeft > 0}
-              style={[
-                // 行内按钮用 btnInline（与输入框同高 44）—— 之前误用了全宽样式 btn
-                //（带 marginTop 12 / 高 46），在横向排列里既错位又差 2px 高度。
-                // ⚠️ 这里**不能加 marginTop**：它在 flexDirection:'row' 里，会把按钮整体下移，
-                // 与输入框错开（用户反馈"按钮和框没有对齐"）。行与行之间的间距由父 View 的
-                // marginTop 负责。
-                styles.btnInline,
-                {
-                  backgroundColor:
-                    reqCooldownLeft > 0 ? currentTheme.borderColor : currentTheme.primaryColor,
-                },
-              ]}
-            >
-              {reqSubmitting ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.btnText}>
-                  {reqCooldownLeft > 0
-                    ? t('screen_account_center_request_wait', { time: formatCountdown(reqCooldownLeft) })
-                    : t('screen_account_center_request_btn')}
-                </Text>
-              )}
-            </TouchableOpacity>
-          </View>
-          {reqResult ? (
-            <Text style={{ color: currentTheme.textColor, marginTop: 8, fontSize: 12 }}>
-              {reqResult.ok
-                ? t('screen_account_center_request_done')
-                : reqResult.message === 'busy'
-                ? t('screen_account_center_request_busy')
-                : reqResult.message === 'cooldown'
-                ? t('screen_account_center_request_wait', {
-                    time: formatCountdown(reqResult.waitMs || 0),
-                  })
-                : reqResult.detail || t('screen_account_center_request_failed')}
+          {/* 排队改走 EchBrowser 打开 AO3 排队页（App 表单提交会被风控拦，
+              网页能过 Cloudflare 验证）。打开即记本地冷却（防滥用，双保险）。 */}
+          <TouchableOpacity
+            onPress={doOpenInviteRequest}
+            disabled={reqSubmitting || reqCooldownLeft > 0}
+            style={[
+              styles.btn,
+              {
+                backgroundColor:
+                  reqCooldownLeft > 0 ? currentTheme.borderColor : currentTheme.primaryColor,
+              },
+            ]}
+          >
+            {reqSubmitting ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.btnText}>
+                {reqCooldownLeft > 0
+                  ? t('screen_account_center_request_wait', { time: formatCountdown(reqCooldownLeft) })
+                  : t('screen_account_center_request_btn')}
+              </Text>
+            )}
+          </TouchableOpacity>
+          {reqCooldownLeft > 0 ? (
+            <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 8 }}>
+              {t('screen_account_center_request_cooldown_hint')}
             </Text>
           ) : null}
         </View>

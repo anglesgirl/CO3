@@ -69,14 +69,50 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                             }
                         } catch (_: Exception) {}
                     }
+                    // 页面文本回传：注册/激活/排队等账号流程页提交后，页面返回结果，
+                    // App 外小窗体做翻译提示（RN 侧按 URL 过滤，浏览作品页不打扰）。
+                    extractPageText(view, url)
                 }
             }
         }
         return wv
     }
 
-    private fun injectLocalRewrite(view: WebView) {
-        // ★ 页面走 http://127.0.0.1:<port>（本地转发服务）后，静态 HTML 里的
+    /**
+     * 提取页面正文文本回传给 JS 层（EchPageText 事件），供账号流程页
+     * （注册/激活/申请排队）提交后的小窗体翻译提示使用。
+     * 只取前 700 字符（结果提示都在页面开头）；RN 侧按 URL 过滤场景。
+     */
+    private fun extractPageText(view: WebView, url: String?) {
+        try {
+            view.evaluateJavascript(
+                "(function(){var b=document.body?document.body.innerText:'';" +
+                    "return b.replace(/\\s+/g,' ').trim().substring(0,700);})()"
+            ) { result ->
+                val raw = result?.trim()
+                if (!raw.isNullOrEmpty() && raw != "null" && raw.length > 2) {
+                    // evaluateJavascript 返回 JSON 编码的字符串（外层带引号），
+                    // 剥壳 + 还原转义即可得到页面文本。
+                    val text = raw.substring(1, raw.length - 1)
+                        .replace("\\\"", "\"")
+                        .replace("\\n", " ")
+                        .replace("\\t", " ")
+                    if (text.isNotBlank()) {
+                        reactContext?.getJSModule(com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                            ?.emit(
+                                "EchPageText",
+                                com.facebook.react.bridge.Arguments.createMap().apply {
+                                    putString("url", url ?: "")
+                                    putString("text", text)
+                                }
+                            )
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun injectLocalRewrite(view: WebView) {        // ★ 页面走 http://127.0.0.1:<port>（本地转发服务）后，静态 HTML 里的
         //   https://archiveofourown.org 已由转发服务改写成本地地址；这里兜底处理
         //   **运行时** JS 动态生成的请求（fetch / XHR / location 跳转）——
         //   它们若仍以 https://archiveofourown.org 为地址，会被 WebView 原生栈

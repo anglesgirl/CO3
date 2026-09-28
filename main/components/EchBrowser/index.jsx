@@ -106,6 +106,42 @@ export function openEchBrowser(url, fallbackOpen) {
   return Linking.openURL(url).catch(() => {});
 }
 
+// ---- 小窗体翻译提示（账号流程页：注册/激活/排队）----
+//
+// 背景（2026-09-28 用户要求）：AO3 风控严格，注册/激活/申请排队不能用
+// App 内自建表单（会被 Cloudflare 拦），改为和登录页一样用 EchBrowser 打开
+// 官方页面。页面是英文，提交后由原生侧把页面文本回传（EchPageText 事件），
+// 这里翻译成中文，在 App 外弹一个小浮窗提示用户结果。
+const AO3_HINT_RULES = [
+  // 排队
+  [/added to the waiting list/i, '您已成功加入排队队列，等待邀请邮件即可。'],
+  [/already on the waiting list/i, '该邮箱已在排队队列中，无需重复申请。'],
+  [/waiting list/i, '排队页面已打开，请在页面内填写邮箱提交申请。'],
+  // 注册
+  [/create your account/i, '请在页面内填写注册信息并提交。'],
+  [/welcome to the archive/i, '注册成功，欢迎加入 Archive of Our Own！'],
+  [/invalid invitation|invitation.*(?:invalid|used)|has already been used/i, '邀请链接无效或已被使用，请检查链接。'],
+  [/sign in|log in/i, '登录页面已打开，请填写账号密码登录。'],
+  // 激活
+  [/account.*activated|activation.*(?:success|complete)|you.*activated/i, '账号激活成功，可以登录使用了！'],
+  [/already.*activated/i, '该账号已经激活过了。'],
+  [/invalid.*confirmation|confirmation.*(?:invalid|fail)/i, '激活链接无效，请检查链接是否完整。'],
+  // 找回密码
+  [/reset.*password|password.*reset/i, '找回密码页面已打开，请按提示操作。'],
+  // 通用错误
+  [/forbidden|not authorized/i, '页面返回"禁止访问"，可能被风控拦截，请重试或稍后再试。'],
+  [/error/i, '页面返回错误，可能被风控拦截，请重试或稍后再试。'],
+];
+
+/** 把 AO3 页面文本翻译成中文提示；未匹配返回 null。 */
+function translateAo3Hint(text) {
+  const t = String(text || '');
+  for (const [re, zh] of AO3_HINT_RULES) {
+    if (re.test(t)) return zh;
+  }
+  return null;
+}
+
 /** 单例宿主：挂在根组件里一次即可。 */
 export function EchBrowserHost() {
   const appCtx = useContext(AppContext);
@@ -113,6 +149,8 @@ export function EchBrowserHost() {
   const { t } = useTranslation();
   const [url, setUrl] = useState(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // 账号流程页提交后的小窗体翻译提示（原生回传页面文本 → 翻译）
+  const [hint, setHint] = useState(null);
   // 记录当前地址：LoginSuccess 事件里要判断"这次打开的是不是登录页"
   //（事件在已登录时会因任何 AO3 页面触发，见下面的监听）
   const urlRef = useRef(null);
@@ -120,12 +158,33 @@ export function EchBrowserHost() {
     urlRef.current = url;
   }, [url]);
 
+  // 原生 EchWebView 每次页面加载完成会回传页面文本（EchPageText 事件）。
+  // 只对"账号流程页"（注册/激活/排队/找回密码）弹翻译浮窗；
+  // 浏览作品页不弹（避免打扰）。
   useEffect(() => {
-    openHostFn = setUrl;
-    return () => {
-      if (openHostFn === setUrl) openHostFn = null;
-    };
+    const sub = DeviceEventEmitter.addListener('EchPageText', (e) => {
+      const current = String(urlRef.current || '');
+      if (!/(\/users\/|\/invite_requests)/i.test(current)) return;
+      const zh = translateAo3Hint(e && e.text);
+      if (zh) {
+        // 同一提示重复出现时保持现状，避免提交后页面多次加载反复弹
+        setHint((prev) => (prev && prev.text === zh ? prev : { text: zh }));
+      }
+    });
+    return () => sub.remove();
   }, []);
+
+  // 打开新页面时清掉上一个页面的翻译提示
+  const openPage = useCallback((u) => {
+    setHint(null);
+    setUrl(u);
+  }, []);
+  useEffect(() => {
+    openHostFn = openPage;
+    return () => {
+      if (openHostFn === openPage) openHostFn = null;
+    };
+  }, [openPage]);
 
   const close = useCallback(() => {
     setUrl(null);
@@ -204,6 +263,23 @@ export function EchBrowserHost() {
             <Text style={[styles.tipSub, { color: subColor }]}>{t('ech_browser_fail_closed')}</Text>
           </View>
         )}
+
+        {/* 账号流程页提交后的翻译提示小浮窗（盖在页面上方，用户可关闭） */}
+        {hint ? (
+          <View style={styles.hintWrap} pointerEvents="box-none">
+            <View style={[styles.hintBox, { backgroundColor: bar, borderColor: border }]}>
+              <Text style={[styles.hintTitle, { color: textColor }]}>
+                {t('ech_browser_hint_title')}
+              </Text>
+              <Text style={[styles.hintBody, { color: textColor }]}>{hint.text}</Text>
+              <TouchableOpacity onPress={() => setHint(null)} style={styles.hintClose}>
+                <Text style={{ color: currentTheme.primaryColor || '#1a73e8', fontWeight: '600' }}>
+                  {t('ech_browser_hint_ok')}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
       </View>
     </Modal>
   );
@@ -224,6 +300,18 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
   tip: { fontSize: 16, fontWeight: '600', marginTop: 16, textAlign: 'center' },
   tipSub: { fontSize: 13, marginTop: 8, textAlign: 'center', lineHeight: 19 },
+  // 翻译提示小浮窗：absolute 盖在页面底部，不参与布局
+  hintWrap: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: 24,
+    alignItems: 'stretch',
+  },
+  hintBox: { borderRadius: 12, borderWidth: 1, padding: 14 },
+  hintTitle: { fontSize: 15, fontWeight: '700' },
+  hintBody: { fontSize: 13, marginTop: 6, lineHeight: 19 },
+  hintClose: { marginTop: 10, alignSelf: 'flex-end' },
 });
 
 export default EchBrowserHost;

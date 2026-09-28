@@ -48,6 +48,15 @@ async function startCooldown(ms) {
 }
 
 /**
+ * 排队改走"应用内 ECH 浏览器打开 AO3 排队页"后，打开页面本身视为一次
+ * 申请动作并记冷却（防滥用，用户要求"不成为攻击官方的工具"）。
+ * AO3 页面自己还有 5 分钟倒计时，双保险。
+ */
+export async function markInviteRequestOpened() {
+  await startCooldown(SUCCESS_COOLDOWN_MS);
+}
+
+/**
  * 判断是否应视为"官方繁忙"。
  * 宁可判宽一点：把模糊的失败也当作 busy 并冷却，比"猜对了没繁忙"更安全 ——
  * 判错方向的代价是用户多等 5 分钟，而不是给官方加压。
