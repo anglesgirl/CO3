@@ -49,7 +49,9 @@ const (
 	// ECH 公钥配置缓存 5 小时:公钥轮换频率远低于此,期间连接直接用缓存握手,
 	// 避免每次启动/换 host 都实时查 DoH。兜底配置(server retry_configs / 目标
 	// 自身 ech= / operator fallback)同样缓存,失败后降级普通 TLS。
-	publicECHCacheTTL = 5 * time.Hour
+	// CF ECH 密钥 1 小时轮换一次、旧密钥保留 5 小时宽限期（服务器最多保留 5 套
+// 可用公钥）。客户端缓存必须 < 5h 才能保证不踩过期密钥：取 4h 保守值。
+publicECHCacheTTL = 4 * time.Hour
 )
 
 var (
@@ -1017,12 +1019,12 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 			if hc.as13335 && errors.As(err, &rej) && len(rej.RetryConfigList) > 0 {
 				raw.Close()
 				setConfigInfo("%d bytes for %s, source: server retry_configs (cached)", len(rej.RetryConfigList), host)
-				// 缓存兜底配置(服务器 retry_configs = 目标专属新公钥,按 own 存),
-				// 下次直接用它握手。
+				// 缓存兜底配置(服务器 retry_configs = 服务器当前有效官方配置,
+				// 按 pub 存),下次直接用它握手。
 				cachePathMu.RLock()
 				cp := cachePath
 				cachePathMu.RUnlock()
-				storePublicECHCacheSrc(cp, host, rej.RetryConfigList, "own")
+				storePublicECHCache(cp, host, rej.RetryConfigList)
 				hc.ech = append([]byte(nil), rej.RetryConfigList...)
 				raw, retryErr := d.DialContext(ctx, "tcp", cands[0])
 				if retryErr != nil {
@@ -2246,35 +2248,19 @@ func loadECHConfigWithFallbacks(host, doh string) ([]byte, string) {
 	cp := cachePath
 	cachePathMu.RUnlock()
 
-	// 1. 目标自身 HTTPS 记录的 ech=（浏览器策略，最高优先）。
-	// 2026-09-29 实测定性：172.64.229.6(NRT 大陆优化节点)只认 AO3 专属
-	// ECH 公钥 —— 浏览器用 AO3 自己的 ech= 正常；Go 代理此前用
-	// cloudflare-ech.com 公共公钥连同一节点 → CF 1034 Edge IP Restricted
-	// ("host resolved to an IP address that the site owner does not have
-	// access to")。大陆优化节点不提供公共公钥解密，必须用目标专属。
-	if doh != "" {
-		if b, err := fetchECHViaDoH(host, doh); err == nil && len(b) > 0 {
-			storePublicECHCacheSrc(cp, host, b, "own")
-			return b, "target HTTPS ech="
-		}
-	}
-
-	// 2. own 缓存（上次成功的目标自身 ech=，5h TTL；不发 DoH，冷启动最快）。
-	if cp != "" {
-		if b, ok := loadPublicECHCacheSrc(cp, host, "own"); ok && len(b) > 0 {
-			return b, "own cache"
-		}
-	}
-
-	// 3. pub 缓存（公共公钥兜底缓存，兼容旧版无 Source 字段的缓存）。
+	// ECH 公钥来源优先级（2026-09-29 用户定性：cloudflare-ech.com 才是官方
+	// 正确发布点；x.xn--pn1aul.eu.org 的 ech= 是用户自行改过的非官方值，
+	// 绝不能优先用）。CF 密钥 1h 轮换、5h 宽限 → 缓存 4h 必有效。
+	//
+	// 1. pub 缓存（cloudflare-ech.com 官方值，4h TTL；不发 DoH，冷启动最快）。
 	if cp != "" {
 		if b, ok := loadPublicECHCacheSrc(cp, host, "pub"); ok && len(b) > 0 {
 			return b, "pub cache"
 		}
 	}
 
-	// 4. Cloudflare 官方 ECH 公钥(适用所有 CF 站点，仅作兜底)。
-	// 4a. 国内三家纯 IP DoH 取官方活值：**不依赖 doh 设置** ——
+	// 2. Cloudflare 官方 ECH 公钥（官方发布点，实时拉最新值，适用所有 CF 站点）。
+	// 2a. 国内三家纯 IP DoH 取官方活值：**不依赖 doh 设置** ——
 	// 它不查系统 DNS、也不需要用户配 DoH，所以"关掉 DoH 只停普通解析"这条边界在这里成立：
 	// ECH 取数照旧，否则受保护域全部 fail-closed = 整个 App 没网络（Han1meViewer 上实测过这个坑）。
 	if b, err := fetchLiveECHWire(); err == nil && len(b) > 0 {
@@ -2284,11 +2270,27 @@ func loadECHConfigWithFallbacks(host, doh string) ([]byte, string) {
 		noteLog("domestic pure-ip ECH failed, falling back to gateway: %v", err)
 	}
 
-	// 4b. 回退：经用户/内置的 DoH 网关取（原有链路，保留）。
+	// 2b. 回退：经用户/内置的 DoH 网关取（原有链路，保留）。
 	if doh != "" {
 		if b, err := fetchECHViaDoH(cloudflareECHHost, doh); err == nil && len(b) > 0 {
 			storePublicECHCache(cp, host, b)
 			return b, "cloudflare-ech.com"
+		}
+	}
+
+	// 3. 目标自身 HTTPS 记录的 ech=（兜底：正常情况下与官方值同源；仅当
+	// 官方发布点全挂且目标自身记录未被改写时才有意义）。
+	if doh != "" {
+		if b, err := fetchECHViaDoH(host, doh); err == nil && len(b) > 0 {
+			storePublicECHCacheSrc(cp, host, b, "own")
+			return b, "target HTTPS ech="
+		}
+	}
+
+	// 4. own 缓存（上次成功的目标自身 ech=，4h TTL）。
+	if cp != "" {
+		if b, ok := loadPublicECHCacheSrc(cp, host, "own"); ok && len(b) > 0 {
+			return b, "own cache"
 		}
 	}
 
