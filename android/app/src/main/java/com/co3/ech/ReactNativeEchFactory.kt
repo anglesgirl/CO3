@@ -31,7 +31,8 @@ class ReactNativeEchFactory : OkHttpClientFactory {
         OkHttpClient.Builder()
             .cookieJar(
                 object : CookieJarContainer {
-                    override fun setCookieJar(cookieJar: CookieJar?) {}
+                    override fun setCookieJar(cookieJar: CookieJar) {}
+                    override fun removeCookieJar() {}
                     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {}
                     override fun loadForRequest(url: HttpUrl): List<Cookie> = emptyList()
                 },
