@@ -10,7 +10,7 @@ import okhttp3.OkHttpClient
  * 【为什么这样】安卓回迁 Go 后，TLS/ECH 全部由 Go 代理负责（同进程内嵌）。
  * RN 侧不能再直连 https://archiveofourown.org（系统 OkHttp 无 ECH，SNI 会
  * 明文暴露并被 RST）。这里用拦截器把 AO3 请求重写到本地代理地址：
- *   - URL: https://archiveofourown.org/* → http://127.0.0.1:<port>/*
+ *   - URL: https://archiveofourown.org 页面地址 → http://127.0.0.1:<port>（路径原样保留）
  *   - 传输/ECH/重定向/Cookie 由 Go 代理统一处理（jar 是权威，页面加载后
  *     EchProxyCore.syncCookiesToCookieManager() 同步进 CookieManager）
  *   - 非 AO3 请求原样放行

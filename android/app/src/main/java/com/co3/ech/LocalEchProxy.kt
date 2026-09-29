@@ -13,7 +13,7 @@ import android.util.Log
  * 职责（本文件）：
  *  - start()/stop()：委托 EchProxyCore（Go 运行时，幂等、自动选端口）
  *  - port/baseUrl：供 EchWebViewManager / injectLocalRewrite 拼本地代理地址
- *  - rewriteWebUrl()：把 https://archiveofourown.org/* 改写成 http://127.0.0.1:<port>/*
+ *  - rewriteWebUrl()：把 https://archiveofourown.org 页面地址改写成 http://127.0.0.1:<port>（路径原样保留）
  *    （EchWebView 加载页面的唯一入口，改写的页面流量全走 Go 代理 + ECH）
  *
  * WebView 子请求（图片/脚本等）由 CoWebViewHelper.intercept 拦截后同样走
@@ -54,7 +54,7 @@ object LocalEchProxy {
         port = DEFAULT_PORT
     }
 
-    /** https://archiveofourown.org/* → http://127.0.0.1:<port>/*（EchWebView 页面加载入口）。 */
+    /** https://archiveofourown.org 页面地址 → http://127.0.0.1:<port>（路径原样保留）（EchWebView 页面加载入口）。 */
     fun rewriteWebUrl(url: String): String {
         if (url.startsWith("https://$HOST")) return baseUrl + url.substringAfter(HOST)
         if (url.startsWith("https://www.$HOST")) return baseUrl + url.substringAfter(HOST)
