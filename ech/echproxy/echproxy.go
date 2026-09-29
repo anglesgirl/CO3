@@ -991,9 +991,17 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 			NextProtos:         []string{"h2", "http/1.1"},
 			InsecureSkipVerify: insecure,
 		}
-		// ECH 可用则优先 ECH 握手;失败兜底一次(retry_configs)并缓存;
-		// 再失败降级普通 TLS(保护性降级,至少保证连通性)。
-		if hc.as13335 && len(hc.ech) > 0 {
+		// ECH-mandatory（用户硬约束：它必须保证在ECH下）：
+		//  - AS13335 目标（AO3 由 Cloudflare 托管）必须走 ECH；
+		//  - 拿不到 ECHConfigList → 直接拒连（绝不普通 TLS）；
+		//  - ECH 握手失败 / 服务器未接受 ECH → 直接拒连；
+		//  - 明文降级会暴露真实 SNI，被 GFW RST 或 Cloudflare Challenge 锁死，
+		//    宁可请求失败也不降级。
+		if hc.as13335 {
+			if len(hc.ech) == 0 {
+				setShakeInfo("no ECHConfigList for AS13335 host %s; ECH-mandatory, refusing connection", host)
+				return nil, fmt.Errorf("no ECHConfigList for %s; refusing plain TLS (ECH-mandatory)", host)
+			}
 			cfg.EncryptedClientHelloConfigList = hc.ech
 			cfg.MinVersion = tls.VersionTLS13
 		}
@@ -1004,7 +1012,8 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 		err = tc.HandshakeContext(hctx)
 		if err != nil {
 			var rej *tls.ECHRejectionError
-			// ECH 被拒且服务器给了 retry_configs:兜底一次,并缓存该配置。
+			// ECH 被拒且服务器给了 retry_configs：只做一次 ECH retry（仍强制
+			// ECH，retry 失败直接拒连，不降级），并缓存该配置。
 			if hc.as13335 && errors.As(err, &rej) && len(rej.RetryConfigList) > 0 {
 				raw.Close()
 				setConfigInfo("%d bytes for %s, source: server retry_configs (cached)", len(rej.RetryConfigList), host)
@@ -1036,23 +1045,23 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 					return retryConn, nil
 				}
 				raw.Close()
-				// 兜底也失败 → 降级普通 TLS。
-				setShakeInfo("ECH retry failed for %s; downgrading to plain TLS: %v", host, retryErr)
-				return plainTLSHandshake(ctx, host, d, cands, insecure, hc.as13335 && len(hc.ech) > 0)
+				// retry 也失败 → 拒连（ECH-mandatory，不降级）。
+				setShakeInfo("ECH retry failed for %s; ECH-mandatory, refusing connection: %v", host, retryErr)
+				return nil, fmt.Errorf("ECH retry failed for %s; refusing plain TLS (ECH-mandatory): %w", host, retryErr)
 			}
 			raw.Close()
-			// ECH 握手失败(非 retry 场景)→ 降级普通 TLS。
-			if hc.as13335 && len(hc.ech) > 0 {
-				setShakeInfo("ECH handshake failed for %s; downgrading to plain TLS: %v", host, err)
-				return plainTLSHandshake(ctx, host, d, cands, insecure, true)
+			// ECH 握手失败(非 retry 场景)→ 拒连（ECH-mandatory，不降级）。
+			if hc.as13335 {
+				setShakeInfo("ECH handshake failed for %s; ECH-mandatory, refusing connection: %v", host, err)
+				return nil, fmt.Errorf("ECH handshake failed for %s; refusing plain TLS (ECH-mandatory): %w", host, err)
 			}
 			return nil, fmt.Errorf("%s handshake failed: %w", host, err)
 		}
 		if hc.as13335 && !tc.ConnectionState().ECHAccepted {
 			raw.Close()
-			// ECH 配置被服务器忽略(未接受)→ 降级普通 TLS。
-			setShakeInfo("ECH not accepted for %s; downgrading to plain TLS", host)
-			return plainTLSHandshake(ctx, host, d, cands, insecure, true)
+			// ECH 配置被服务器忽略(未接受)→ 拒连（ECH-mandatory，不降级）。
+			setShakeInfo("ECH not accepted for %s; ECH-mandatory, refusing connection", host)
+			return nil, fmt.Errorf("ECH not accepted for %s; refusing plain TLS (ECH-mandatory)", host)
 		}
 		if hc.as13335 {
 			// 2026-08-15: 记录实际连接的边缘 IP —— 1034(Edge IP Restricted)
@@ -1061,44 +1070,6 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 		}
 		return tc, nil
 	}
-}
-
-// plainTLSHandshake dials each candidate and performs an ordinary TLS handshake
-// (no ECH). Used as the last-resort fallback so a broken/rotated ECH config
-// can never fully block access; the connection still goes through DoH-resolved
-// addresses, so the poisoned system resolver is bypassed.
-func plainTLSHandshake(ctx context.Context, host string, d *net.Dialer, cands []string, insecure bool, wasECH bool) (net.Conn, error) {
-	var lastErr error
-	for _, c := range cands {
-		raw, err := d.DialContext(ctx, "tcp", c)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		cfg := &tls.Config{
-			ServerName:         host,
-			MinVersion:         tls.VersionTLS12,
-			NextProtos:         []string{"h2", "http/1.1"},
-			InsecureSkipVerify: insecure,
-		}
-		tctx, cancel := context.WithTimeout(ctx, dialTimeout)
-		tc := tls.Client(raw, cfg)
-		err = tc.HandshakeContext(tctx)
-		cancel()
-		if err != nil {
-			raw.Close()
-			lastErr = err
-			continue
-		}
-		if wasECH {
-			setShakeInfo("ok via %s plain TLS (ECH downgraded)", c)
-		}
-		return tc, nil
-	}
-	if lastErr == nil {
-		lastErr = errors.New("no dial candidates")
-	}
-	return nil, fmt.Errorf("plain TLS handshake failed: %w", lastErr)
 }
 
 // --- ECH transport --------------------------------------------------------

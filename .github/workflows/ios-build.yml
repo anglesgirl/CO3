@@ -42,6 +42,19 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.26.8'   # >=1.26.5: CVE-2026-42505 (ECH 隐私泄漏)
+          cache-dependency-path: ech/go.mod
+
+      # gomobile bind 的 Go 编译缓存（iOS framework 每次全量 bind 很慢）
+      - name: Cache Go build (gomobile iOS framework)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-ech-ios-${{ hashFiles('ech/go.mod') }}-${{ hashFiles('ech/echproxy/*.go') }}
+          restore-keys: |
+            go-ech-ios-${{ hashFiles('ech/go.mod') }}-
+            go-ech-ios-
 
       - name: Build ECH proxy iOS framework (gomobile)
         run: |

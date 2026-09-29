@@ -30,7 +30,7 @@ object CoWebViewHelper {
         val url = request.url.toString()
 
         // ★ 本地转发服务直连放行：WebView 页面/资源/表单全走 http://127.0.0.1:<port>
-        // （LocalEchProxy），由转发服务还原 Host/SNI/Origin 后经 Conscrypt ECH 转发 ——
+        // （LocalEchProxy），由本地 Go ECH 代理还原 Host/SNI/Origin 后转发 ——
         // WebView 原生栈直接访问本地回环即可，无需（也不该）在此再拦一层。
         if (host == "127.0.0.1" || host == "localhost") return null
 
@@ -161,8 +161,8 @@ object CoWebViewHelper {
                 lastError = e.message ?: e.javaClass.simpleName
                 Diagnostics.event("webview_fail", mapOf("host" to host, "attempt" to (attempt + 1).toString(), "err" to lastError.take(120)))
                 if (attempt == 0) {
-                    // ECH 配置可能是旧的：清一次缓存再试（EchRetryInterceptor 也做同样的事，这里是双保险）
-                    EchDoh.invalidateEch(host)
+                    // 失败重试：ECH 配置轮换由 Go 侧自愈（retry_configs 缓存 +
+                    // 单飞刷新），Kotlin 不再维护自己的 ECH 缓存，无需失效动作。
                     try {
                         Thread.sleep(300)
                     } catch (_: Exception) {

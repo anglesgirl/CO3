@@ -211,14 +211,18 @@ object Diagnostics {
             val proxy = Settings.Global.getString(ctx.contentResolver, "http_proxy")
             sb.append("系统代理(global http_proxy): ").append(proxy ?: "(未设置)").append('\n')
         }
-        sb.append("Conscrypt ECH ready: ").append(com.co3.ech.ConscryptEch.ready).append('\n')
+        runCatching {
+            val st = com.co3.ech.EchProxyCore.lastStatus()
+            sb.append("Go ECH proxy status: ").append(if (st.isBlank()) "(no handshake yet)" else st).append('\n')
+        }
         sb.append("LocalEchProxy: ").append(
             if (com.co3.ech.LocalEchProxy.isRunning)
                 "running on 127.0.0.1:${com.co3.ech.LocalEchProxy.port}"
             else "NOT running"
         ).append('\n')
         runCatching {
-            sb.append("ECH 落盘: ").append(com.co3.ech.EchState.describe("archiveofourown.org")).append('\n')
+            val jar = com.co3.ech.EchProxyCore.jarInfo()
+            sb.append("ECH cookie jar: ").append(if (jar.isBlank()) "(empty)" else jar.take(600).replace("\n", " | ")).append('\n')
         }
 
         sb.append("\n----- crash.log -----\n")

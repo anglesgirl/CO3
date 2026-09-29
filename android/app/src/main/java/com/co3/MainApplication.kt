@@ -44,7 +44,7 @@ class MainApplication : Application(), ReactApplication {
   override fun onCreate() {
     super.onCreate()
     // Hook React Native OkHttp：这里只注册工厂类，**不触发任何 native 初始化**
-    // （Conscrypt 的 provider 是懒加载，第一次真正发请求时才创建，那时 SoLoader 早已就绪）
+    // （Go aar 由 MainApplication 后台线程启动，工厂只在真正发请求时读端口）
     try {
         val provider = Class.forName("com.facebook.react.modules.network.OkHttpClientProvider")
         val method = provider.getMethod("setOkHttpClientFactory", Class.forName("com.facebook.react.modules.network.OkHttpClientFactory"))
@@ -56,40 +56,18 @@ class MainApplication : Application(), ReactApplication {
         android.util.Log.w("CO-ECH", "OkHttp hook failed: " + t.message)
     }
     com.co3.Diagnostics.initialize(this)
-    // ECH 配置落盘存储（冷启动直接复用上次的活值，不再等网关查询）
-    com.co3.ech.EchState.attach(this)
     ProcessLifecycleOwner.get().lifecycle.addObserver(AppForegroundTracker)
     // ⚠️ 【绝不可在此行之前加载任何 native 库】
-    // loadReactNative 里才初始化 SoLoader 与 Fresco。若在它之前调用 native 库（例如 Conscrypt），
+    // loadReactNative 里才初始化 SoLoader 与 Fresco。若在它之前调用 native 库（例如 Go aar），
     // 会因 SoLoader 未就绪抛 Error；一旦冒泡出去，本行不执行 → Fresco 未初始化 →
     // 渲染第一个 <Image> 时 Fresco.newDraweeControllerBuilder() 为 null → 启动即崩
     // （2026-09-11 真机实测：java.lang.NullPointerException at ReactImageManager.createViewInstance）。
     loadReactNative(this)
 
-    // ECH 预热（必须在 loadReactNative 之后：OkHttp/DoH 是纯 JVM，但绝不冒险把网络与
-    // 其他初始化塞到它前面）。后台线程跑，不阻塞启动；目的只是把 AO3 的
-    // ECH 配置与干净 IP 提前取好并落盘，用户点进去时首屏不必再等这一段。
-    //
-    // 启动前先报告落盘状态：这能直接看出冷启动会用"旧值"还是"新值"。
-    // 密钥轮换后若这里显示 hasSaved=true 且未过期，那就是拿旧密钥去握手 —— 必然失败，
-    // 而旧值的 TTL 最短也被拉到 1 小时（ECH_CACHE_MIN_MS），所以这一条是排查
-    // 「ECH_FAIL_CLOSED」最先该看的地方。
-    runCatching {
-      val warmHost = com.co3.ech.EchDoh.WARMUP_HOST
-      val saved = com.co3.ech.EchState.load(warmHost)
-      com.co3.Diagnostics.trace(
-        "boot.echState",
-        mapOf(
-          "host" to warmHost,
-          "hasSaved" to (saved != null),
-          "bytes" to (saved?.size ?: 0),
-          "note" to "hasSaved=true 表示冷启动将复用落盘的 ECH 配置（可能已是轮换前的旧密钥）"
-        )
-      )
-    }
     // 不在冷启动阶段主动访问网关或解析 AO3。
     // 之前的后台预热会触发 5～11 秒的网关校验/目标 DoH，占用同一网络资源，
-    // 用户随后点击文章时反而与它争用连接；ECH/IP 已有按需 single-flight 和落盘缓存。
+    // 用户随后点击文章时反而与它争用连接；ECH/IP 已有按需 single-flight 和落盘缓存
+    // （Go 侧 ech-public-config.json 5h TTL，Kotlin 不再维护自己的 ECH 缓存）。
     com.co3.Diagnostics.trace("boot.prewarm.skip", mapOf("reason" to "按需单航班，避免冷启动争用"))
     com.co3.Diagnostics.flushAsync()
 
