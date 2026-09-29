@@ -38,6 +38,15 @@ object EchProxyCore {
     private var runningPort = 0
     private val lock = Any()
 
+    // 当前实例实际生效的配置。Go 侧只在 Start() 时读一次 doh/ipList（存进
+    // activeDoH），此后无法更新 —— 所以配置变了必须重启，否则新配置永远不会
+    // 生效。详见 ensureStarted 里的说明。
+    @Volatile
+    private var activeDoh = ""
+
+    @Volatile
+    private var activeIpList = ""
+
     val isRunning: Boolean get() = runningPort != 0 && isListening(runningPort)
     val port: Int get() = runningPort
     val baseUrl: String get() = "http://127.0.0.1:$runningPort"
@@ -45,7 +54,20 @@ object EchProxyCore {
     /** 幂等启动：已在跑直接复用端口；port=0 自动选空闲端口。返回实际端口，失败 0。 */
     fun ensureStarted(port: Int, doh: String, ipList: String): Int {
         synchronized(lock) {
-            if (runningPort != 0 && isListening(runningPort)) return runningPort
+            if (runningPort != 0 && isListening(runningPort)) {
+                if (doh == activeDoh && ipList == activeIpList) return runningPort
+                // 配置变了 —— 必须重启。曾经这里只比端口就复用，于是
+                // MainApplication 用默认空参数抢跑（LocalEchProxy.start() 的
+                // doh/ipList 默认是空串）之后，JS 带着正确 DoH 再启动时被幂等
+                // 短路，Go 侧 activeDoH 永远是空 → DoH 全程失效，只能靠种子 IP
+                // 兜底，种子失效时直接 fail-closed 断网（2026-09-29 真机诊断实证）。
+                Log.i(
+                    TAG,
+                    "ECH 配置变更，重启代理：doh=[$activeDoh] -> [$doh]；ip=[$activeIpList] -> [$ipList]",
+                )
+                runCatching { Echproxy.stop() }
+                runningPort = 0
+            }
             val chosen = if (port != 0) port else freePort()
             if (chosen == 0) return 0
             val listen = "127.0.0.1:$chosen"
@@ -69,6 +91,8 @@ object EchProxyCore {
                 }
             }
             runningPort = chosen
+            activeDoh = doh
+            activeIpList = ipList
             Log.i(TAG, "ECH proxy listening on http://127.0.0.1:$chosen")
             return chosen
         }
@@ -78,6 +102,8 @@ object EchProxyCore {
         synchronized(lock) {
             runCatching { Echproxy.stop() }
             runningPort = 0
+            activeDoh = ""
+            activeIpList = ""
         }
     }
 
