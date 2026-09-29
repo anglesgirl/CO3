@@ -53,7 +53,8 @@ object CoWebViewHelper {
                     "utf-8",
                     502,
                     "ECH proxy not ready",
-                    null,
+                    mapOf("Cache-Control" to "no-store"),
+                    ByteArrayInputStream("ECH proxy not ready".toByteArray()),
                 )
             }
         }
