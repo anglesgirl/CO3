@@ -10,7 +10,7 @@
  * 导出时一并带上 —— 重启后 JS 日志丢失但原生 trace 已落盘，两头互补。
  */
 import { NativeModules, Platform } from 'react-native';
-import { getDoh, getCustomIPs, getLastStartError, getEchStatus, getJarInfo } from '../web/echKy';
+import { getDoh, getCustomIPs, getLastStartError, getEchStatus, getJarInfo, getDohCandidates } from '../web/echKy';
 import { ao3Text } from '../web/ao3Transport';
 import { remoteLogStats } from './remoteLog';
 
@@ -95,7 +95,42 @@ export async function buildDiagnosticText() {
     parts.push(`失败 ${Date.now() - t0}ms: ${String(e && e.message || e).slice(0, 300)}`);
   }
 
-  // 5. JS console（最近 400 条）
+  // 5. ech_http 引擎自检：直连 C++ 引擎（不经 Go 代理），把「取 ECH 配置」和
+  //    「ECH 握手」分开报，卡在哪一步一眼可见。本轮只做体检，不接管任何业务请求。
+  parts.push(`\n===== ech_http 引擎自检（C++ 引擎，不经 Go 代理） =====`);
+  const eh = NativeModules.EchHttp;
+  if (!eh) {
+    parts.push('(EchHttp 模块未注册)');
+  } else {
+    const dohList = await safe(async () => (await getDohCandidates()).join(','), '');
+    const ipList = await safe(() => getCustomIPs(), '');
+    parts.push(`DoH 端点: ${dohList || '(none)'}`);
+    parts.push(`优选 IP: ${ipList || '(dns)'}`);
+
+    let t = Date.now();
+    try {
+      const p = await eh.probeDoh('archiveofourown.org', dohList, '');
+      parts.push(
+        `① DoH 解析: ${Date.now() - t}ms echBytes=${p.echBytes} ` +
+        `地址=${p.connectIp}(共${p.addressCount}个) 来源=${p.configHost} TTL=${p.ttlSeconds}s`,
+      );
+    } catch (e) {
+      parts.push(`① DoH 解析失败 ${Date.now() - t}ms: ${String((e && e.message) || e).slice(0, 220)}`);
+    }
+
+    t = Date.now();
+    try {
+      const r = await eh.request('https://archiveofourown.org/', 'GET', '', dohList, ipList, '', 15000);
+      parts.push(
+        `② 引擎请求: HTTP ${r.status} ${Date.now() - t}ms echAccepted=${r.echAccepted} ` +
+        `重试=${r.echRetries} 连到=${r.connectIp} DoH耗时=${r.dohMs}ms body=${(r.body || '').length}B`,
+      );
+    } catch (e) {
+      parts.push(`② 引擎请求失败 ${Date.now() - t}ms: ${String((e && e.message) || e).slice(0, 220)}`);
+    }
+  }
+
+  // 6. JS console（最近 400 条）
   const slice = consoleLogs.slice(-400);
   parts.push(`\n===== JS console（最近 ${slice.length} 条） =====`);
   parts.push(...slice);

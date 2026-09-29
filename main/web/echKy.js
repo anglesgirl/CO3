@@ -76,7 +76,7 @@ export async function getDoh() {
   }
 }
 
-async function getDohCandidates() {
+export async function getDohCandidates() {
   const values = await Promise.all(
     [DOH_KEY, DOH2_KEY, DOH3_KEY].map(key => AsyncStorage.getItem(key)),
   );
