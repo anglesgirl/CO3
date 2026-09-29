@@ -1,6 +1,10 @@
 package com.co3.ech
 
+import com.facebook.react.modules.network.CookieJarContainer
 import com.facebook.react.modules.network.OkHttpClientFactory
+import okhttp3.Cookie
+import okhttp3.CookieJar
+import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 
 /**
@@ -15,10 +19,23 @@ import okhttp3.OkHttpClient
  *     EchProxyCore.syncCookiesToCookieManager() 同步进 CookieManager）
  *   - 非 AO3 请求原样放行
  * 拦截器只动 URL；Referer/Origin 保持原值（Go 侧只重写 127 来源，符合预期）。
+ *
+ * 【必须挂 CookieJarContainer】RN 的 Fresco 图片模块初始化时会强转
+ * `client.cookieJar() as CookieJarContainer`（FrescoModule.kt:162）——默认
+ * NoCookies 不是该接口，启动即崩 ClassCastException。这里挂一个空实现的
+ * CookieJarContainer：cookie 权威在 Go jar（不走 CookieManager），所以
+ * save/load 都是空操作，只满足类型契约。
  */
 class ReactNativeEchFactory : OkHttpClientFactory {
     override fun createNewNetworkModuleClient(): OkHttpClient =
         OkHttpClient.Builder()
+            .cookieJar(
+                object : CookieJarContainer {
+                    override fun setCookieJar(cookieJar: CookieJar?) {}
+                    override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {}
+                    override fun loadForRequest(url: HttpUrl): List<Cookie> = emptyList()
+                },
+            )
             .addInterceptor { chain ->
                 val req = chain.request()
                 val url = req.url.toString()
