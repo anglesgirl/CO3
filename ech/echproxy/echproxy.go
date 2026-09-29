@@ -1017,11 +1017,12 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 			if hc.as13335 && errors.As(err, &rej) && len(rej.RetryConfigList) > 0 {
 				raw.Close()
 				setConfigInfo("%d bytes for %s, source: server retry_configs (cached)", len(rej.RetryConfigList), host)
-				// 缓存兜底配置,下次直接用它握手。
+				// 缓存兜底配置(服务器 retry_configs = 目标专属新公钥,按 own 存),
+				// 下次直接用它握手。
 				cachePathMu.RLock()
 				cp := cachePath
 				cachePathMu.RUnlock()
-				storePublicECHCache(cp, host, rej.RetryConfigList)
+				storePublicECHCacheSrc(cp, host, rej.RetryConfigList, "own")
 				hc.ech = append([]byte(nil), rej.RetryConfigList...)
 				raw, retryErr := d.DialContext(ctx, "tcp", cands[0])
 				if retryErr != nil {
@@ -2156,25 +2157,32 @@ type publicECHCache struct {
 	Host      string `json:"host"`
 	ConfigB64 string `json:"config_b64"`
 	ExpiresAt int64  `json:"expires_at"`
+	// Source 记录 ECHConfigList 来源：own=目标自身 HTTPS ech=（浏览器策略，
+	// 大陆优化节点只认它）；pub=cloudflare-ech.com 公共公钥（兜底）。
+	// 空=旧版缓存（公共公钥），own 读取不匹配，pub 读取兼容。
+	Source string `json:"source,omitempty"`
 }
 
 // The cache is deliberately limited to a public ECHConfigList and expiry.
 // It is shared by all proxy starts in this app installation; it never stores
 // HTTP data, cookies, credentials, private keys, or a bypass decision.
-func loadPublicECHCache(path, host string) ([]byte, bool) {
+// loadPublicECHCacheSrc 读取指定来源的 ECH 缓存。source 为 "own" 时旧缓存
+// （Source 为空，内容为公共公钥）不匹配，避免用公共公钥连优化节点踩 1034。
+func loadPublicECHCacheSrc(path, host, source string) ([]byte, bool) {
 	if strings.TrimSpace(path) == "" { return nil, false }
 	data, err := os.ReadFile(path)
 	if err != nil { return nil, false }
 	var record publicECHCache
 	if json.Unmarshal(data, &record) != nil || !strings.EqualFold(record.Host, host) || record.ExpiresAt <= time.Now().Unix() { return nil, false }
+	if source == "own" && record.Source != "own" { return nil, false }
 	b, err := base64.StdEncoding.DecodeString(record.ConfigB64)
 	if err != nil || len(b) == 0 { return nil, false }
 	return b, true
 }
 
-func storePublicECHCache(path, host string, config []byte) {
+func storePublicECHCacheSrc(path, host string, config []byte, source string) {
 	if strings.TrimSpace(path) == "" || len(config) == 0 { return }
-	record, err := json.Marshal(publicECHCache{Host: strings.ToLower(host), ConfigB64: base64.StdEncoding.EncodeToString(config), ExpiresAt: time.Now().Add(publicECHCacheTTL).Unix()})
+	record, err := json.Marshal(publicECHCache{Host: strings.ToLower(host), ConfigB64: base64.StdEncoding.EncodeToString(config), ExpiresAt: time.Now().Add(publicECHCacheTTL).Unix(), Source: source})
 	if err != nil { return }
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil { return }
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".echconfig-")
@@ -2185,6 +2193,16 @@ func storePublicECHCache(path, host string, config []byte) {
 	if err = tmp.Chmod(0600); err != nil { tmp.Close(); return }
 	if err = tmp.Close(); err != nil { return }
 	_ = os.Rename(name, path)
+}
+
+// loadPublicECHCache 保持旧签名：读 pub 来源缓存（旧调用点兼容）。
+func loadPublicECHCache(path, host string) ([]byte, bool) {
+	return loadPublicECHCacheSrc(path, host, "pub")
+}
+
+// storePublicECHCache 保持旧签名：默认按 pub（公共公钥）来源落盘。
+func storePublicECHCache(path, host string, config []byte) {
+	storePublicECHCacheSrc(path, host, config, "pub")
 }
 
 // cloudflareECHHost 是 Cloudflare 官方的 ECH 公钥发布点。它的 HTTPS 记录里
@@ -2228,15 +2246,35 @@ func loadECHConfigWithFallbacks(host, doh string) ([]byte, string) {
 	cp := cachePath
 	cachePathMu.RUnlock()
 
-	// 1. Cache first:握手用缓存配置,不发 DoH。
-	if cp != "" {
-		if b, ok := loadPublicECHCache(cp, host); ok && len(b) > 0 {
-			return b, "cache"
+	// 1. 目标自身 HTTPS 记录的 ech=（浏览器策略，最高优先）。
+	// 2026-09-29 实测定性：172.64.229.6(NRT 大陆优化节点)只认 AO3 专属
+	// ECH 公钥 —— 浏览器用 AO3 自己的 ech= 正常；Go 代理此前用
+	// cloudflare-ech.com 公共公钥连同一节点 → CF 1034 Edge IP Restricted
+	// ("host resolved to an IP address that the site owner does not have
+	// access to")。大陆优化节点不提供公共公钥解密，必须用目标专属。
+	if doh != "" {
+		if b, err := fetchECHViaDoH(host, doh); err == nil && len(b) > 0 {
+			storePublicECHCacheSrc(cp, host, b, "own")
+			return b, "target HTTPS ech="
 		}
 	}
 
-	// 2. Cloudflare 官方 ECH 公钥(适用所有 CF 站点)。
-	// 2a. 国内三家纯 IP DoH 取官方活值：**不依赖 doh 设置** ——
+	// 2. own 缓存（上次成功的目标自身 ech=，5h TTL；不发 DoH，冷启动最快）。
+	if cp != "" {
+		if b, ok := loadPublicECHCacheSrc(cp, host, "own"); ok && len(b) > 0 {
+			return b, "own cache"
+		}
+	}
+
+	// 3. pub 缓存（公共公钥兜底缓存，兼容旧版无 Source 字段的缓存）。
+	if cp != "" {
+		if b, ok := loadPublicECHCacheSrc(cp, host, "pub"); ok && len(b) > 0 {
+			return b, "pub cache"
+		}
+	}
+
+	// 4. Cloudflare 官方 ECH 公钥(适用所有 CF 站点，仅作兜底)。
+	// 4a. 国内三家纯 IP DoH 取官方活值：**不依赖 doh 设置** ——
 	// 它不查系统 DNS、也不需要用户配 DoH，所以"关掉 DoH 只停普通解析"这条边界在这里成立：
 	// ECH 取数照旧，否则受保护域全部 fail-closed = 整个 App 没网络（Han1meViewer 上实测过这个坑）。
 	if b, err := fetchLiveECHWire(); err == nil && len(b) > 0 {
@@ -2246,7 +2284,7 @@ func loadECHConfigWithFallbacks(host, doh string) ([]byte, string) {
 		noteLog("domestic pure-ip ECH failed, falling back to gateway: %v", err)
 	}
 
-	// 2b. 回退：经用户/内置的 DoH 网关取（原有链路，保留）。
+	// 4b. 回退：经用户/内置的 DoH 网关取（原有链路，保留）。
 	if doh != "" {
 		if b, err := fetchECHViaDoH(cloudflareECHHost, doh); err == nil && len(b) > 0 {
 			storePublicECHCache(cp, host, b)
@@ -2254,15 +2292,7 @@ func loadECHConfigWithFallbacks(host, doh string) ([]byte, string) {
 		}
 	}
 
-	// 3. 目标自身 HTTPS 记录的 ech=。
-	if doh != "" {
-		if b, err := fetchECHViaDoH(host, doh); err == nil && len(b) > 0 {
-			storePublicECHCache(cp, host, b)
-			return b, "target HTTPS ech="
-		}
-	}
-
-	// 4. operator fallback。
+	// 5. operator fallback。
 	mu.Lock()
 	defer mu.Unlock()
 	if len(fallbackECH) > 0 {
@@ -2271,8 +2301,8 @@ func loadECHConfigWithFallbacks(host, doh string) ([]byte, string) {
 		return b, "operator fallback"
 	}
 
-	// 5. 内置 Cloudflare 公共公钥(最后兜底)。
-	// 部分区域封禁 cloudflare-ech.com 的 IP / 干扰 DoH,导致上面 1-4 全失败。
+	// 6. 内置 Cloudflare 公共公钥(最后兜底)。
+	// 部分区域封禁 cloudflare-ech.com 的 IP / 干扰 DoH,导致上面全失败。
 	// 内置快照保证 AS13335 主机仍能发起 ECH 握手;公钥轮换由服务器
 	// retry_configs 兜底(握手被拒时自动更新),无需网络拉取也能自愈。
 	if b, err := base64.StdEncoding.DecodeString(builtinCFECHConfigB64); err == nil && len(b) > 0 {
