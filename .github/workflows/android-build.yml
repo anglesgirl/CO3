@@ -58,6 +58,74 @@ jobs:
             "lib/arm64-v8a/libomp.so" \
             -d "$GITHUB_WORKSPACE/android/app/src/main/jniLibs/arm64-v8a"
           ls -la "$GITHUB_WORKSPACE/android/app/src/main/jniLibs/arm64-v8a"
+
+      # ══ ech_http 原生引擎：复用 ech-research 预编译的 BoringSSL + libcurl ══
+      # 与 HyMT 同样的投放方式：CI 编出 libco3ech.so 放进 jniLibs。
+      # 刻意不用 gradle 的 externalNativeBuild（见 android/app/build.gradle 说明）。
+      - name: Cache ech_http 预编译 SDK (BoringSSL + libcurl)
+        uses: actions/cache@v4
+        with:
+          path: ~/ech_http_sdk
+          key: ech-http-sdk-v0.1.1-${{ runner.os }}
+
+      - name: Build libco3ech.so (ech_http 引擎 + JNI 桥)
+        run: |
+          set -euo pipefail
+          # 用 runner 预装的 NDK 28.2：引擎已在该版本上验证过编译/链接/页对齐
+          NDK=/usr/local/lib/android/sdk/ndk/28.2.13676358
+          SDK_ROOT="$HOME/ech_http_sdk"
+          mkdir -p "$SDK_ROOT"
+
+          fetch_sdk() {  # $1=sdk 名  $2=官方 SHA-256
+            local name="$1" sha="$2" dest="$SDK_ROOT/$1"
+            if [ -f "$dest/.ok" ]; then echo "复用缓存的 $name"; return 0; fi
+            rm -rf "$dest"; mkdir -p "$dest"
+            curl -sSL --retry 3 --max-time 600 -o /tmp/eh-sdk.zip \
+              "https://github.com/ech-research/libechhttp-android-build/releases/download/v0.1.1/libechhttp-deps-v0.1.1-$name.zip"
+            echo "$sha  /tmp/eh-sdk.zip" | sha256sum -c -
+            unzip -q /tmp/eh-sdk.zip -d "$dest"
+            rm -f /tmp/eh-sdk.zip
+            touch "$dest/.ok"
+          }
+
+          fetch_sdk android-arm64 88f2258556a253b6856988e418826e21cf0822a1d6a5793ca98c5e48c738ad69
+          fetch_sdk android-arm   f221237ababb51d4fe900eb562d9218dad28160340f513ae3ecb5dcdba72bfa1
+
+          for pair in "arm64-v8a:android-arm64" "armeabi-v7a:android-arm"; do
+            ABI="${pair%%:*}"; NAME="${pair##*:}"
+            echo "──────── 编译 $ABI ────────"
+            cmake -S android/app/src/main/cpp -B "build/ech-$ABI" \
+              -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+              -DANDROID_ABI="$ABI" \
+              -DANDROID_PLATFORM=android-24 \
+              -DANDROID_STL=c++_static \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DEH_DEPS_ROOT="$SDK_ROOT/$NAME"
+            cmake --build "build/ech-$ABI" --parallel 4
+            mkdir -p "android/app/src/main/jniLibs/$ABI"
+            cp "build/ech-$ABI/out/libco3ech.so" "android/app/src/main/jniLibs/$ABI/"
+            ls -lh "android/app/src/main/jniLibs/$ABI/libco3ech.so"
+          done
+
+      - name: Verify libco3ech.so (页对齐 / 依赖 / JNI 符号)
+        run: |
+          set -euo pipefail
+          NDK=/usr/local/lib/android/sdk/ndk/28.2.13676358
+          BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          for ABI in arm64-v8a armeabi-v7a; do
+            SO="android/app/src/main/jniLibs/$ABI/libco3ech.so"
+            echo "──── $ABI ────"
+            file "$SO"
+            "$BIN/llvm-readelf" -l "$SO" | grep -m2 LOAD
+            "$BIN/llvm-readelf" -d "$SO" | grep NEEDED
+            if "$BIN/llvm-readelf" -d "$SO" | grep -Ei 'NEEDED.*(ssl|crypto|curl|zlib)'; then
+              echo "!! 出现外部 SSL/curl 依赖，静态链接未生效"; exit 1
+            fi
+            # JNI 入口必须导出，否则 Kotlin 侧 UnsatisfiedLinkError
+            "$BIN/llvm-nm" -D --defined-only "$SO" | grep -E 'Java_com_co3_ech_EchHttpNative' \
+              || { echo "!! JNI 入口未导出"; exit 1; }
+          done
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:

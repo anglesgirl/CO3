@@ -226,6 +226,15 @@ object Diagnostics {
                 "running on 127.0.0.1:${com.co3.ech.LocalEchProxy.port}"
             else "NOT running"
         ).append('\n')
+        // ech_http 原生引擎（去 Dart 化后的 C++ 桥）是否随包投放且能加载。
+        // 本阶段它只提供门面、尚未接管任何请求，用于真机确认 .so 正常加载。
+        runCatching {
+            sb.append("ech_http 引擎: ").append(
+                if (com.co3.ech.EchHttpNative.isAvailable)
+                    "${com.co3.ech.EchHttpNative.version}（已加载，未接管请求）"
+                else "不可用（libco3ech.so 未加载）"
+            ).append('\n')
+        }
         runCatching {
             val jar = com.co3.ech.EchProxyCore.jarInfo()
             sb.append("ECH cookie jar: ").append(if (jar.isBlank()) "(empty)" else jar.take(600).replace("\n", " | ")).append('\n')
