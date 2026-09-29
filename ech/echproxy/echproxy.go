@@ -693,7 +693,46 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Set-Cookie", "proxy_notice=0; Path=/")
 	}
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	// Android WebView 场景：页面 origin 是 http://127.0.0.1:<port>（本地代理），
+	// 静态 HTML 里的 https://archiveofourown.org 链接/表单 action/资源地址必须
+	// 改写回本地代理地址，否则 WebView 点出去/提交会直连明文 AO3（SNI 泄露 +
+	// 被 RST）。仅 text/html 改写（CSS/JS 里的运行时请求由 injectLocalRewrite
+	// 兜底）；JSON/API 响应不改（iOS echFetch 解析依赖原始内容）。
+	rewriteHTMLForWebView(w, resp, r)
+}
+
+// rewriteHTMLForWebView 把 text/html 响应体里的 https://archiveofourown.org
+// （含 www 前缀）改写回 http://127.0.0.1:<port>。端口从请求 Host 提取
+//（WebView/echKy 只访问本地代理，Host 恒为 127.0.0.1:<port>）。
+// 大响应（>16MB，AO3 页面不会到）或非文本类型直接原样流式透传。
+func rewriteHTMLForWebView(w http.ResponseWriter, resp *http.Response, r *http.Request) {
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(strings.ToLower(ct), "text/html") {
+		_, _ = io.Copy(w, resp.Body)
+		return
+	}
+	_, port, err := net.SplitHostPort(r.Host)
+	if err != nil || port == "" {
+		// 拿不到端口就保持原样，绝不擅自改写（宁可页面个别链接指回官方域，
+		// 也不能把地址改错导致整页失效）。
+		_, _ = io.Copy(w, resp.Body)
+		return
+	}
+	// 上限保护：超过 16MB 不再整读改写，原样流式。
+	const maxRewrite = 16 << 20
+	if resp.ContentLength > maxRewrite {
+		_, _ = io.Copy(w, resp.Body)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRewrite))
+	if err != nil || len(body) == 0 || len(body) >= maxRewrite {
+		_, _ = io.WriteString(w, string(body))
+		return
+	}
+	base := "http://127.0.0.1:" + port
+	out := strings.ReplaceAll(string(body), "https://www.archiveofourown.org", base)
+	out = strings.ReplaceAll(out, "https://archiveofourown.org", base)
+	_, _ = io.WriteString(w, out)
 }
 
 func cookieContains(cookies []string, name string) bool {

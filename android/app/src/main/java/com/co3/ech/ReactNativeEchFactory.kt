@@ -4,16 +4,36 @@ import com.facebook.react.modules.network.OkHttpClientFactory
 import okhttp3.OkHttpClient
 
 /**
- * RN 的网络栈直接复用共享的 ECH 客户端（EchHttp.client）：
- *   - TLS 走 Conscrypt（保护域名自动注入 ECHConfigList）
- *   - Dns 走 DoH（避开大陆 DNS 污染）
- *   - cookieJar 挂 CookieManager（与 WebView 双向共享）
- *   - 重定向/Cookie/gzip 全部由 OkHttp 标准语义处理
+ * RN 网络栈（fetch / 图片等所有走 RN OkHttp 的请求）：
+ * AO3 域请求重写走本地 Go ECH 代理（http://127.0.0.1:<port>）。
  *
- * 不再需要任何"把请求转到 JNI 再手工拼响应"的拦截器 —— 那套做法会吃掉
- * 302 响应里的 Set-Cookie（例如 AO3 登录成功返回的 user_credentials），
- * 也正是登录长期失败的根因。
+ * 【为什么这样】安卓回迁 Go 后，TLS/ECH 全部由 Go 代理负责（同进程内嵌）。
+ * RN 侧不能再直连 https://archiveofourown.org（系统 OkHttp 无 ECH，SNI 会
+ * 明文暴露并被 RST）。这里用拦截器把 AO3 请求重写到本地代理地址：
+ *   - URL: https://archiveofourown.org/* → http://127.0.0.1:<port>/*
+ *   - 传输/ECH/重定向/Cookie 由 Go 代理统一处理（jar 是权威，页面加载后
+ *     EchProxyCore.syncCookiesToCookieManager() 同步进 CookieManager）
+ *   - 非 AO3 请求原样放行
+ * 拦截器只动 URL；Referer/Origin 保持原值（Go 侧只重写 127 来源，符合预期）。
  */
 class ReactNativeEchFactory : OkHttpClientFactory {
-    override fun createNewNetworkModuleClient(): OkHttpClient = EchHttp.client
+    override fun createNewNetworkModuleClient(): OkHttpClient =
+        OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                val url = req.url.toString()
+                val port = EchProxyCore.port
+                if (port != 0 &&
+                    (url.startsWith("https://archiveofourown.org") ||
+                        url.startsWith("https://www.archiveofourown.org"))
+                ) {
+                    val base = "http://127.0.0.1:$port"
+                    val rewritten = url
+                        .replaceFirst("https://www.archiveofourown.org", base)
+                        .replaceFirst("https://archiveofourown.org", base)
+                    return@addInterceptor chain.proceed(req.newBuilder().url(rewritten).build())
+                }
+                chain.proceed(req)
+            }
+            .build()
 }

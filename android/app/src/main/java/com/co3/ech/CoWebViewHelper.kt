@@ -4,6 +4,7 @@ import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import com.co3.Diagnostics
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.ByteArrayInputStream
 
@@ -11,12 +12,17 @@ import java.io.ByteArrayInputStream
  * WebView 子请求的唯一入口（shouldInterceptRequest）：
  * WebView 里发起的图片/脚本/页面请求无法被 RN 层拦截，必须在这里接管。
  *
- * 改造要点（原来走 JNI + libcurl，现改为 OkHttp + Conscrypt）：
- *   - 传输、重定向、Cookie 全部交给 OkHttp 标准语义，这里只做"翻译"（OkHttp Response -> WebResourceResponse）
- *   - Cookie 由 EchHttp.client 的 cookieJar（同一 CookieManager）注入，WebView 传来的 Cookie 头跳过以免打架
+ * 改造要点（安卓回迁 Go 后）：
+ *   - AO3 子请求重写为 http://127.0.0.1:<port>（本地 Go ECH 代理，明文仅本机
+ *     回环），传输/ECH/重定向/Cookie 全部由 Go 代理统一处理
+ *   - Go 已把 Set-Cookie 改写成 WebView 可收形式（127 域），这里只做翻译
+ *     （OkHttp Response -> WebResourceResponse）
  *   - 任何失败一律 fail-closed（返回 502 页面），绝不放行明文 SNI
  */
 object CoWebViewHelper {
+
+    /** 本地代理专用客户端（无 Conscrypt —— ECH 在 Go 侧）。 */
+    private val localClient by lazy { OkHttpClient.Builder().build() }
 
     fun intercept(request: WebResourceRequest): WebResourceResponse? {
         val host = request.url.host ?: return null
@@ -33,14 +39,23 @@ object CoWebViewHelper {
             Diagnostics.event("webview_login_post_passthrough", mapOf("url" to url.take(80)))
             return null
         }
-        // 所有 GET 统一走下方的 OkHttp + Conscrypt ECH；移除独立 H3/quiche 链路。
+        // 所有 GET 统一走本地 Go ECH 代理（回迁 Go 后不再直连 Conscrypt）。
         // WebView 的 POST body 取不到，因此 POST 只通过上面的登录 JS 桥处理。
         if (method != "GET") return null
 
-        // 惰性确保：ready 为 false 时主动初始化一次（幂等、不抛异常）。
-        if (!ConscryptEch.ready && !ConscryptEch.install()) {
-            Diagnostics.event("webview_ech_not_ready", mapOf("host" to host))
-            return null
+        // 惰性确保：Go 代理未就绪时主动启动一次（幂等）。仍失败则 fail-closed
+        // 返回 502 —— 绝不放行 WebView 明文直连 AO3（SNI 泄露被 RST）。
+        if (EchProxyCore.port == 0) {
+            if (!LocalEchProxy.start()) {
+                Diagnostics.event("webview_ech_not_ready", mapOf("host" to host))
+                return WebResourceResponse(
+                    "text/plain",
+                    "utf-8",
+                    502,
+                    "ECH proxy not ready",
+                    null,
+                )
+            }
         }
 
         var lastError: String = "unknown"
@@ -58,9 +73,15 @@ object CoWebViewHelper {
                     Diagnostics.event("webview_cookie_err", mapOf("host" to host, "err" to (e.message ?: "")))
                 }
 
-                val builder = Request.Builder().url(url).get()
+                // ★ 重写为本地 Go 代理地址（明文仅本机回环，Go 还原 Host/SNI/Origin
+                //   后经 ECH 转发 AO3）。Referer/Origin 保持原值（Go 只重写 127 来源）。
+                val port = EchProxyCore.port
+                val localUrl = url
+                    .replaceFirst("https://www.archiveofourown.org", "http://127.0.0.1:$port")
+                    .replaceFirst("https://archiveofourown.org", "http://127.0.0.1:$port")
+                val builder = Request.Builder().url(localUrl).get()
                 request.requestHeaders.forEach { (k, v) ->
-                    // Cookie 交给 cookieJar 统一注入；Host/Content-Length 由 OkHttp 自己管
+                    // Cookie 交给 Go jar 统一注入；Host/Content-Length 由 OkHttp 自己管
                     if (k.equals("Host", true) || k.equals("Content-Length", true)) return@forEach
                     if (k.equals("Cookie", true)) return@forEach
                     try {
@@ -69,7 +90,7 @@ object CoWebViewHelper {
                     }
                 }
 
-                EchHttp.client.newCall(builder.build()).execute().use { resp ->
+                localClient.newCall(builder.build()).execute().use { resp ->
                     val bodyBytes = resp.body?.bytes() ?: ByteArray(0)
                     val contentType = resp.header("Content-Type") ?: "text/html"
                     var mimeType = "text/html"

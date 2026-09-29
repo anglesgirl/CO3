@@ -1,56 +1,32 @@
 package com.co3.ech
 
 import android.util.Log
-import com.co3.Diagnostics
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.InputStream
-import java.io.OutputStream
-import java.net.InetAddress
-import java.net.ServerSocket
-import java.net.Socket
-import java.nio.charset.StandardCharsets
-import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * 进程内 ECH 本地转发服务（Android）。
+ * 本地 ECH 代理门面（Android）。
  *
- * 解决的问题：WebView 原生 TLS 栈不支持 ECH —— 登录 POST / 页面请求直连
- * archiveofourown.org 时 ClientHello 的 SNI 是明文，会被 GFW 直接 RST，
- * 而 shouldInterceptRequest 又拿不到 POST body（表单拼接参数的老坑）。
+ * 【架构变迁】安卓回迁 Go（用户拍板：苹果端与安卓端统一用 Go ECH 代理）：
+ * 曾经的进程内 OkHttp+Conscrypt 转发服务（LocalHttpServer）已移除，
+ * 转发由 `ech/echproxy.go`（gomobile aar，同进程内嵌）负责——
+ * Kotlin 侧只保留 WebView 需要的端口门面与 URL 改写。
  *
- * 方案（用户拍板的架构）：WebView 打开 `http://127.0.0.1:<port>/<原路径>`，
- * 明文请求只在本机回环内；本服务把请求**还原成** `https://archiveofourown.org/<原路径>`
- * 转发：
- *   - TLS/SNI/ECH 交给 ConscryptEch + EchHttp.client（SNI=archiveofourown.org，
- *     ECHConfigList 自动注入，DoH 解析由 EchDns 负责）
- *   - Host 头由 OkHttp 按目标 URL 自动生成（archiveofourown.org），不再是 127
- *   - Origin / Referer 从 http://127.0.0.1:8080 重写回 https://archiveofourown.org
- *     （AO3 有 same-origin CSRF 校验，不改必被拒）
- *   - Cookie 全权交给 OkHttp cookieJar（ReactCookieJarContainer = CookieManager，
- *     与 WebView 双向共享）；WebView 请求里带的 127 域 Cookie 头剥掉
- *   - 响应文本（HTML/CSS/JS）中 `https://archiveofourown.org` 改写回
- *     `http://127.0.0.1:<port>` —— 页面内所有链接 / 表单 action / 资源地址
- *     继续走本地转发，**路径原样不变**，浏览器原生提交、参数一个不少
+ * 职责（本文件）：
+ *  - start()/stop()：委托 EchProxyCore（Go 运行时，幂等、自动选端口）
+ *  - port/baseUrl：供 EchWebViewManager / injectLocalRewrite 拼本地代理地址
+ *  - rewriteWebUrl()：把 https://archiveofourown.org/* 改写成 http://127.0.0.1:<port>/*
+ *    （EchWebView 加载页面的唯一入口，改写的页面流量全走 Go 代理 + ECH）
  *
- * 安全边界：
- *   - 只监听 127.0.0.1（外部不可达）；目标域名固定 archiveofourown.org（ECH 保护域）
- *   - 进程内线程（非独立进程）：App 存活即服务存活，不存在"外挂进程被系统回收"
- *   - 表单提交是 WebView 原生行为（POST 到本地），不再依赖 JS 拼参数/劫持
+ * WebView 子请求（图片/脚本等）由 CoWebViewHelper.intercept 拦截后同样走
+ * 本地 Go 代理（见该文件注释）。JS 侧（echKy.js）走 NativeModules.EchProxy
+ * 拿端口后 fetch 本地代理 —— 双端同一套逻辑。
  */
 object LocalEchProxy {
     private const val TAG = "CO-LOCALPROXY"
 
     const val DEFAULT_PORT = 8080
-    private const val MAX_BODY = 8 * 1024 * 1024
     private const val HOST = "archiveofourown.org"
-    private const val WWW_HOST = "www.archiveofourown.org"
 
-    @Volatile
-    private var server: LocalHttpServer? = null
-
-    val isRunning: Boolean get() = server != null
+    val isRunning: Boolean get() = EchProxyCore.isRunning
 
     @Volatile
     var port: Int = DEFAULT_PORT
@@ -58,318 +34,30 @@ object LocalEchProxy {
 
     val baseUrl: String get() = "http://127.0.0.1:$port"
 
-    /** 幂等启动：8080 被占则依次尝试 8081..8090。 */
-    fun start(): Boolean {
-        if (server != null) return true
-        synchronized(this) {
-            if (server != null) return true
-            var lastErr: Exception? = null
-            for (p in DEFAULT_PORT..(DEFAULT_PORT + 10)) {
-                try {
-                    val s = LocalHttpServer(p)
-                    s.start()
-                    server = s
-                    port = p
-                    Log.i(TAG, "local ECH proxy listening on 127.0.0.1:$p")
-                    try {
-                        Diagnostics.event("local_proxy_start", mapOf("port" to p.toString()))
-                    } catch (_: Exception) {}
-                    return true
-                } catch (e: Exception) {
-                    lastErr = e
-                }
-            }
-            Log.e(TAG, "failed to bind 127.0.0.1:$DEFAULT_PORT..: ${lastErr?.message}")
-            return false
+    /**
+     * 幂等启动 Go 代理（同进程 gomobile aar，非独立进程）。
+     * port=0 自动选空闲端口；已在跑直接复用。成功返回 true。
+     */
+    fun start(doh: String = "", ipList: String = ""): Boolean {
+        val p = EchProxyCore.ensureStarted(0, doh, ipList)
+        if (p > 0) {
+            port = p
+            Log.i(TAG, "Go ECH proxy running on 127.0.0.1:$p")
+            return true
         }
+        Log.w(TAG, "Go ECH proxy failed to start")
+        return false
     }
 
     fun stop() {
-        server?.stop()
-        server = null
+        EchProxyCore.stop()
+        port = DEFAULT_PORT
     }
 
-    /**
-     * 把 AO3 的 https URL 改写为本地转发地址（**路径原样**，不加任何参数）。
-     * 非 AO3 / 已是本地地址 → 原样返回。
-     */
+    /** https://archiveofourown.org/* → http://127.0.0.1:<port>/*（EchWebView 页面加载入口）。 */
     fun rewriteWebUrl(url: String): String {
         if (url.startsWith("https://$HOST")) return baseUrl + url.substringAfter(HOST)
-        if (url.startsWith("https://$WWW_HOST")) return baseUrl + url.substringAfter(WWW_HOST)
+        if (url.startsWith("https://www.$HOST")) return baseUrl + url.substringAfter(HOST)
         return url
-    }
-
-    /** 文本内容里 AO3 绝对链接 → 本地地址（HTML/CSS/JS 响应体改写）。 */
-    private fun rewriteText(body: String): String =
-        body.replace("https://$HOST", baseUrl).replace("https://$WWW_HOST", baseUrl)
-
-    /** 从 WebView 来的 Origin/Referer 是本地地址时重写回 AO3。 */
-    private fun rewriteLocalHeader(value: String): String {
-        val v = value.trim()
-        return if (v.startsWith("http://127.0.0.1") || v.startsWith("http://localhost"))
-            v.replaceFirst(Regex("http://127\\.0\\.0\\.1:\\d+"), "https://$HOST")
-                .replaceFirst(Regex("http://localhost:\\d+"), "https://$HOST")
-        else v
-    }
-
-    private class LocalHttpServer(private val bindPort: Int) {
-        private var socket: ServerSocket? = null
-        @Volatile
-        private var running = false
-        private val threads = CopyOnWriteArrayList<Thread>()
-
-        fun start() {
-            socket = ServerSocket(bindPort, 50, InetAddress.getByName("127.0.0.1"))
-            running = true
-            val t = Thread { acceptLoop() }
-            t.name = "co-local-proxy-$bindPort"
-            t.isDaemon = true
-            t.start()
-            threads.add(t)
-        }
-
-        fun stop() {
-            running = false
-            try { socket?.close() } catch (_: Exception) {}
-        }
-
-        private fun acceptLoop() {
-            while (running) {
-                try {
-                    val client = socket?.accept() ?: break
-                    val h = Thread { handle(client) }
-                    h.name = "co-proxy-conn"
-                    h.isDaemon = true
-                    h.start()
-                    threads.add(h)
-                } catch (e: Exception) {
-                    if (running) Log.w(TAG, "accept err: ${e.message}")
-                }
-            }
-        }
-
-        private fun handle(client: Socket) {
-            try {
-                client.soTimeout = 30_000
-                val input = client.getInputStream()
-                val output = client.getOutputStream()
-
-                // 请求行：GET /works/123?x=1 HTTP/1.1
-                val line = readLine(input) ?: return
-                val parts = line.split(" ")
-                if (parts.size < 3) return
-                val method = parts[0].uppercase()
-                val uri = parts[1]
-                if (!uri.startsWith("/")) return
-
-                // 请求头（小写 key）
-                val headers = LinkedHashMap<String, String>()
-                while (true) {
-                    val h = readLine(input) ?: break
-                    if (h.isEmpty()) break
-                    val idx = h.indexOf(':')
-                    if (idx > 0) {
-                        headers[h.substring(0, idx).trim().lowercase()] = h.substring(idx + 1).trim()
-                    }
-                }
-
-                // body（POST 表单：Content-Length 原样读取，一个字节都不拼）
-                var body = ByteArray(0)
-                val cl = headers["content-length"]?.toIntOrNull()
-                if (cl != null && cl > 0) {
-                    if (cl > MAX_BODY) {
-                        writeError(output, 413, "body too large")
-                        return
-                    }
-                    body = ByteArray(cl)
-                    var off = 0
-                    while (off < cl) {
-                        val n = input.read(body, off, cl - off)
-                        if (n < 0) break
-                        off += n
-                    }
-                }
-
-                forward(method, uri, headers, body, output)
-            } catch (e: Exception) {
-                Log.w(TAG, "conn err: ${e.message}")
-            } finally {
-                try { client.close() } catch (_: Exception) {}
-            }
-        }
-
-        private fun forward(
-            method: String,
-            uri: String,
-            headers: Map<String, String>,
-            body: ByteArray,
-            output: OutputStream,
-        ) {
-            try {
-                // 目标固定为 ECH 保护域；路径 + query 原样（uri 含 query）
-                val targetUrl = "https://$HOST$uri"
-                val reqBuilder = Request.Builder().url(targetUrl)
-
-                val contentType = headers["content-type"]
-                    ?: "application/x-www-form-urlencoded"
-                val mediaType = runCatching { contentType.toMediaType() }.getOrNull()
-                val req = when (method) {
-                    "GET" -> reqBuilder.get()
-                    "POST" -> reqBuilder.post(body.toRequestBody(mediaType ?: "application/x-www-form-urlencoded".toMediaType()))
-                    "HEAD" -> reqBuilder.head()
-                    "PUT" -> reqBuilder.put(body.toRequestBody(mediaType ?: "application/octet-stream".toMediaType()))
-                    "DELETE" -> reqBuilder.delete(body.toRequestBody(mediaType ?: "application/octet-stream".toMediaType()))
-                    else -> {
-                        writeError(output, 405, "method not allowed")
-                        return
-                    }
-                }
-
-                // 请求头：剥掉本地/传输层专用头；Origin/Referer 从 127 还原成 AO3
-                for ((k, v) in headers) {
-                    when (k) {
-                        "host", "content-length", "accept-encoding", "connection",
-                        "transfer-encoding", "cookie", "proxy-connection" -> {
-                            // Host/Content-Length 由 OkHttp 按目标 URL 生成；
-                            // Accept-Encoding 由 OkHttp 管理（避免响应带回 Content-Encoding 混淆）；
-                            // Cookie 由 cookieJar（CookieManager）统一注入，剥掉 127 域 cookie
-                        }
-                        "origin" -> req.addHeader("Origin", rewriteLocalHeader(v))
-                        "referer" -> req.addHeader("Referer", rewriteLocalHeader(v))
-                        else -> req.addHeader(k, v)
-                    }
-                }
-
-                // 【登录闭环关键】POST（登录表单提交）用「不跟随重定向」的 client：
-                // 302 + Set-Cookie(user_credentials) 必须原样回到转发层（双写
-                // CookieManager + Location 改写给 WebView 跟随）。若用默认
-                // followRedirects=true，OkHttp 在内部就把 302 消费了，LocalEchProxy
-                // 看不到它 → CookieManager 永远没有 user_credentials →
-                // onPageFinished 的 LoginSuccess 检测不触发 → 用户必须手动点 logo
-                // 再加载一次页面才能把登录态传给 App（2026-09-28 用户实测反馈）。
-                // GET 302 无妨（下次页面加载会补），只改 POST 最小面。
-                val callClient = if (method == "POST")
-                    EchHttp.client.newBuilder().followRedirects(false).followSslRedirects(false).build()
-                else EchHttp.client
-                callClient.newCall(req.build()).execute().use { resp ->
-                    val statusCode = resp.code
-                    val statusText = resp.message.ifEmpty { "OK" }
-                    val mime = resp.header("Content-Type") ?: "text/html"
-                    val raw = resp.body?.bytes() ?: ByteArray(0)
-
-                    // 文本响应改写 AO3 绝对链接 → 本地；二进制（图片等）原样
-                    val isText = mime.contains("text/") || mime.contains("javascript") || mime.contains("json")
-                    val outBody = if (isText) {
-                        rewriteText(String(raw, StandardCharsets.UTF_8)).toByteArray(StandardCharsets.UTF_8)
-                    } else raw
-
-                    val sb = StringBuilder()
-                    sb.append("HTTP/1.1 ").append(statusCode).append(' ').append(statusText).append("\r\n")
-                    sb.append("Content-Type: ").append(mime).append("\r\n")
-                    sb.append("Content-Length: ").append(outBody.size).append("\r\n")
-                    sb.append("Connection: close\r\n")
-                    // 302 的 Location 也改写，跳转继续走本地
-                    val loc = resp.header("Location")
-                    if (loc != null) sb.append("Location: ").append(rewriteWebUrl(loc)).append("\r\n")
-                    // Set-Cookie 不再全部剥掉：改写后转给 WebView。
-                    // WebView 需要 user_credentials 才能让原生 LoginSuccess 检测触发
-                    //（登录成功 → EchBrowser 自动返回 App + 账号中心刷新），此前全剥导致
-                    // 登录成功也回不来（2026-09-27 用户实测）。改写规则与 Go 代理
-                    // (echproxy.go rewriteCookieForWebView) 一致：去 Domain(host-only 按
-                    // 127.0.0.1 存) + 去 Secure + SameSite=None→Lax（SameSite=None 强制
-                    // 要求 Secure，http 页面会拒收）。OkHttp jar 不受影响：
-                    // EchHttp.client 的 cookieJar 已按原始 Set-Cookie 存好(archiveofourown.org 域)。
-                    // 传输层/压缩/安全头一律不转发
-                    for (i in 0 until resp.headers.size) {
-                        val name = resp.headers.name(i)
-                        val value = resp.headers.value(i)
-                        when (name.lowercase()) {
-                            "content-type", "content-length", "location" -> {}
-                            "set-cookie" -> {
-                                val rewritten = rewriteCookieForWebView(value)
-                                sb.append("Set-Cookie: ").append(rewritten).append("\r\n")
-                                // 双写 CookieManager（AO3 域）：原生 LoginSuccess 检测与
-                                // CoCookieModule.hasUserCredentials 都读
-                                // CookieManager.getCookie("https://archiveofourown.org/")，
-                                // 只写 127 域(host-only)它们查不到 → 登录成功也检测不到、
-                                // 账号中心不刷新（2026-09-27 实测断链）。只双写登录判定
-                                // cookie(user_credentials/_otwarchive_session)，其余仅 127 域。
-                                if (rewritten.contains("user_credentials") || rewritten.contains("_otwarchive_session")) {
-                                    try {
-                                        val cm = android.webkit.CookieManager.getInstance()
-                                        cm.setCookie("https://archiveofourown.org/", rewritten)
-                                        cm.flush()
-                                        com.co3.Diagnostics.event("proxy_set_cookie_dual", mapOf(
-                                            "hasCred" to rewritten.contains("user_credentials").toString(),
-                                            "hasSession" to rewritten.contains("_otwarchive_session").toString(),
-                                        ))
-                                    } catch (_: Exception) {}
-                                }
-                            }
-                            "transfer-encoding", "connection", "content-encoding", "date",
-                            "server", "strict-transport-security" -> {}
-                            else -> sb.append(name).append(": ").append(value).append("\r\n")
-                        }
-                    }
-                    // 注入 AO3 官方代理后门 cookie proxy_notice=0：前端反钓鱼 JS 检测到
-                    // location.hostname 是 127.0.0.1 会插入 proxy-notice 警告横幅并禁用登录表单，
-                    // 检测到该 cookie 直接放行（Go 代理实测有效）。host-only 无 Domain → 按
-                    // 127.0.0.1 域存，WebView 可收。上游已带该 cookie 时不覆盖（保留用户值）。
-                    if (!resp.headers.values("Set-Cookie").any { it.trimStart().startsWith("proxy_notice=", ignoreCase = true) }) {
-                        sb.append("Set-Cookie: proxy_notice=0; Path=/\r\n")
-                        com.co3.Diagnostics.event("proxy_notice_inject", mapOf("ok" to "true"))
-                    }
-                    sb.append("\r\n")
-                    output.write(sb.toString().toByteArray(StandardCharsets.ISO_8859_1))
-                    output.write(outBody)
-                    output.flush()
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "forward err: ${e.message}")
-                try { writeError(output, 502, "forward failed") } catch (_: Exception) {}
-            }
-        }
-
-        /**
-         * 把上游 Set-Cookie 改写成 WebView(127.0.0.1 页面)能收能发的形式：
-         * 去掉 Domain(host-only，按页面域 127.0.0.1 存)、去掉 Secure、
-         * SameSite=None→Lax(SameSite=None 强制要求 Secure，不改成 http 页面会拒收)。
-         * 值/Expires/Max-Age/Path/HttpOnly 保留。
-         * 与 Go 代理 echproxy.go rewriteCookieForWebView 对齐。
-         */
-        private fun rewriteCookieForWebView(sc: String): String {
-            var out = sc
-            out = out.replace(Regex(";\\s*Domain=[^;]*", RegexOption.IGNORE_CASE), "")
-            out = out.replace(Regex(";\\s*Secure\\b", RegexOption.IGNORE_CASE), "")
-            out = out.replace(Regex(";\\s*SameSite=None", RegexOption.IGNORE_CASE), "; SameSite=Lax")
-            return out
-        }
-
-        /** 逐字节读一行（必须用 InputStream 手读，不能用 BufferedReader —— 会预读 body）。 */
-        private fun readLine(input: InputStream): String? {
-            val sb = StringBuilder()
-            var c = input.read()
-            if (c < 0) return null
-            while (c >= 0) {
-                if (c == '\n'.code) {
-                    if (sb.isNotEmpty() && sb[sb.length - 1] == '\r') sb.deleteCharAt(sb.length - 1)
-                    return sb.toString()
-                }
-                sb.append(c.toChar())
-                c = input.read()
-            }
-            return if (sb.isEmpty()) null else sb.toString()
-        }
-
-        private fun writeError(output: OutputStream, code: Int, msg: String) {
-            val body = "<html><body><h3>$code $msg</h3></body></html>".toByteArray(StandardCharsets.UTF_8)
-            val head = "HTTP/1.1 $code $msg\r\n" +
-                "Content-Type: text/html; charset=utf-8\r\n" +
-                "Content-Length: ${body.size}\r\n" +
-                "Connection: close\r\n\r\n"
-            output.write(head.toByteArray(StandardCharsets.ISO_8859_1))
-            output.write(body)
-            output.flush()
-        }
     }
 }

@@ -11,12 +11,26 @@ import com.facebook.react.uimanager.SimpleViewManager
 import com.facebook.react.uimanager.ThemedReactContext
 import com.facebook.react.uimanager.annotations.ReactProp
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
 class EchWebViewManager : SimpleViewManager<WebView>() {
     private var reactContext: ThemedReactContext? = null
     override fun getName() = "EchWebView"
+
+    /**
+     * 登录 POST 专用客户端：不跟随重定向（302 + Set-Cookie 原样回转发层），
+     * 走本地 Go ECH 代理（回迁 Go 后无 Conscrypt —— ECH 在 Go 侧）。
+     */
+    companion object {
+        private val localClient by lazy {
+            OkHttpClient.Builder()
+                .followRedirects(false)
+                .followSslRedirects(false)
+                .build()
+        }
+    }
 
     /** 页面是否属于 AO3 浏览（本地转发地址 127.0.0.1 或原始 AO3 域）。 */
     private fun isLocalPage(url: String): Boolean =
@@ -72,6 +86,11 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                     // 页面文本回传：注册/激活/排队等账号流程页提交后，页面返回结果，
                     // App 外小窗体做翻译提示（RN 侧按 URL 过滤，浏览作品页不打扰）。
                     extractPageText(view, url)
+                    // Go jar → CookieManager 同步：WebView 收的是改写后的 127 域
+                    // cookie，但登录态判据（hasUserCredentials / 登录成功检测）读
+                    // CookieManager 的 AO3 域 —— 页面加载后把 jar 里的原始 cookie
+                    // 写一份到 AO3 域（幂等，登录成功后 user_credentials 即同步）。
+                    EchProxyCore.syncCookiesToCookieManager()
                 }
             }
         }
@@ -185,19 +204,25 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
             try { com.co3.Diagnostics.event("webview_postLogin", mapOf("url" to absoluteUrl.take(80), "len" to body.length.toString(), "hasToken" to body.contains("authenticity_token").toString(), "hasLogin" to body.contains("user%5Blogin%5D").toString())) } catch(_:Exception){}
             Thread {
                 try {
-                    // 【改造】POST 改走 OkHttp + Conscrypt（标准语义），不再走 JNI + libcurl。
-                    // 关键收益：302 响应里的 Set-Cookie（user_credentials）不会再被中间层吃掉 —— 那正是登录失败的老根因。
-                    // Cookie 交给 cookieJar（同一 CookieManager）注入，不再手工拼 Cookie 头。
+                    // 【改造】POST 走本地 Go ECH 代理（回迁 Go 后不再直连 Conscrypt）。
+                    // Go 转发层 302 天然透传（CheckRedirect=ErrUseLastResponse）——
+                    // 302 里的 Set-Cookie（user_credentials）不会被中间层吃掉。
                     val cm = CookieManager.getInstance()
                     // 确保 POST URL 带 return_to，否则 AO3 可能返回 200 无跳转
                     val postUrl = if (absoluteUrl.contains("?")) absoluteUrl
                                   else if (absoluteUrl.contains("/users/login")) absoluteUrl + "?return_to=%2F"
                                   else absoluteUrl
-                    // 登录 POST 用「不跟随重定向」的客户端：这样能直接读 302 与它携带的 Set-Cookie。
+                    // ★ 重写为本地 Go 代理地址（明文仅本机回环）；Referer/Origin 保持
+                    //   https://archiveofourown.org 原值（Go 只重写 127 来源，符合预期）。
+                    val port = EchProxyCore.port
+                    val localUrl = postUrl
+                        .replaceFirst("https://www.archiveofourown.org", "http://127.0.0.1:$port")
+                        .replaceFirst("https://archiveofourown.org", "http://127.0.0.1:$port")
+                    // 登录 POST 用「不跟随重定向」的客户端：直接读 302 与它携带的 Set-Cookie。
                     // 若跟随了就只能看到最终 200，读不到 user_credentials（旧 JNI 库正是这么栽的）。
-                    val loginClient = EchHttp.client.newBuilder().followRedirects(false).build()
+                    val loginClient = localClient
                     val reqBuilder = Request.Builder()
-                        .url(postUrl)
+                        .url(localUrl)
                         .post(body.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
                         .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
                         .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")

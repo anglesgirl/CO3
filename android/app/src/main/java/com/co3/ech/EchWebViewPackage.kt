@@ -6,6 +6,7 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 
 class EchWebViewPackage : ReactPackage {
-    override fun createNativeModules(ctx: ReactApplicationContext): List<NativeModule> = emptyList()
+    override fun createNativeModules(ctx: ReactApplicationContext): List<NativeModule> =
+        listOf(EchProxyModule(ctx))
     override fun createViewManagers(ctx: ReactApplicationContext): List<ViewManager<*, *>> = listOf(EchWebViewManager())
 }
