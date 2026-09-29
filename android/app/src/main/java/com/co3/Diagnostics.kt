@@ -215,6 +215,12 @@ object Diagnostics {
             val st = com.co3.ech.EchProxyCore.lastStatus()
             sb.append("Go ECH proxy status: ").append(if (st.isBlank()) "(no handshake yet)" else st).append('\n')
         }
+        runCatching {
+            // Go 侧详细事件（解析 IP / ECH 来源 / 竞速 / 拉黑 / 切换 / reresolve）。
+            val logs = com.co3.ech.EchProxyCore.drainLogs()
+            sb.append("\n----- Go proxy 内部日志 -----\n")
+            sb.append(if (logs.isBlank()) "(空)" else logs).append('\n')
+        }
         sb.append("LocalEchProxy: ").append(
             if (com.co3.ech.LocalEchProxy.isRunning)
                 "running on 127.0.0.1:${com.co3.ech.LocalEchProxy.port}"

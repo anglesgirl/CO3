@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -49,9 +48,7 @@ const (
 	// ECH 公钥配置缓存 5 小时:公钥轮换频率远低于此,期间连接直接用缓存握手,
 	// 避免每次启动/换 host 都实时查 DoH。兜底配置(server retry_configs / 目标
 	// 自身 ech= / operator fallback)同样缓存,失败后降级普通 TLS。
-	// CF ECH 密钥 1 小时轮换一次、旧密钥保留 5 小时宽限期（服务器最多保留 5 套
-// 可用公钥）。客户端缓存必须 < 5h 才能保证不踩过期密钥：取 4h 保守值。
-publicECHCacheTTL = 4 * time.Hour
+	publicECHCacheTTL = 5 * time.Hour
 )
 
 var (
@@ -70,10 +67,7 @@ var (
 	hostsMu    sync.Mutex
 	hostConfs  = map[string]*hostConf{}
 	activeDoH  string
-	// activeDoHSelfIPs 是当前网关**自带的** bootstrap IP（TXT 里 `URL|IP|IP` 的 IP 部分）。
-	// 非空时优先用它，不做解析 —— 见 refreshActiveDoHFromPool。同样由 hostsMu 保护。
-	activeDoHSelfIPs []string
-	activeInse       bool
+	activeInse bool
 
 	// cachePath 是 ECHConfigList 的磁盘缓存位置(5h TTL),由 Start 传入。
 	// 首次从 cloudflare-ech.com / 目标 HTTPS ech= / server retry_configs 获取后
@@ -81,6 +75,35 @@ var (
 	cachePathMu sync.RWMutex
 	cachePath   string
 )
+
+// logRing 是供 Android 诊断导出读取的最近事件环形缓冲（gomobile 无法直接
+// 接 logcat）。noteLog 追加一条并保留时间戳；DrainLogs 取出并清空。
+const logRingMax = 250
+
+var (
+	logRingMu sync.Mutex
+	logRing   []string
+)
+
+func noteLog(format string, a ...any) {
+	s := time.Now().Format("15:04:05") + " " + fmt.Sprintf(format, a...)
+	logRingMu.Lock()
+	logRing = append(logRing, s)
+	if len(logRing) > logRingMax {
+		logRing = logRing[len(logRing)-logRingMax:]
+	}
+	logRingMu.Unlock()
+	log.Printf("echproxy: %s", s)
+}
+
+// DrainLogs 返回并清空 Go 侧内部事件日志（供诊断导出）。
+func DrainLogs() string {
+	logRingMu.Lock()
+	out := strings.Join(logRing, "\n")
+	logRing = nil
+	logRingMu.Unlock()
+	return out
+}
 
 // cookieJar 是代理的会话 cookie 容器(每个 Start 重建)。提升为包级变量,
 // 以便 ClearSessionCookies 在不重启代理的前提下清掉 AO3 会话 cookie、
@@ -197,52 +220,6 @@ type hostConf struct {
 	transport *http.Transport
 }
 
-// ---- 日志环形缓冲：留住关键事件，供 JS 定时取走上报 ----
-//
-// 背景：Go 侧的 log.Printf 只进 Xcode console。iOS 是侧载测试（未签名 IPA），
-// 测试者拿不到 console，于是每次排查都得"麻烦别人导出日志"。这里把关键事件
-// 留在内存，由 JS 通过 DrainLogs() 取走，再走 remoteLog.js 的既有通路上报
-// —— 复用它的队列/限流/脱敏，不另造一套。
-var (
-	logRingMu sync.Mutex
-	logRing   []string
-)
-
-// logRingMax 要够覆盖「冷启动 → 首次请求失败」的完整过程。
-const logRingMax = 200
-
-// noteLog 记录一条关键事件：既写 Xcode console（本机调试），也进环形缓冲（上报）。
-func noteLog(format string, a ...any) {
-	msg := fmt.Sprintf(format, a...)
-	// 这里必须保留 log.Printf（不能换成 noteLog，否则自我递归）：
-	// console 供本机 Xcode 调试，环形缓冲供 JS 取走上报。
-	log.Printf("echproxy: %s", msg)
-	logRingMu.Lock()
-	logRing = append(logRing, time.Now().Format("15:04:05.000")+" "+msg)
-	if len(logRing) > logRingMax {
-		logRing = logRing[len(logRing)-logRingMax:]
-	}
-	logRingMu.Unlock()
-}
-
-// DrainLogs 返回并清空缓冲区，供 JS 取走上报。没有新日志时返回空字符串。
-//
-// ⚠️ 刻意返回 string（换行分隔）而不是 []string：gomobile 对切片返回值的导出
-// 支持不可靠 —— 实测 []string 版本在 Swift 侧报
-//   error: cannot find 'EchproxyDrainLogs' in scope
-// （符号根本没生成，xcframework 里查不到它）。与 LastStatus() 保持一致的
-// string 类型是最稳的，gomobile 对这个类型有充分验证。
-func DrainLogs() string {
-	logRingMu.Lock()
-	defer logRingMu.Unlock()
-	if len(logRing) == 0 {
-		return ""
-	}
-	out := strings.Join(logRing, "\n")
-	logRing = nil
-	return out
-}
-
 func setStatus(format string, a ...any) {
 	s := fmt.Sprintf(format, a...)
 	mu.Lock()
@@ -322,19 +299,28 @@ func loadAndroidCertPool() *x509.CertPool {
 			"/data/misc/user/0/cacerts-added",
 		} {
 			entries, err := os.ReadDir(dir)
-			if err != nil { continue }
+			if err != nil {
+				continue
+			}
 			for _, entry := range entries {
-				if entry.IsDir() { continue }
+				if entry.IsDir() {
+					continue
+				}
 				data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
-				if err != nil { continue }
+				if err != nil {
+					continue
+				}
 				if cert, err := x509.ParseCertificate(data); err == nil {
-					pool.AddCert(cert); loaded++
+					pool.AddCert(cert)
+					loaded++
 				} else if pool.AppendCertsFromPEM(data) {
 					loaded++
 				}
 			}
 		}
-		if loaded > 0 { androidCertPool = pool }
+		if loaded > 0 {
+			androidCertPool = pool
+		}
 	})
 	return androidCertPool
 }
@@ -504,11 +490,6 @@ func Start(listen, target, echB64, doh, ipList, cpArg string, insecure bool) err
 	activeDoH, activeInse = doh, insecure
 	hostConfs = map[string]*hostConf{}
 	hostsMu.Unlock()
-
-	// 【用户定的方案】网关地址不写死：用国内种子 DoH 读配置域名的 TXT 拿到网关池，
-	// 挑一个可用的换上 —— 换网关只改 TXT，App 不用发版。
-	// 异步执行：冷启动不为它阻塞；期间沿用上面传入的默认端点，不会断网。
-	go refreshActiveDoHFromPool()
 
 	jar := newCookieJar()
 	client := &http.Client{
@@ -695,46 +676,7 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Set-Cookie", "proxy_notice=0; Path=/")
 	}
 	w.WriteHeader(resp.StatusCode)
-	// Android WebView 场景：页面 origin 是 http://127.0.0.1:<port>（本地代理），
-	// 静态 HTML 里的 https://archiveofourown.org 链接/表单 action/资源地址必须
-	// 改写回本地代理地址，否则 WebView 点出去/提交会直连明文 AO3（SNI 泄露 +
-	// 被 RST）。仅 text/html 改写（CSS/JS 里的运行时请求由 injectLocalRewrite
-	// 兜底）；JSON/API 响应不改（iOS echFetch 解析依赖原始内容）。
-	rewriteHTMLForWebView(w, resp, r)
-}
-
-// rewriteHTMLForWebView 把 text/html 响应体里的 https://archiveofourown.org
-// （含 www 前缀）改写回 http://127.0.0.1:<port>。端口从请求 Host 提取
-//（WebView/echKy 只访问本地代理，Host 恒为 127.0.0.1:<port>）。
-// 大响应（>16MB，AO3 页面不会到）或非文本类型直接原样流式透传。
-func rewriteHTMLForWebView(w http.ResponseWriter, resp *http.Response, r *http.Request) {
-	ct := resp.Header.Get("Content-Type")
-	if !strings.Contains(strings.ToLower(ct), "text/html") {
-		_, _ = io.Copy(w, resp.Body)
-		return
-	}
-	_, port, err := net.SplitHostPort(r.Host)
-	if err != nil || port == "" {
-		// 拿不到端口就保持原样，绝不擅自改写（宁可页面个别链接指回官方域，
-		// 也不能把地址改错导致整页失效）。
-		_, _ = io.Copy(w, resp.Body)
-		return
-	}
-	// 上限保护：超过 16MB 不再整读改写，原样流式。
-	const maxRewrite = 16 << 20
-	if resp.ContentLength > maxRewrite {
-		_, _ = io.Copy(w, resp.Body)
-		return
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRewrite))
-	if err != nil || len(body) == 0 || len(body) >= maxRewrite {
-		_, _ = io.WriteString(w, string(body))
-		return
-	}
-	base := "http://127.0.0.1:" + port
-	out := strings.ReplaceAll(string(body), "https://www.archiveofourown.org", base)
-	out = strings.ReplaceAll(out, "https://archiveofourown.org", base)
-	_, _ = io.WriteString(w, out)
+	_, _ = io.Copy(w, resp.Body)
 }
 
 func cookieContains(cookies []string, name string) bool {
@@ -993,17 +935,9 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 			NextProtos:         []string{"h2", "http/1.1"},
 			InsecureSkipVerify: insecure,
 		}
-		// ECH-mandatory（用户硬约束：它必须保证在ECH下）：
-		//  - AS13335 目标（AO3 由 Cloudflare 托管）必须走 ECH；
-		//  - 拿不到 ECHConfigList → 直接拒连（绝不普通 TLS）；
-		//  - ECH 握手失败 / 服务器未接受 ECH → 直接拒连；
-		//  - 明文降级会暴露真实 SNI，被 GFW RST 或 Cloudflare Challenge 锁死，
-		//    宁可请求失败也不降级。
-		if hc.as13335 {
-			if len(hc.ech) == 0 {
-				setShakeInfo("no ECHConfigList for AS13335 host %s; ECH-mandatory, refusing connection", host)
-				return nil, fmt.Errorf("no ECHConfigList for %s; refusing plain TLS (ECH-mandatory)", host)
-			}
+		// ECH 可用则优先 ECH 握手;失败兜底一次(retry_configs)并缓存;
+		// 再失败降级普通 TLS(保护性降级,至少保证连通性)。
+		if hc.as13335 && len(hc.ech) > 0 {
 			cfg.EncryptedClientHelloConfigList = hc.ech
 			cfg.MinVersion = tls.VersionTLS13
 		}
@@ -1014,13 +948,11 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 		err = tc.HandshakeContext(hctx)
 		if err != nil {
 			var rej *tls.ECHRejectionError
-			// ECH 被拒且服务器给了 retry_configs：只做一次 ECH retry（仍强制
-			// ECH，retry 失败直接拒连，不降级），并缓存该配置。
+			// ECH 被拒且服务器给了 retry_configs:兜底一次,并缓存该配置。
 			if hc.as13335 && errors.As(err, &rej) && len(rej.RetryConfigList) > 0 {
 				raw.Close()
 				setConfigInfo("%d bytes for %s, source: server retry_configs (cached)", len(rej.RetryConfigList), host)
-				// 缓存兜底配置(服务器 retry_configs = 服务器当前有效官方配置,
-				// 按 pub 存),下次直接用它握手。
+				// 缓存兜底配置,下次直接用它握手。
 				cachePathMu.RLock()
 				cp := cachePath
 				cachePathMu.RUnlock()
@@ -1048,23 +980,23 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 					return retryConn, nil
 				}
 				raw.Close()
-				// retry 也失败 → 拒连（ECH-mandatory，不降级）。
-				setShakeInfo("ECH retry failed for %s; ECH-mandatory, refusing connection: %v", host, retryErr)
-				return nil, fmt.Errorf("ECH retry failed for %s; refusing plain TLS (ECH-mandatory): %w", host, retryErr)
+				// 兜底也失败 → 降级普通 TLS。
+				setShakeInfo("ECH retry failed for %s; downgrading to plain TLS: %v", host, retryErr)
+				return plainTLSHandshake(ctx, host, d, cands, insecure, hc.as13335 && len(hc.ech) > 0)
 			}
 			raw.Close()
-			// ECH 握手失败(非 retry 场景)→ 拒连（ECH-mandatory，不降级）。
-			if hc.as13335 {
-				setShakeInfo("ECH handshake failed for %s; ECH-mandatory, refusing connection: %v", host, err)
-				return nil, fmt.Errorf("ECH handshake failed for %s; refusing plain TLS (ECH-mandatory): %w", host, err)
+			// ECH 握手失败(非 retry 场景)→ 降级普通 TLS。
+			if hc.as13335 && len(hc.ech) > 0 {
+				setShakeInfo("ECH handshake failed for %s; downgrading to plain TLS: %v", host, err)
+				return plainTLSHandshake(ctx, host, d, cands, insecure, true)
 			}
 			return nil, fmt.Errorf("%s handshake failed: %w", host, err)
 		}
 		if hc.as13335 && !tc.ConnectionState().ECHAccepted {
 			raw.Close()
-			// ECH 配置被服务器忽略(未接受)→ 拒连（ECH-mandatory，不降级）。
-			setShakeInfo("ECH not accepted for %s; ECH-mandatory, refusing connection", host)
-			return nil, fmt.Errorf("ECH not accepted for %s; refusing plain TLS (ECH-mandatory)", host)
+			// ECH 配置被服务器忽略(未接受)→ 降级普通 TLS。
+			setShakeInfo("ECH not accepted for %s; downgrading to plain TLS", host)
+			return plainTLSHandshake(ctx, host, d, cands, insecure, true)
 		}
 		if hc.as13335 {
 			// 2026-08-15: 记录实际连接的边缘 IP —— 1034(Edge IP Restricted)
@@ -1073,6 +1005,44 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 		}
 		return tc, nil
 	}
+}
+
+// plainTLSHandshake dials each candidate and performs an ordinary TLS handshake
+// (no ECH). Used as the last-resort fallback so a broken/rotated ECH config
+// can never fully block access; the connection still goes through DoH-resolved
+// addresses, so the poisoned system resolver is bypassed.
+func plainTLSHandshake(ctx context.Context, host string, d *net.Dialer, cands []string, insecure bool, wasECH bool) (net.Conn, error) {
+	var lastErr error
+	for _, c := range cands {
+		raw, err := d.DialContext(ctx, "tcp", c)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		cfg := &tls.Config{
+			ServerName:         host,
+			MinVersion:         tls.VersionTLS12,
+			NextProtos:         []string{"h2", "http/1.1"},
+			InsecureSkipVerify: insecure,
+		}
+		tctx, cancel := context.WithTimeout(ctx, dialTimeout)
+		tc := tls.Client(raw, cfg)
+		err = tc.HandshakeContext(tctx)
+		cancel()
+		if err != nil {
+			raw.Close()
+			lastErr = err
+			continue
+		}
+		if wasECH {
+			setShakeInfo("ok via %s plain TLS (ECH downgraded)", c)
+		}
+		return tc, nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("no dial candidates")
+	}
+	return nil, fmt.Errorf("plain TLS handshake failed: %w", lastErr)
 }
 
 // --- ECH transport --------------------------------------------------------
@@ -1102,16 +1072,8 @@ func parseIPList(s string) []string {
 	return out
 }
 
-// resolveDoHHostIPs 解析 DoH 端点域名(如 pieqllv9i7.cloudflare-gateway.com)的 IP 列表。
-//
-// 【种子层 —— 用户定的方案】网关地址由国内纯 IP DoH 动态解析，不写死在代码里：
-//   - 国内三家是纯 IP 直连，查它们本身不需要任何解析，天然免疫污染，又快又好；
-//   - 所以「网关在哪」交给它们回答；
-//   - 网关可换：改 DOH_URL 即可，地址自动跟着变，不需要动代码。
-//
-// 顺序：国内种子 DoH → 系统 DNS（带 3s 超时）→ 内置快照。
-// ⚠️ 绝不能让系统 DNS 排前面 —— 它会被污染，拿到假 IP 后连接超时，
-// Android 侧实测表现为卡 21 秒后 fail-closed（而连纯 IP 的国内 DoH 只要 158ms）。
+// resolveDoHHostIPs 解析 DoH 端点域名(如 pieqllv9i7.cloudflare-gateway.com)
+// 的 IP 列表,用于自动并入 ECH 握手候选。系统 DNS 解析失败时回退内置快照。
 // doh 参数可能是逗号分隔的多个端点,取第一个能解析的即可。
 func resolveDoHHostIPs(doh string) []string {
 	for _, part := range strings.Split(doh, ",") {
@@ -1121,42 +1083,43 @@ func resolveDoHHostIPs(doh string) []string {
 			continue
 		}
 		host := u.Hostname()
-
-		// ① 国内种子 DoH（首选）
-		ips := resolveHostViaDomesticDoH(host)
-
-		// ② 系统 DNS（末位）。
+		var ips []string
 		// ⚠️ net.LookupHost 无超时：移动宽带被污染的系统 DNS 能卡 30s+
 		// （2026-08-15 实测：第二次冷启动 Start() 卡 30s，works 请求在
-		// beforeRequest 等 getEchBase 干等）。所以必须包 3s 超时。
-		if len(ips) == 0 {
-			type lookupRes struct {
-				addrs []string
-				err   error
-			}
-			lch := make(chan lookupRes, 1)
-			go func() {
-				addrs, err := net.LookupHost(host)
-				lch <- lookupRes{addrs, err}
-			}()
-			select {
-			case r := <-lch:
-				if r.err == nil {
-					for _, a := range r.addrs {
-						if net.ParseIP(a) != nil {
-							ips = append(ips, a)
-						}
+		// beforeRequest 等 getEchBase 干等）。3s 超时，失败走内置快照。
+		type lookupRes struct {
+			addrs []string
+			err   error
+		}
+		lch := make(chan lookupRes, 1)
+		go func() {
+			addrs, err := net.LookupHost(host)
+			lch <- lookupRes{addrs, err}
+		}()
+		select {
+		case r := <-lch:
+			if r.err == nil {
+				for _, a := range r.addrs {
+					if net.ParseIP(a) != nil {
+						ips = append(ips, a)
 					}
 				}
-			case <-time.After(3 * time.Second):
-				// 超时：继续走内置快照
 			}
+		case <-time.After(3 * time.Second):
+			// 超时：跳过系统 DNS，直接用内置快照
 		}
-
-		// ③ 内置快照兜底（连国内 DoH 都失败时）
-		if len(ips) == 0 {
-			ips = append(ips, builtinDoHHostIPs...)
-			noteLog("DoH 网关 %s 解析失败,回落内置快照 %v", host, builtinDoHHostIPs)
+		// 内置快照兜底(系统 DNS 被污染时仍能用)。
+		for _, b := range builtinDoHHostIPs {
+			found := false
+			for _, a := range ips {
+				if a == b {
+					found = true
+					break
+				}
+			}
+			if !found {
+				ips = append(ips, b)
+			}
 		}
 		if len(ips) > 0 {
 			return ips
@@ -1257,76 +1220,6 @@ type dohResp struct {
 	} `json:"Answer"`
 }
 
-// gatewayIPsMu 保护下面这份网关地址缓存。
-var (
-	gatewayIPsMu    sync.Mutex
-	gatewayIPsCache []string
-	gatewayIPsAt    time.Time
-)
-
-const gatewayIPsTTL = 30 * time.Minute
-
-// invalidateGatewayIPs 在网关不可达时调用：丢缓存，下次重新解析（网关可能已换地址）。
-func invalidateGatewayIPs() {
-	gatewayIPsMu.Lock()
-	gatewayIPsCache = nil
-	gatewayIPsAt = time.Time{}
-	gatewayIPsMu.Unlock()
-}
-
-// gatewayIPsForDial 返回 DoH 网关的地址列表（拨号到网关用）。
-//
-// 【种子层 —— 用户定的方案】网关地址由国内纯 IP DoH **动态解析**，不写死在代码里：
-//   - 国内三家是纯 IP 直连，查它们本身不需要任何解析，天然免疫污染，又快又好；
-//   - 所以「网关在哪」交给它们回答；
-//   - 网关可换：改 DoH 端点即可，地址自动跟着变，不需要动代码；
-//   - 内置快照只作末位兜底（连国内 DoH 都失败时）。
-//
-// ⚠️ 绝不能让系统 DNS 承担这件事 —— 它会被污染。Android 侧实测：同一个客户端
-// 连国内纯 IP DoH 只要 158ms，而经系统 DNS 拿到的网关地址会卡 21 秒后 fail-closed。
-//
-// 带 30 分钟缓存，避免每次拨号都查一遍 DoH。
-func gatewayIPsForDial() []string {
-	gatewayIPsMu.Lock()
-	defer gatewayIPsMu.Unlock()
-	if len(gatewayIPsCache) > 0 && time.Since(gatewayIPsAt) < gatewayIPsTTL {
-		return append([]string(nil), gatewayIPsCache...)
-	}
-	// activeDoH / activeDoHSelfIPs 由 hostsMu 保护（与 transportFor 的读法一致）。
-	hostsMu.Lock()
-	doh := activeDoH
-	selfIPs := append([]string(nil), activeDoHSelfIPs...)
-	hostsMu.Unlock()
-	// ★ 网关自带 IP 优先，不做解析 —— 免掉一个可能失败的环节，
-	// 也让「优选 IP」可以由 TXT 远程调整而不必发版。
-	resolved := selfIPs
-	if len(resolved) == 0 {
-		resolved = resolveDoHHostIPs(doh)
-	}
-	// 候选顺序（越靠前越先试）：
-	//   ① 用户自选的优选 IP（TXT 下发、实测最快）—— 排最前，"优选"才有意义
-	//   ② 网关自带 / 解析出的地址
-	//   ③ 内置兜底段
-	candidates := append(preferredIPs(), resolved...)
-	candidates = append(candidates, builtinDoHHostIPs...)
-	seen := map[string]bool{}
-	ips := make([]string, 0, len(candidates))
-	for _, ip := range candidates {
-		if ip != "" && !seen[ip] {
-			seen[ip] = true
-			ips = append(ips, ip)
-		}
-	}
-	if len(resolved) == 0 {
-		noteLog("网关地址解析失败,回落内置快照 %v", ips)
-	} else {
-		noteLog("网关地址已解析(国内种子 DoH) %v,并补入内置段作冗余", resolved)
-	}
-	gatewayIPsCache = ips
-	gatewayIPsAt = time.Now()
-	return append([]string(nil), ips...)
-}
-
 // dohDialContext returns a DialContext that connects to the DoH endpoint via
 // the user-supplied preferred IPs (SNI/domain stays the endpoint's hostname).
 // Rationale: the DoH endpoint domain (e.g. cloudflare-gateway.com) can itself
@@ -1334,30 +1227,11 @@ func gatewayIPsForDial() []string {
 // fail before it ever gets to query cloudflare-ech.com's HTTPS ech= record,
 // so the public ECH config could never be fetched or cached. The DoH endpoint
 // is a Cloudflare domain, so the same preferred CF edge IPs apply.
-//
-// 网关地址来源（按用户定的方案）：国内种子 DoH 动态解析 → 内置快照末位兜底。
 // Returns nil when no preferred IPs are configured (use system DNS).
 func dohDialContext() func(ctx context.Context, network, addr string) (net.Conn, error) {
 	mu.Lock()
 	custom := append([]string(nil), customIPs...)
 	mu.Unlock()
-	// 【用户定的方案】网关地址由国内种子 DoH 动态解析 —— 网关可换、免疫污染。
-	// 已有优选 IP 时它们同样能靠 SNI 路由到网关，把动态解析结果补在后面做冗余，
-	// 去重后一起作为候选；这样任一边失效都还有路可走。
-	gw := gatewayIPsForDial()
-	seen := make(map[string]bool, len(custom)+len(gw))
-	merged := make([]string, 0, len(custom)+len(gw))
-	for _, ip := range append(custom, gw...) {
-		if ip == "" || seen[ip] {
-			continue
-		}
-		seen[ip] = true
-		merged = append(merged, ip)
-	}
-	custom = merged
-	// 此处绝不能返回 nil —— 那会让 DoH 查询退化成走系统 DNS 解析网关域名，
-	// 国内会被污染/超时，实测表现为 iOS 冷启动「找不到网络」：
-	//   dial archiveofourown.org failed: %!w(<nil>)  →  HTTP 502
 	if len(custom) == 0 {
 		return nil
 	}
@@ -1376,8 +1250,6 @@ func dohDialContext() func(ctx context.Context, network, addr string) (net.Conn,
 			lastErr = err
 		}
 		if lastErr != nil {
-			// 网关地址可能已变（或当前 IP 不可达）—— 丢缓存，下次重新向国内种子 DoH 问一遍。
-			invalidateGatewayIPs()
 			// 优选 IP 全部失败时回退系统解析,避免 DoH 直接断网。
 			setDNSInfo("DoH preferred IPs failed (%v), falling back to system DNS", lastErr)
 			return d.DialContext(ctx, network, addr)
@@ -1408,7 +1280,9 @@ func dohQuery(endpoint, name, qtype string) (*dohResp, error) {
 		}
 		req.Header.Set("accept", "application/dns-json")
 		transport := &http.Transport{}
-		if pool := loadAndroidCertPool(); pool != nil { transport.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12} }
+		if pool := loadAndroidCertPool(); pool != nil {
+			transport.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+		}
 		// 用优选 IP 直连 DoH 端点(SNI 保持端点域名),绕开 DoH 端点域名被
 		// 污染/封 IP 的问题;未配置优选 IP 时走系统 DNS(原行为)。
 		if dc := dohDialContext(); dc != nil {
@@ -1546,585 +1420,27 @@ func FetchTxt(doh, name string) (string, error) {
 
 var echParamRe = regexp.MustCompile(`(?:^|\s)ech="?([A-Za-z0-9+/=]+)"?`)
 
-// domesticDoHIPs 是国内三家的纯 IP DoH 端点。
-//
-// 为什么用纯 IP：不查 DNS、不被污染，证书直接对 IP 生效（实测三家均 200）。
-// 为什么只发 wire：三家都不支持 JSON（阿里/360 回 400 no 'dns' query parameter，腾讯回 UrlParameterError）。
-// 为什么不发 Host 头：阿里带 Host 会直接失败（实测 http=000），用 URL 里的 IP 当 Host 即可。
-// 实测三家返回的 ech 与 CF 官方 cloudflare-ech.com 的活值**逐字节相同**。
-var domesticDoHIPs = []string{
-	"223.5.5.5", "223.6.6.6", // 阿里（含备用）
-	"1.12.12.12", "120.53.53.53", // 腾讯（含备用）
-	"101.198.193.29", "101.198.192.33", // 360（含备用）
-}
-
-// fetchLiveECHWire 随机挑一家国内纯 IP DoH 取 cloudflare-ech.com 的 ECH 活值。
-// 单家 2.5s 超时，失败换下一家 —— 不同时打、也不重复打同一家。
-func fetchLiveECHWire() ([]byte, error) {
-	ips := append([]string(nil), domesticDoHIPs...)
-	rand.Shuffle(len(ips), func(i, j int) { ips[i], ips[j] = ips[j], ips[i] })
-	var lastErr error
-	for _, ip := range ips {
-		b, err := queryECHWire(ip, cloudflareECHHost)
-		if err == nil && len(b) > 0 {
-			noteLog("live ECH via %s (%d bytes)", ip, len(b))
-			return b, nil
-		}
-		lastErr = err
-		noteLog("live ECH via %s failed: %v", ip, err)
-	}
-	if lastErr == nil {
-		lastErr = errors.New("no domestic DoH candidate")
-	}
-	return nil, fmt.Errorf("all domestic DoH failed: %w", lastErr)
-}
-
-// queryECHWire 用纯 IP + wire 查一个域名的 HTTPS(65) 记录并取出 ech。
-// 注意：绝不设置 Host 头（阿里会因此失败）。
-func queryECHWire(ip, name string) ([]byte, error) {
-	q := buildDNSQuery65(name)
-	b64 := base64.RawURLEncoding.EncodeToString(q)
-	url := "https://" + ip + "/dns-query?dns=" + b64
-	client := &http.Client{Timeout: 2500 * time.Millisecond}
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("accept", "application/dns-message")
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("http %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	if err != nil {
-		return nil, err
-	}
-	rdata, err := extractType65RData(body)
-	if err != nil {
-		return nil, err
-	}
-	// 转成 RFC 3597 文本形式后复用已有解析器，避免重复实现 SVCB 解析。
-	return parseSVCBWireECH("\\# " + fmt.Sprintf("%d", len(rdata)) + " " + hex.EncodeToString(rdata))
-}
-
-// buildDNSQuery 组一个 DNS 查询报文。qtype: 1=A, 28=AAAA, 65=HTTPS。
-func buildDNSQuery(name string, qtype uint16) []byte {
-	buf := []byte{0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0}
-	for _, label := range strings.Split(name, ".") {
-		buf = append(buf, byte(len(label)))
-		buf = append(buf, []byte(label)...)
-	}
-	buf = append(buf, 0, byte(qtype>>8), byte(qtype), 0x00, 0x01)
-	return buf
-}
-
-// buildDNSQuery65 组一个 type=65（HTTPS）的 DNS 查询报文。
-func buildDNSQuery65(name string) []byte {
-	return buildDNSQuery(name, 65)
-}
-
-// queryAddressWire 用纯 IP + wire 查 A/AAAA 记录，返回地址字符串。
-// 绝不设置 Host 头（阿里会因此失败）；URL 里的 IP 就是 Host，证书对 IP 生效。
-func queryAddressWire(ip, name string, qtype uint16) ([]string, error) {
-	q := buildDNSQuery(name, qtype)
-	u := "https://" + ip + "/dns-query?dns=" + base64.RawURLEncoding.EncodeToString(q)
-	req, err := http.NewRequest(http.MethodGet, u, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("accept", "application/dns-message")
-	client := &http.Client{Timeout: 2500 * time.Millisecond}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("http %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	if err != nil {
-		return nil, err
-	}
-	return extractAddresses(body), nil
-}
-
-// extractAddresses 收集 DNS 应答里的 A(1)/AAAA(28) 地址。
-// 顺带兼容 CNAME 链：应答段里有什么地址就收什么，不追踪链路。
-func extractAddresses(msg []byte) []string {
-	if len(msg) < 12 {
-		return nil
-	}
-	i := 12
-	for i < len(msg) && msg[i] != 0 {
-		i += int(msg[i]) + 1
-	}
-	i += 5 // 跳过根标签 + qtype(2) + qclass(2)
-	ancount := int(msg[6])<<8 | int(msg[7])
-	var out []string
-	for n := 0; n < ancount; n++ {
-		if i+12 > len(msg) {
-			break
-		}
-		if msg[i]&0xC0 == 0xC0 {
-			i += 2
-		} else {
-			for i < len(msg) && msg[i] != 0 {
-				i += int(msg[i]) + 1
-			}
-			i++
-		}
-		typ := int(msg[i])<<8 | int(msg[i+1])
-		rdlen := int(msg[i+8])<<8 | int(msg[i+9])
-		rdata := i + 10
-		if rdata+rdlen > len(msg) {
-			break
-		}
-		switch {
-		case typ == 1 && rdlen == 4:
-			out = append(out, net.IP(msg[rdata:rdata+4]).String())
-		case typ == 28 && rdlen == 16:
-			out = append(out, net.IP(msg[rdata:rdata+16]).String())
-		}
-		i = rdata + rdlen
-	}
-	return out
-}
-
-// resolveHostViaDomesticDoH 用国内三家的纯 IP DoH 解析一个域名（A + AAAA）。
-//
-// 【种子层】这是整套链路的地基。国内三家是纯 IP 直连 —— 查它们本身不需要任何解析，
-// 天然免疫污染 —— 所以「某个域名在哪」这种问题交给它们回答最可靠。
-// 随机挑一家、逐家尝试，任意一家给出地址即返回。
-func resolveHostViaDomesticDoH(host string) []string {
-	ips := append([]string(nil), domesticDoHIPs...)
-	rand.Shuffle(len(ips), func(i, j int) { ips[i], ips[j] = ips[j], ips[i] })
-	for _, ip := range ips {
-		var got []string
-		for _, qt := range []uint16{1, 28} {
-			addrs, err := queryAddressWire(ip, host, qt)
-			if err != nil {
-				continue
-			}
-			got = append(got, addrs...)
-		}
-		if len(got) > 0 {
-			noteLog("resolved %s via %s -> %v", host, ip, got)
-			return got
-		}
-		noteLog("resolve %s via %s failed", host, ip)
-	}
-	return nil
-}
-
-// configTxtDomain 的 TXT 里发布**网关池**（一行一个 DoH 端点 URL）。
-//
-// 这是「网关可换」那一环 —— 换网关只改这条 TXT，App 不用重新发版。
-// 只用国内种子 DoH 去读（纯 IP 直连，天然免疫污染）。
-const configTxtDomain = "doh.xn--pn1aul.eu.org"
-
-// configIPDomain 的 TXT 里发布**用户自己实测最快的 IP**（自选，不是网关自带那批）。
-//
-// 为什么要独立一条：网关自带/官方解析出的地址不一定快（实测 162.159.36.x 就是一例），
-// 而同一个网关域名在多个 CF 段都能服务（实测 172.64.229.x 段同样 200）。
-// 所以「用哪个 IP」应该由实测过的人决定，并且能随时改 —— 改 TXT 即可，不用发版。
-// 这些 IP 会排在 bootstrap 候选的**最前面**（用户实测快 > 解析结果 > 内置兜底）。
-const configIPDomain = "ip.xn--pn1aul.eu.org"
-
-// fetchPreferredIPs 读优选 IP 配置域名的 TXT，收下所有合法 IP 字面量。
-// 解析做宽：一行一个 / 逗号分隔 / 带 key= 都能用，非法项直接丢掉。
-func fetchPreferredIPs() []string {
-	ips := append([]string(nil), domesticDoHIPs...)
-	rand.Shuffle(len(ips), func(i, j int) { ips[i], ips[j] = ips[j], ips[i] })
-	for _, ip := range ips {
-		txts, err := queryTxtWire(ip, configIPDomain)
-		if err != nil {
-			noteLog("优选 IP via %s 失败: %v", ip, err)
-			continue
-		}
-		var found []string
-		seen := map[string]bool{}
-		for _, t := range txts {
-			for _, seg := range strings.FieldsFunc(t, func(r rune) bool {
-				return r == ',' || r == ';' || r == ' ' || r == '\n' || r == '\t'
-			}) {
-				seg = strings.TrimSpace(seg)
-				if idx := strings.Index(seg, "="); idx >= 0 {
-					seg = strings.TrimSpace(seg[idx+1:])
-				}
-				if seg != "" && net.ParseIP(seg) != nil && !seen[seg] {
-					seen[seg] = true
-					found = append(found, seg)
-				}
-			}
-		}
-		if len(found) > 0 {
-			noteLog("优选 IP via %s -> %v", ip, found)
-			return found
-		}
-		noteLog("优选 IP via %s 无有效 IP(%d 条 TXT)", ip, len(txts))
-	}
-	return nil
-}
-
-// preferredIPsCache 缓存优选 IP（带 TTL），避免每次拨号都查。
-var (
-	prefIPsMu    sync.Mutex
-	prefIPsCache []string
-	prefIPsAt    time.Time
-)
-
-const prefIPsTTL = 30 * time.Minute
-
-func preferredIPs() []string {
-	prefIPsMu.Lock()
-	defer prefIPsMu.Unlock()
-	if prefIPsAt.After(time.Time{}) && time.Since(prefIPsAt) < prefIPsTTL {
-		return append([]string(nil), prefIPsCache...)
-	}
-	v := fetchPreferredIPs()
-	prefIPsCache = v
-	prefIPsAt = time.Now()
-	return append([]string(nil), v...)
-}
-
-// extractTxtStrings 解析 DNS 应答里的 TXT(16) 记录（rdata 是若干 character-string，需拼接）。
-func extractTxtStrings(msg []byte) []string {
-	if len(msg) < 12 {
-		return nil
-	}
-	i := 12
-	for i < len(msg) && msg[i] != 0 {
-		i += int(msg[i]) + 1
-	}
-	i += 5
-	ancount := int(msg[6])<<8 | int(msg[7])
-	var out []string
-	for n := 0; n < ancount; n++ {
-		if i+12 > len(msg) {
-			break
-		}
-		if msg[i]&0xC0 == 0xC0 {
-			i += 2
-		} else {
-			for i < len(msg) && msg[i] != 0 {
-				i += int(msg[i]) + 1
-			}
-			i++
-		}
-		typ := int(msg[i])<<8 | int(msg[i+1])
-		rdlen := int(msg[i+8])<<8 | int(msg[i+9])
-		rdata := i + 10
-		if rdata+rdlen > len(msg) {
-			break
-		}
-		if typ == 16 {
-			var sb strings.Builder
-			for p := rdata; p < rdata+rdlen; {
-				ln := int(msg[p])
-				if p+1+ln > rdata+rdlen {
-					break
-				}
-				sb.Write(msg[p+1 : p+1+ln])
-				p += 1 + ln
-			}
-			if sb.Len() > 0 {
-				out = append(out, sb.String())
-			}
-		}
-		i = rdata + rdlen
-	}
-	return out
-}
-
-// gatewaySpec 是网关池里的一条：URL + 它自带的 bootstrap IP（可为空）。
-type gatewaySpec struct {
-	url string
-	ips []string
-}
-
-// parseGatewaySpecs 从 TXT 内容里解析网关条目。兼容三种写法：
-//   - `https://网关/dns-query|IP|IP`  —— **推荐**（bangumi 同款；自带 IP，免去解析那一步）
-//   - `https://网关/dns-query`        —— 纯 URL，地址由国内种子 DoH 解析
-//   - `doh=https://…` / `doh2=https://…,…` —— key=value 老写法
-//
-// 为什么自带 IP 更好：解析网关地址这一步本身也会失败（污染 / 超时），
-// 而在受污染网络里「解析网关域名」最不该依赖系统 DNS。直接给定 IP 就省掉这个环节，
-// 也让「优选 IP」可以由 TXT 远程调整，不必重新发版。
-func parseGatewaySpecs(txt string) []gatewaySpec {
-	var out []gatewaySpec
-	for _, seg := range strings.FieldsFunc(txt, func(r rune) bool {
-		return r == ',' || r == ';' || r == ' ' || r == '\n' || r == '	'
-	}) {
-		seg = strings.TrimSpace(seg)
-		if seg == "" {
-			continue
-		}
-		if idx := strings.Index(seg, "="); idx >= 0 {
-			seg = strings.TrimSpace(seg[idx+1:])
-		}
-		parts := strings.Split(seg, "|")
-		for i := range parts {
-			parts[i] = strings.TrimSpace(parts[i])
-		}
-		u := parts[0]
-		if !strings.HasPrefix(u, "https://") || !strings.Contains(u, "/dns-query") {
-			continue
-		}
-		// IP 字面量校验：只收合法的，非法就丢掉（宁可少一条候选）
-		var ips []string
-		for _, p := range parts[1:] {
-			if p != "" && net.ParseIP(p) != nil {
-				ips = append(ips, p)
-			}
-		}
-		out = append(out, gatewaySpec{url: u, ips: ips})
-	}
-	return out
-}
-
-// queryTxtWire 用纯 IP + wire 查 TXT 记录。
-func queryTxtWire(ip, name string) ([]string, error) {
-	q := buildDNSQuery(name, 16)
-	u := "https://" + ip + "/dns-query?dns=" + base64.RawURLEncoding.EncodeToString(q)
-	req, err := http.NewRequest(http.MethodGet, u, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("accept", "application/dns-message")
-	client := &http.Client{Timeout: 2500 * time.Millisecond}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("http %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	if err != nil {
-		return nil, err
-	}
-	return extractTxtStrings(body), nil
-}
-
-// fetchGatewayPool 用国内种子 DoH 读配置域名的 TXT → 网关池。
-func fetchGatewayPool() []gatewaySpec {
-	ips := append([]string(nil), domesticDoHIPs...)
-	rand.Shuffle(len(ips), func(i, j int) { ips[i], ips[j] = ips[j], ips[i] })
-	for _, ip := range ips {
-		txts, err := queryTxtWire(ip, configTxtDomain)
-		if err != nil {
-			noteLog("网关池 via %s 失败: %v", ip, err)
-			continue
-		}
-		var specs []gatewaySpec
-		seen := map[string]bool{}
-		selfIP := 0
-		for _, t := range txts {
-			for _, s := range parseGatewaySpecs(t) {
-				key := s.url + "|" + strings.Join(s.ips, ",")
-				if !seen[key] {
-					seen[key] = true
-					specs = append(specs, s)
-					if len(s.ips) > 0 {
-						selfIP++
-					}
-				}
-			}
-		}
-		if len(specs) > 0 {
-			noteLog("网关池 via %s -> %d 条(其中 %d 条自带 IP)", ip, len(specs), selfIP)
-			return specs
-		}
-		noteLog("网关池 via %s 无有效条目(%d 条 TXT)", ip, len(txts))
-	}
-	return nil
-}
-
-// hostOfURL 取 URL 的 host（失败返回空串）。
-func hostOfURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	return u.Hostname()
-}
-
-// refreshActiveDoHFromPool 读网关池，把 activeDoH 换成池里第一个**真正可用**的端点。
-//
-// 全都不行则保持原样（Start 传入的默认端点），绝不因此断网。
-func refreshActiveDoHFromPool() {
-	specs := fetchGatewayPool()
-	if len(specs) == 0 {
-		noteLog("网关池读取失败,沿用当前端点")
-		return
-	}
-	for _, s := range specs {
-		host := hostOfURL(s.url)
-		if host == "" {
-			continue
-		}
-		// ★ TXT 自带 IP 时**直接采用，不做解析** —— 解析这一步本身也会失败，
-		// 而「优选 IP」正是要由 TXT 远程控制的东西。
-		var checkIPs []string
-		if len(s.ips) > 0 {
-			checkIPs = s.ips
-		} else {
-			checkIPs = resolveHostViaDomesticDoH(host)
-			if len(checkIPs) == 0 {
-				noteLog("网关 %s 解析不出地址,跳过", s.url)
-				continue
-			}
-		}
-		// ★ 可用性校验：池里可能有"域名能解析、但查询一律空应答"的坏端点
-		//   （实测 v7e373e11t = Status:5 REFUSED）。不校验就会一直选它、
-		//   一直 fail-closed，表现成"第一次打开失败、重试碰巧才好"。
-		if !gatewayAnswers(s.url, checkIPs) {
-			noteLog("网关 %s 校验不通过(空应答/拒绝),跳过", s.url)
-			continue
-		}
-		invalidateGatewayIPs()
-		hostsMu.Lock()
-		activeDoH = s.url
-		activeDoHSelfIPs = append([]string(nil), s.ips...)
-		hostConfs = map[string]*hostConf{}
-		hostsMu.Unlock()
-		noteLog("网关已选用 %s (自带 IP=%v, 池共 %d 条)", s.url, s.ips, len(specs))
-		return
-	}
-	noteLog("网关池全部不可用,沿用当前端点")
-}
-
-// gatewayAnswers 校验某个网关是否**真的给得出答案**。
-//
-// 为什么必须校验：池里可能有已停用/未生效的端点 —— 实测 v7e373e11t 返回
-// Status:5 REFUSED（空应答），但它的**域名照样解析得到 IP**，所以光判断"能解析"
-// 分辨不出来。曾被它害得很惨：选到它就 0 个地址 → fail-closed，
-// 失败后重挑、碰巧换到好的才通 —— 表现就是"第一次打开失败、等半分钟重试才好"。
-//
-// 用 cloudflare-ech.com（没被墙）做探针，只查 A。
-func gatewayAnswers(rawURL string, ips []string) bool {
-	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.Hostname() == "" {
-		return false
-	}
-	var pins []string
-	for _, ip := range ips {
-		if net.ParseIP(ip) != nil {
-			pins = append(pins, ip)
-		}
-	}
-	addrs, err := resolveHostViaDoHWithPins(parsed.Hostname(), pins)
-	if err != nil || len(addrs) == 0 {
-		noteLog("网关校验失败 %s: %v", rawURL, err)
-		return false
-	}
-	return true
-}
-
-// resolveHostViaDoHWithPins 用指定 IP 直连某个 DoH 端点做一次查询（hostname 保持端点域名）。
-func resolveHostViaDoHWithPins(endpointHost string, pins []string) ([]string, error) {
-	if len(pins) == 0 {
-		return nil, fmt.Errorf("no pins")
-	}
-	q := buildDNSQuery(cloudflareECHHost, 1)
-	u := "https://" + endpointHost + "/dns-query?dns=" + base64.RawURLEncoding.EncodeToString(q)
-	req, err := http.NewRequest(http.MethodGet, u, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("accept", "application/dns-message")
-	transport := &http.Transport{
-		Proxy:             nil, // 绝不走代理
-		DisableKeepAlives: true,
-	}
-	dc := &net.Dialer{Timeout: 4 * time.Second}
-	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		_, port, err := net.SplitHostPort(addr)
-		if err != nil {
-			port = "443"
-		}
-		var lastErr error
-		for _, ip := range pins {
-			conn, err := dc.DialContext(ctx, network, net.JoinHostPort(ip, port))
-			if err == nil {
-				return conn, nil
-			}
-			lastErr = err
-		}
-		return nil, lastErr
-	}
-	client := &http.Client{Timeout: 6 * time.Second, Transport: transport}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("http %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	if err != nil {
-		return nil, err
-	}
-	return extractAddresses(body), nil
-}
-
-// extractType65RData 从 DNS 应答报文里取出第一条 type=65 记录的 rdata。
-func extractType65RData(msg []byte) ([]byte, error) {
-	if len(msg) < 12 {
-		return nil, errors.New("short dns message")
-	}
-	i := 12
-	for i < len(msg) && msg[i] != 0 {
-		i += int(msg[i]) + 1
-	}
-	i += 5 // 跳过根标签 + qtype(2) + qclass(2)
-	ancount := int(msg[6])<<8 | int(msg[7])
-	for n := 0; n < ancount; n++ {
-		if i+12 > len(msg) {
-			return nil, errors.New("truncated answer")
-		}
-		if msg[i]&0xC0 == 0xC0 {
-			i += 2
-		} else {
-			for i < len(msg) && msg[i] != 0 {
-				i += int(msg[i]) + 1
-			}
-			i++
-		}
-		typ := int(msg[i])<<8 | int(msg[i+1])
-		rdlen := int(msg[i+8])<<8 | int(msg[i+9])
-		rdata := i + 10
-		if rdata+rdlen > len(msg) {
-			return nil, errors.New("truncated rdata")
-		}
-		if typ == 65 && rdlen > 4 {
-			return msg[rdata : rdata+rdlen], nil
-		}
-		i = rdata + rdlen
-	}
-	return nil, errors.New("no HTTPS(65) record")
-}
-
 // fetchECHViaDoH queries HTTPS (type 65) and accepts both textual SVCB output
 // and RFC 3597 wire-format output returned by different DoH providers.
 func fetchECHViaDoH(host, endpoint string) ([]byte, error) {
 	dr, err := dohQuery(endpoint, host, "HTTPS")
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	for _, a := range dr.Answer {
-		if a.Type != 65 { continue }
+		if a.Type != 65 {
+			continue
+		}
 		if match := echParamRe.FindStringSubmatch(a.Data); match != nil {
 			value, err := base64.StdEncoding.DecodeString(match[1])
-			if err != nil { return nil, fmt.Errorf("ECH base64: %w", err) }
+			if err != nil {
+				return nil, fmt.Errorf("ECH base64: %w", err)
+			}
 			return value, nil
 		}
-		if value, err := parseSVCBWireECH(a.Data); err == nil { return value, nil }
+		if value, err := parseSVCBWireECH(a.Data); err == nil {
+			return value, nil
+		}
 	}
 	return nil, errors.New("no ech= parameter in HTTPS record")
 }
@@ -2132,24 +1448,37 @@ func fetchECHViaDoH(host, endpoint string) ([]byte, error) {
 // parseSVCBWireECH extracts SvcParam key 5 (ech) from RFC 3597 form:
 // "\\# <wire-length> <hex bytes>".
 func parseSVCBWireECH(data string) ([]byte, error) {
-	if !strings.HasPrefix(data, `\# `) { return nil, errors.New("not RFC3597 wire format") }
+	if !strings.HasPrefix(data, `\# `) {
+		return nil, errors.New("not RFC3597 wire format")
+	}
 	parts := strings.Fields(data)
-	if len(parts) < 3 { return nil, errors.New("malformed RFC3597 wire format") }
+	if len(parts) < 3 {
+		return nil, errors.New("malformed RFC3597 wire format")
+	}
 	hexBytes := strings.Join(parts[2:], "")
 	wire, err := hex.DecodeString(hexBytes)
-	if err != nil || len(wire) < 3 { return nil, errors.New("invalid SVCB wire data") }
+	if err != nil || len(wire) < 3 {
+		return nil, errors.New("invalid SVCB wire data")
+	}
 	position := 2 // priority
 	for position < len(wire) && wire[position] != 0 {
-		length := int(wire[position]); position += 1 + length
-		if position > len(wire) { return nil, errors.New("invalid SVCB target") }
+		length := int(wire[position])
+		position += 1 + length
+		if position > len(wire) {
+			return nil, errors.New("invalid SVCB target")
+		}
 	}
 	position++
 	for position+4 <= len(wire) {
 		key := int(wire[position])<<8 | int(wire[position+1])
 		length := int(wire[position+2])<<8 | int(wire[position+3])
 		position += 4
-		if position+length > len(wire) { return nil, errors.New("invalid SVCB parameter") }
-		if key == 5 { return append([]byte(nil), wire[position:position+length]...), nil }
+		if position+length > len(wire) {
+			return nil, errors.New("invalid SVCB parameter")
+		}
+		if key == 5 {
+			return append([]byte(nil), wire[position:position+length]...), nil
+		}
 		position += length
 	}
 	return nil, errors.New("no ECH SvcParam")
@@ -2159,52 +1488,59 @@ type publicECHCache struct {
 	Host      string `json:"host"`
 	ConfigB64 string `json:"config_b64"`
 	ExpiresAt int64  `json:"expires_at"`
-	// Source 记录 ECHConfigList 来源：own=目标自身 HTTPS ech=（浏览器策略，
-	// 大陆优化节点只认它）；pub=cloudflare-ech.com 公共公钥（兜底）。
-	// 空=旧版缓存（公共公钥），own 读取不匹配，pub 读取兼容。
-	Source string `json:"source,omitempty"`
 }
 
 // The cache is deliberately limited to a public ECHConfigList and expiry.
 // It is shared by all proxy starts in this app installation; it never stores
 // HTTP data, cookies, credentials, private keys, or a bypass decision.
-// loadPublicECHCacheSrc 读取指定来源的 ECH 缓存。source 为 "own" 时旧缓存
-// （Source 为空，内容为公共公钥）不匹配，避免用公共公钥连优化节点踩 1034。
-func loadPublicECHCacheSrc(path, host, source string) ([]byte, bool) {
-	if strings.TrimSpace(path) == "" { return nil, false }
+func loadPublicECHCache(path, host string) ([]byte, bool) {
+	if strings.TrimSpace(path) == "" {
+		return nil, false
+	}
 	data, err := os.ReadFile(path)
-	if err != nil { return nil, false }
+	if err != nil {
+		return nil, false
+	}
 	var record publicECHCache
-	if json.Unmarshal(data, &record) != nil || !strings.EqualFold(record.Host, host) || record.ExpiresAt <= time.Now().Unix() { return nil, false }
-	if source == "own" && record.Source != "own" { return nil, false }
+	if json.Unmarshal(data, &record) != nil || !strings.EqualFold(record.Host, host) || record.ExpiresAt <= time.Now().Unix() {
+		return nil, false
+	}
 	b, err := base64.StdEncoding.DecodeString(record.ConfigB64)
-	if err != nil || len(b) == 0 { return nil, false }
+	if err != nil || len(b) == 0 {
+		return nil, false
+	}
 	return b, true
 }
 
-func storePublicECHCacheSrc(path, host string, config []byte, source string) {
-	if strings.TrimSpace(path) == "" || len(config) == 0 { return }
-	record, err := json.Marshal(publicECHCache{Host: strings.ToLower(host), ConfigB64: base64.StdEncoding.EncodeToString(config), ExpiresAt: time.Now().Add(publicECHCacheTTL).Unix(), Source: source})
-	if err != nil { return }
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil { return }
+func storePublicECHCache(path, host string, config []byte) {
+	if strings.TrimSpace(path) == "" || len(config) == 0 {
+		return
+	}
+	record, err := json.Marshal(publicECHCache{Host: strings.ToLower(host), ConfigB64: base64.StdEncoding.EncodeToString(config), ExpiresAt: time.Now().Add(publicECHCacheTTL).Unix()})
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".echconfig-")
-	if err != nil { return }
+	if err != nil {
+		return
+	}
 	name := tmp.Name()
 	defer os.Remove(name)
-	if _, err = tmp.Write(record); err != nil { tmp.Close(); return }
-	if err = tmp.Chmod(0600); err != nil { tmp.Close(); return }
-	if err = tmp.Close(); err != nil { return }
+	if _, err = tmp.Write(record); err != nil {
+		tmp.Close()
+		return
+	}
+	if err = tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		return
+	}
+	if err = tmp.Close(); err != nil {
+		return
+	}
 	_ = os.Rename(name, path)
-}
-
-// loadPublicECHCache 保持旧签名：读 pub 来源缓存（旧调用点兼容）。
-func loadPublicECHCache(path, host string) ([]byte, bool) {
-	return loadPublicECHCacheSrc(path, host, "pub")
-}
-
-// storePublicECHCache 保持旧签名：默认按 pub（公共公钥）来源落盘。
-func storePublicECHCache(path, host string, config []byte) {
-	storePublicECHCacheSrc(path, host, config, "pub")
 }
 
 // cloudflareECHHost 是 Cloudflare 官方的 ECH 公钥发布点。它的 HTTPS 记录里
@@ -2219,20 +1555,11 @@ const cloudflareECHHost = "cloudflare-ech.com"
 // 时自动用新公钥重试),内置值过期无害。2026-08-13 抓取自 cloudflare-ech.com。
 const builtinCFECHConfigB64 = "AEX+DQBBNAAgACCyup0GYiVj1Iph45mjgzNuuKu0qMra6LGPbZVfMTXgJwAEAAEAAQASY2xvdWRmbGFyZS1lY2guY29tAAA="
 
-// builtinDoHHostIPs 是网关地址的**末位后备**（正常情况下用不到）。
-//
-// 网关真相不写死在这里，而是启动/首次用时用国内纯 IP DoH 动态解析
-// （见 resolveDoHHostIPs）。理由：
-//   - 硬编码 IP 迟早失效：网关可更换、地址段会被封、CF 边缘也会变；
-//   - 而走系统 DNS 解析网关域名又会被污染（拿到假 IP → 连接超时）。
-// 所以「网关在哪」交给国内 DoH 回答；这份清单只在**连国内 DoH 都失败**时兜底。
-//
-// 2026-09-22 用户拨测确认：162.159.36.x 与 172.64.229.x 两组 IP 在国内都是通的。
-// 之前那条 21 秒超时不是 IP 不通 —— 是**网关域名解析被污染**，连到了假地址
-// （同一客户端直连国内纯 IP DoH 只要 158ms，因为那家无需解析）。
-var builtinDoHHostIPs = []string{
-	"172.64.229.4", "172.64.229.128", "162.159.36.20", "162.159.36.5",
-}
+// builtinDoHHostIPs 是 Cloudflare Gateway DoH 端点域名当前解析的 IP 快照
+// (2026-08-13 实测 pieqllv9i7.cloudflare-gateway.com → 162.159.36.5/20)。
+// 属于 AS13335;部分区域(福建)封禁目标站点 CF 边缘 IP 时 DoH 端点 IP 仍可达。
+// 作为 DoH 端点 IP 自动并入 ECH 候选的兜底(系统 DNS 被污染时仍能用)。
+var builtinDoHHostIPs = []string{"162.159.36.5", "162.159.36.20"}
 
 // loadECHConfigWithFallbacks returns the ECHConfigList for an AS13335 host,
 // trying in order:
@@ -2248,29 +1575,14 @@ func loadECHConfigWithFallbacks(host, doh string) ([]byte, string) {
 	cp := cachePath
 	cachePathMu.RUnlock()
 
-	// ECH 公钥来源优先级（2026-09-29 用户定性：cloudflare-ech.com 才是官方
-	// 正确发布点；x.xn--pn1aul.eu.org 的 ech= 是用户自行改过的非官方值，
-	// 绝不能优先用）。CF 密钥 1h 轮换、5h 宽限 → 缓存 4h 必有效。
-	//
-	// 1. pub 缓存（cloudflare-ech.com 官方值，4h TTL；不发 DoH，冷启动最快）。
+	// 1. Cache first:握手用缓存配置,不发 DoH。
 	if cp != "" {
-		if b, ok := loadPublicECHCacheSrc(cp, host, "pub"); ok && len(b) > 0 {
-			return b, "pub cache"
+		if b, ok := loadPublicECHCache(cp, host); ok && len(b) > 0 {
+			return b, "cache"
 		}
 	}
 
-	// 2. Cloudflare 官方 ECH 公钥（官方发布点，实时拉最新值，适用所有 CF 站点）。
-	// 2a. 国内三家纯 IP DoH 取官方活值：**不依赖 doh 设置** ——
-	// 它不查系统 DNS、也不需要用户配 DoH，所以"关掉 DoH 只停普通解析"这条边界在这里成立：
-	// ECH 取数照旧，否则受保护域全部 fail-closed = 整个 App 没网络（Han1meViewer 上实测过这个坑）。
-	if b, err := fetchLiveECHWire(); err == nil && len(b) > 0 {
-		storePublicECHCache(cp, host, b)
-		return b, "domestic-pure-ip"
-	} else {
-		noteLog("domestic pure-ip ECH failed, falling back to gateway: %v", err)
-	}
-
-	// 2b. 回退：经用户/内置的 DoH 网关取（原有链路，保留）。
+	// 2. Cloudflare 官方 ECH 公钥(适用所有 CF 站点)。
 	if doh != "" {
 		if b, err := fetchECHViaDoH(cloudflareECHHost, doh); err == nil && len(b) > 0 {
 			storePublicECHCache(cp, host, b)
@@ -2278,23 +1590,15 @@ func loadECHConfigWithFallbacks(host, doh string) ([]byte, string) {
 		}
 	}
 
-	// 3. 目标自身 HTTPS 记录的 ech=（兜底：正常情况下与官方值同源；仅当
-	// 官方发布点全挂且目标自身记录未被改写时才有意义）。
+	// 3. 目标自身 HTTPS 记录的 ech=。
 	if doh != "" {
 		if b, err := fetchECHViaDoH(host, doh); err == nil && len(b) > 0 {
-			storePublicECHCacheSrc(cp, host, b, "own")
+			storePublicECHCache(cp, host, b)
 			return b, "target HTTPS ech="
 		}
 	}
 
-	// 4. own 缓存（上次成功的目标自身 ech=，4h TTL）。
-	if cp != "" {
-		if b, ok := loadPublicECHCacheSrc(cp, host, "own"); ok && len(b) > 0 {
-			return b, "own cache"
-		}
-	}
-
-	// 5. operator fallback。
+	// 4. operator fallback。
 	mu.Lock()
 	defer mu.Unlock()
 	if len(fallbackECH) > 0 {
@@ -2303,8 +1607,8 @@ func loadECHConfigWithFallbacks(host, doh string) ([]byte, string) {
 		return b, "operator fallback"
 	}
 
-	// 6. 内置 Cloudflare 公共公钥(最后兜底)。
-	// 部分区域封禁 cloudflare-ech.com 的 IP / 干扰 DoH,导致上面全失败。
+	// 5. 内置 Cloudflare 公共公钥(最后兜底)。
+	// 部分区域封禁 cloudflare-ech.com 的 IP / 干扰 DoH,导致上面 1-4 全失败。
 	// 内置快照保证 AS13335 主机仍能发起 ECH 握手;公钥轮换由服务器
 	// retry_configs 兜底(握手被拒时自动更新),无需网络拉取也能自愈。
 	if b, err := base64.StdEncoding.DecodeString(builtinCFECHConfigB64); err == nil && len(b) > 0 {
@@ -2317,15 +1621,21 @@ func loadECHConfigWithFallbacks(host, doh string) ([]byte, string) {
 func loadECHConfig(host, echB64, doh, cachePath string) ([]byte, string, error) {
 	if strings.TrimSpace(echB64) != "" {
 		b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(echB64))
-		if err != nil { return nil, "", fmt.Errorf("ech base64: %w", err) }
+		if err != nil {
+			return nil, "", fmt.Errorf("ech base64: %w", err)
+		}
 		return b, "flag", nil
 	}
 	if strings.TrimSpace(doh) != "" {
 		if b, err := fetchECHViaDoH(host, doh); err == nil && len(b) > 0 {
-			if cachePath != "" { storePublicECHCache(cachePath, host, b) }
+			if cachePath != "" {
+				storePublicECHCache(cachePath, host, b)
+			}
 			return b, "DoH", nil
 		} else if cachePath != "" {
-			if cached, ok := loadPublicECHCache(cachePath, host); ok { return cached, fmt.Sprintf("public cache (DoH failed: %v)", err), nil }
+			if cached, ok := loadPublicECHCache(cachePath, host); ok {
+				return cached, fmt.Sprintf("public cache (DoH failed: %v)", err), nil
+			}
 		}
 	}
 	return nil, "", errors.New("no ECH HTTPS record available")

@@ -60,7 +60,7 @@ func sampleAcrossSubnets(n int, rng *rand.Rand) []string {
 			s := make(net.IP, 4)
 			copy(s, base)
 			// 第 16 位之后的部分在第三字节低位：offset = 16 - ones 位
-			s[2] |= byte(i)          // 第三字节低位（/16 的 host 起始）
+			s[2] |= byte(i) // 第三字节低位（/16 的 host 起始）
 			subnets = append(subnets, &net.IPNet{IP: s, Mask: net.CIDRMask(16, 32)})
 		}
 	}
@@ -359,9 +359,10 @@ func sampleFromOfficialSubnet(officialIPs []string, n int, rng *rand.Rand) []str
 }
 
 // optimizeFastIPs 三阶段优选入口（同步，≤10s）：
-//   有缓存(12h) → 直接返回；无缓存 → 从官方解析 IP 的 /24 段采样
-//   （无官方 IP 回退全网 50 网段）→ 2s 延迟排序 top10 + 8s 下载测速
-//   top3 → 写缓存。
+//
+//	有缓存(12h) → 直接返回；无缓存 → 从官方解析 IP 的 /24 段采样
+//	（无官方 IP 回退全网 50 网段）→ 2s 延迟排序 top10 + 8s 下载测速
+//	top3 → 写缓存。
 func optimizeFastIPs(cachePath string, officialIPs []string) []string {
 	// 0. 缓存优先
 	if cached := readIPCache(cachePath); len(cached) > 0 {
