@@ -173,13 +173,6 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
             val t0 = System.currentTimeMillis()
             try {
                 val host = URL(url).host ?: throw IllegalArgumentException("URL 缺少主机名: $url")
-                val route = EchDohResolver.resolve(
-                    host = host,
-                    dohEndpoints = EchDohResolver.splitEndpoints(doh),
-                    addressOverrides = EchDohResolver.splitEndpoints(connectIp),
-                    configHost = configHost.takeIf { it.isNotBlank() },
-                )
-                val dohMs = System.currentTimeMillis() - t0
 
                 // ① 注入 CookieManager 的 cookie —— 这一步不能省。
                 //    JS 侧（echEngineFetch）刻意把 cookie 交给"原生侧统一注入"，
@@ -199,46 +192,33 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
                     headers
                 }
 
-                // 逐个尝试候选地址：国内到不同 CF IP 段可达性差异极大，
-                // 只试第一个（旧写法）会时不时整条链路失败。总预算按候选数均分。
                 val bodyBytes = body.takeIf { it.isNotEmpty() }?.toByteArray(Charsets.UTF_8)
                 val totalMs = timeoutMs.toLong().takeIf { it > 0 } ?: 30_000L
-                val perTry = (totalMs / route.addresses.size.coerceAtLeast(1)).coerceAtLeast(3_000L)
-                var result: EchHttpNative.Response? = null
-                var target = ""
-                var lastErr: Exception? = null
-                for (ip in route.addresses) {
-                    target = ip
-                    try {
-                        val r = EchHttpNative.request(
-                            url = url,
-                            method = method.ifBlank { "GET" },
-                            headers = effectiveHeaders,
-                            // POST 表单等；GET 时 JS 传空串 → null（引擎按无请求体处理）
-                            body = bodyBytes,
-                            echConfig = route.echConfig,
-                            connectIp = ip,
-                            timeoutMs = perTry,
-                            maxResponseBytes = 32L * 1024 * 1024,
-                        )
-                        if (r != null && r.status != 0) {
-                            result = r
-                            break
-                        }
-                        lastErr = IllegalStateException("地址 $ip 未取得响应（ECH 被拒或超时）")
-                    } catch (e: Exception) {
-                        lastErr = e
-                    }
-                    Log.w(LOG_TAG, "候选地址 $ip 失败，尝试下一个")
-                }
+
+                // ⚠️ 2026-10-01：JS 路径改走 EchEngineClient（与 WebView 路径完全同构）。
+                // 此前 JS 路径用自己的 resolve+候选循环，与 WebView 路径（EchEngineClient）
+                // 在配置来源/候选选择/失败处理上存在差异，真机日志实证：WebView 全部
+                // 200（ech=true 毫秒级），JS 路径同一时段 /works 先 525、重试全超时。
+                // EchEngineClient 已被 WebView 路径证明可用，统一后两条路径行为一致；
+                // 其内部使用落盘 DoH 配置（JS setDoh 双写同步，空时默认兜底），
+                // 不再使用 JS 传入的 doh/connectIp 参数（保留签名兼容 JS 调用方）。
+                // 诊断：成功/失败事件（engine_ok / engine_fail）在 EchEngineClient 内上报，
+                // 带候选 IP 列表与失败原因 —— 服务器统计可按 IP 定位。
+                val resp = EchEngineClient.request(
+                    host = host,
+                    url = url,
+                    method = method.ifBlank { "GET" },
+                    headers = effectiveHeaders,
+                    body = bodyBytes,
+                    totalTimeoutMs = totalMs,
+                )
 
                 // ② Set-Cookie 写回 CookieManager —— 否则 JS 路径拿到的会话
                 //    cookie 只活在这次响应里，下个请求又是匿名的。
+                //    EchEngineClient.request 成功即返回非空响应，这里无需判空。
                 runCatching {
-                    // result 为 null 时（所有候选地址都失败）没有响应头可写，直接跳过。
-                    val r = result ?: return@runCatching
                     val cm = android.webkit.CookieManager.getInstance()
-                    r.headers.split("\r\n", "\n").forEach { line ->
+                    resp.headers.split("\r\n", "\n").forEach { line ->
                         val idx = line.indexOf(':')
                         if (idx <= 0) return@forEach
                         if (!line.substring(0, idx).trim().equals("Set-Cookie", true)) return@forEach
@@ -256,26 +236,13 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
                     com.co3.Diagnostics.event("js_cookie_writeback_fail", mapOf("err" to (it.message ?: "")))
                 }
 
-                if (result == null) {
-                    // 所有候选都不行。不降级明文 —— fail-closed。
-                    promise.reject(
-                        "ECH_ENGINE_REQUEST_FAILED",
-                        lastErr?.message
-                            ?: "所有候选地址都失败（共 ${route.addresses.size} 个；fail-closed 未降级明文）",
-                    )
-                    return@execute
-                }
-
                 val map = Arguments.createMap()
-                map.putInt("status", result.status)
-                map.putString("headers", result.headers)
-                map.putString("body", String(result.body, Charsets.UTF_8))
-                map.putBoolean("echAccepted", result.echAccepted)
-                map.putInt("echRetries", result.echRetries)
-                map.putString("connectIp", target)
-                map.putString("configHost", route.configHost)
-                map.putInt("dohMs", dohMs.toInt())
-                map.putInt("totalMs", (System.currentTimeMillis() - t0).toInt())
+                map.putInt("status", resp.status)
+                map.putString("headers", resp.headers)
+                map.putString("body", String(resp.body, Charsets.UTF_8))
+                map.putBoolean("echAccepted", resp.echAccepted)
+                map.putInt("echRetries", resp.echRetries)
+                map.putString("totalMs", (System.currentTimeMillis() - t0).toString())
                 promise.resolve(map)
             } catch (e: Exception) {
                 Log.w(LOG_TAG, "EchHttp.request 失败: ${e.message}")

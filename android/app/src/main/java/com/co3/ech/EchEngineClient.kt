@@ -34,6 +34,7 @@ object EchEngineClient {
         body: ByteArray? = null,
         totalTimeoutMs: Long = 30_000L,
     ): EchHttpNative.Response {
+        val tStart = System.currentTimeMillis()
         if (!EchHttpNative.isAvailable) {
             throw IOException("引擎不可用（libco3ech.so 未加载）—— fail-closed 不放行明文")
         }
@@ -75,6 +76,21 @@ object EchEngineClient {
                     if (idx > 0) {
                         Log.i(TAG, "第 ${idx + 1} 个候选地址可用: $ip（前 ${idx} 个失败）")
                     }
+                    // 诊断：成功路径带实际连接 IP / echAccepted / 状态码 / 耗时，
+                    // 服务器统计才能区分"哪个 IP 行、哪个 IP 不行"。
+                    com.co3.Diagnostics.event(
+                        "engine_ok",
+                        mapOf(
+                            "host" to host,
+                            "url" to url.take(100),
+                            "ip" to ip,
+                            "echAccepted" to resp.echAccepted.toString(),
+                            "status" to resp.status.toString(),
+                            "attempt" to (idx + 1).toString(),
+                            "totalMs" to (System.currentTimeMillis() - tStart).toString(),
+                            "dohEndpoints" to cfg.dohEndpoints.joinToString("|").take(200),
+                        ),
+                    )
                     return resp
                 }
                 lastError = IOException("地址 $ip 未取得响应（ECH 握手失败或被拒绝）")
@@ -86,6 +102,18 @@ object EchEngineClient {
                 "候选地址 $ip 失败（${System.currentTimeMillis() - t0}ms），尝试下一个",
             )
         }
+
+        // 诊断：失败路径上报全部候选 IP 与最终错误 —— 定位"是 IP 不可达还是 ECH 被拒"。
+        com.co3.Diagnostics.event(
+            "engine_fail",
+            mapOf(
+                "host" to host,
+                "url" to url.take(100),
+                "candidates" to candidates.joinToString("|").take(200),
+                "err" to (lastError?.message ?: "所有候选地址都失败"),
+                "totalMs" to (System.currentTimeMillis() - tStart).toString(),
+            ),
+        )
 
         throw lastError
             ?: IOException("所有候选地址都失败（共 ${candidates.size} 个，fail-closed 未降级明文）")

@@ -491,7 +491,9 @@ const echKy = ky.create({
   // "[object Request]" 从而绕过域名判定。echFetch 内部自行规范化。
   fetch: (input, init) => echFetch(input, init || {}),
   // Generous timeout: the first request may have to bootstrap the ECH handshake.
-  timeout: 30000,
+  // 45000 > 引擎预算(30000)：让引擎先到期 reject（错误信息带候选 IP），
+  // 而不是被 ky 的 30s 超时掩盖成笼统的 "Request timed out"。
+  timeout: 45000,
   // AO3 的 session cookie 只有一份权威来源：原生 CookieManager。引擎零 cookie
   // 代码，cookie 由 shouldInterceptRequest / 引擎请求两侧统一交给它保管。
   // credentials:'omit' 让 RN fetch 层不去掺一脚，避免出现第二份 cookie。
