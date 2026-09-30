@@ -208,7 +208,16 @@ function engineHeaders(raw) {
     .forEach((line) => {
       const i = line.indexOf(':');
       if (i <= 0) return;
-      map.set(line.slice(0, i).trim().toLowerCase(), line.slice(i + 1).trim());
+      const name = line.slice(0, i).trim().toLowerCase();
+      const value = line.slice(i + 1).trim();
+      if (name === 'set-cookie') {
+        // 同名多值（多条 Set-Cookie）不能互相覆盖：AO3 登录的 session 与
+        // user_credentials 是分多条下发的，只留最后一条会丢关键 cookie。
+        // 用 \n 拼接，读取侧按行拆分。
+        map.set(name, map.has(name) ? `${map.get(name)}\n${value}` : value);
+      } else {
+        map.set(name, value);
+      }
     });
   return {
     get: (name) => map.get(String(name).toLowerCase()) ?? null,

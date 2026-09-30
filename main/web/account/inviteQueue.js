@@ -84,6 +84,9 @@ export async function queryInviteQueue(email) {
     const res = await ao3Request(url, {
       method: 'GET',
       credentials: 'include',
+      // 未登录时 AO3 会对排队接口返回 302 跳登录页：不能当错误抛，
+      // 让业务层拿到真实状态（未登录=刷不出队列，而不是网络错误）。
+      throwHttpErrors: false,
       headers: {
         Accept: '*/*;q=0.5, text/javascript, application/javascript, application/ecmascript, application/x-ecmascript',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',

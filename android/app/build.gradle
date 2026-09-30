@@ -51,8 +51,20 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 21
-        // 正式版标识：加 ECH 标记，与内部测试包（B0.0.xx）区分
-        versionName "1.1.0-ech"
+        // 正式版标识：加 ECH 标记，与内部测试包（B0.0.xx）区分。
+        // 版本号带 git 短 sha：所有 ech-* 包此前 versionName 完全一致，
+        // 设备上无法区分装的是哪个 commit —— "修了十几次故障不变"的常见原因
+        // 就是一直在测旧包。带上 commit 后，App 关于页/诊断导出能直接确认版本。
+        def gitSha = ""
+        try {
+            gitSha = new ByteArrayOutputStream().withStream { out ->
+                def p = ['git', 'rev-parse', '--short=7', 'HEAD'].execute([], rootProject.projectDir)
+                p.consumeProcessOutput(out, new ByteArrayOutputStream())
+                p.waitFor()
+                out.toString().trim()
+            }
+        } catch (Exception ignored) { /* 非 git 环境（如 CI 源码包）留空 */ }
+        versionName "1.1.0-ech" + (gitSha ? "-" + gitSha : "")
     }
 
     splits {

@@ -25,6 +25,18 @@ object EchDohConfig {
     @Volatile
     var appContext: Context? = null
 
+    /**
+     * 内置默认 DoH 端点：与 JS 侧 initEch 的默认一致（pieqllv9i7 主 + 2 fallback）。
+     * JS 落盘是异步的（initEch → pushDohConfigToNative），WebView 拦截路径若先于
+     * 落盘执行，此前会拿到空配置 fail-closed —— 服务器日志实证 8 次
+     * "尚无 DoH 配置（JS initEch 未落盘）"。空配置时回退到这里，不再 fail-closed。
+     */
+    private val DEFAULT_DOH_ENDPOINTS = listOf(
+        "https://pieqllv9i7.cloudflare-gateway.com/dns-query",
+        "https://m2b4x7vw98.cloudflare-gateway.com/dns-query",
+        "https://dz1598pphb.cloudflare-gateway.com/dns-query",
+    )
+
     data class Snapshot(
         val dohEndpoints: List<String>,
         val configHost: String?,
@@ -43,19 +55,20 @@ object EchDohConfig {
         }.onFailure { Log.w(TAG, "保存 DoH 配置失败: ${it.message}") }
     }
 
-    /** 读当前配置；appContext 未就绪时返回空快照（调用方按 fail-closed 处理）。 */
+    /** 读当前配置；JS 未落盘 / 读失败时回退内置默认端点，不再 fail-closed。 */
     fun load(): Snapshot {
-        val ctx = appContext ?: return Snapshot(emptyList(), null, emptyList())
+        val ctx = appContext ?: return Snapshot(DEFAULT_DOH_ENDPOINTS, null, emptyList())
         return runCatching {
             val sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val doh = splitList(sp.getString(KEY_DOH, ""))
             Snapshot(
-                dohEndpoints = splitList(sp.getString(KEY_DOH, "")),
+                dohEndpoints = if (doh.isEmpty()) DEFAULT_DOH_ENDPOINTS else doh,
                 configHost = (sp.getString(KEY_CONFIG_HOST, "") ?: "").trim().ifEmpty { null },
                 addressOverrides = splitList(sp.getString(KEY_IPS, "")),
             )
         }.getOrElse {
             Log.w(TAG, "读取 DoH 配置失败: ${it.message}")
-            Snapshot(emptyList(), null, emptyList())
+            Snapshot(DEFAULT_DOH_ENDPOINTS, null, emptyList())
         }
     }
 

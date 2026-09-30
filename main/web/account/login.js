@@ -100,6 +100,10 @@ export default async function login(username, password) {
       method: 'POST',
       body: params.toString(),
       credentials: 'include', // Important for cookies
+      // 关键：ky 默认 throwHttpErrors=true，AO3 登录成功返回 302 会被 ky 直接
+      // 当错误抛掉 → 登录永远"失败"。引擎不跟随重定向（FOLLOWLOCATION=0），
+      // 302 原样返回，必须透传给业务层自行判断。
+      throwHttpErrors: false,
       headers: {
         Accept:
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -125,23 +129,34 @@ export default async function login(username, password) {
     });
 
     // 登录链路第 5 步：POST 结果（302 跳出登录页=成功；仍停在登录页=被拒）
+    // ⚠️ 成功判断**不能看 response.url**：引擎不跟随重定向，返回的伪响应
+    // url 恒等于请求 URL（含 /users/login），看 url 会把成功的 302 误判成
+    // "Wrong username or password"（此前登录失败的代码级根因）。
+    // 正确标志：3xx + Location 头指向登录页之外。
+    const locHeader =
+      response.headers && response.headers.get
+        ? response.headers.get('location')
+        : null;
+    const isRedirect = response.status >= 300 && response.status < 400 && !!locHeader;
+    const redirectedAway = isRedirect && !String(locHeader).includes('/users/login');
     diagEvent('login_step', {
       step: 'post_login',
       status: response.status,
       finalUrl: String(response.url || '-').slice(0, 80),
+      location: String(locHeader || '-').slice(0, 80),
       setCookie: response.headers && response.headers.get && response.headers.get('set-cookie') ? 'yes' : 'no',
     });
-    // 仍在登录页 = 被拒。必须用 includes：服务端/我们发出的 URL 都带 ?return_to=%2F，
-    // 用 === 比较会永远不匹配 → 200 被误判成"成功但没 cookie"。
-    if (String(response.url || '').includes('/users/login')) {
+    // 仍在登录页（未跳转） = 被拒
+    if (!redirectedAway && String(response.url || '').includes('/users/login')) {
       throw new Error('Wrong username or password');
     }
 
     // Extract the session cookie from the response headers
+    // （引擎侧多条 Set-Cookie 已用 \n 拼接，不能只按逗号拆）
     const setCookieHeader = response.headers.get('set-cookie');
     if (setCookieHeader) {
       // Look for the otwarchive session cookie
-      const cookies = setCookieHeader.split(',');
+      const cookies = setCookieHeader.split(/[\n,]/);
       for (let cookie of cookies) {
         const trimmedCookie = cookie.trim();
         if (
@@ -188,6 +203,8 @@ export async function validateCookie(sessionToken) {
     const response = await ao3Request('https://archiveofourown.org/', {
       method: 'GET',
       credentials: 'include', // Include cookies in the request
+      // 3xx（跳转）同样不能抛错：未登录跳登录页时也要能读到 set-cookie 清空标志
+      throwHttpErrors: false,
       headers: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
@@ -201,7 +218,7 @@ export async function validateCookie(sessionToken) {
     const setCookieHeader = response.headers.get('set-cookie');
     if (setCookieHeader) {
       // Look for the "user_credentials" cookie being cleared
-      const cookies = setCookieHeader.split(',');
+      const cookies = setCookieHeader.split(/[\n,]/);
       for (let cookie of cookies) {
         const trimmedCookie = cookie.trim();
         if (trimmedCookie.startsWith('user_credentials=') && trimmedCookie.includes('max-age=0')) {

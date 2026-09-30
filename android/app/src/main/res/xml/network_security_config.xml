@@ -1,13 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  明文流量策略：仅放行本机回环（127.0.0.1 / localhost），
-  供 WebView 访问进程内 ECH 转发服务（LocalEchProxy，http://127.0.0.1:8080）。
-  其余所有明文 HTTP 一律禁止 —— 对外流量只允许 HTTPS（走 Conscrypt ECH）。
+  明文流量策略：仅放行本机回环（127.0.0.1 / localhost）与第三方 CDN 例外。
+  - 127.0.0.1 / localhost：供 WebView 访问进程内 ECH 转发服务（历史遗留，当前引擎不监听端口）。
+  - ajax.googleapis.com：AO3 页面以明文 http:// 引用 jQuery 等第三方 JS，
+    2026-09-30 服务器日志实证 36 次被 network security policy 拦截（CLEARTEXT），
+    页面交互 JS 因此全部失效。该域无敏感流量（公共 CDN），放行明文。
+  其余所有明文 HTTP 一律禁止 —— 对外流量只允许 HTTPS（走 ECH 引擎）。
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">127.0.0.1</domain>
         <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="true">ajax.googleapis.com</domain>
     </domain-config>
 </network-security-config>
