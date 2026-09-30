@@ -85,40 +85,17 @@ object CoWebViewHelper {
                 //    - User-Agent：安卓 WebView 自带的 UA 里带 "wv" 标记，Cloudflare
                 //      会据此判定为非浏览器请求直接 403（真机实测：同域名下 JS 侧
                 //      用桌面 UA 能通、WebView 这条被 403）。JS 侧 ao3Transport 那个
-                //      UA 是验证过能过 CF 的，这里保持一致；。
+                //      UA 是验证过能过 CF 的，这里保持一致；
+                //    - Accept-Encoding：引擎自己做解压，两边协商会打架。
                 val hb = StringBuilder()
-                val seen = HashSet<String>()
                 request.requestHeaders.forEach { (k, v) ->
                     if (k.equals("Cookie", true) || k.equals("Host", true)) return@forEach
                     if (k.equals("User-Agent", true)) return@forEach
+                    if (k.equals("Accept-Encoding", true)) return@forEach
                     if (k.contains('\n') || k.contains('\r')) return@forEach
-                    seen.add(k.lowercase())
                     hb.append(k).append(": ").append(v).append("\r\n")
                 }
                 hb.append("User-Agent: ").append(AO3_UA).append("\r\n")
-
-                // 补齐 Cloudflare 要求的"浏览器式"头。
-                // 实测（同一 IP、同一路径 /works，只换请求头）：
-                //   只有 User-Agent                   → 525
-                //   +Accept                           → 525
-                //   +Accept-Language +Accept-Encoding → 200   ← 决定性
-                // CF 把"头不齐全"的请求当非浏览器流量挑战，直接回 525。
-                // 注意 Accept-Encoding 上一版被我误过滤掉了（当时怕和引擎解压打架，
-                // 其实引擎自带 auto_uncompress，声明 gzip 是安全的且必需）。
-                listOf(
-                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language" to "zh-CN,zh;q=0.9,en;q=0.8",
-                    "Accept-Encoding" to "gzip, deflate",
-                    "Upgrade-Insecure-Requests" to "1",
-                    "Sec-Fetch-Dest" to "document",
-                    "Sec-Fetch-Mode" to "navigate",
-                    "Sec-Fetch-Site" to "same-origin",
-                    "Sec-Fetch-User" to "?1",
-                ).forEach { (name, value) ->
-                    if (!seen.contains(name.lowercase())) {
-                        hb.append(name).append(": ").append(value).append("\r\n")
-                    }
-                }
                 if (cookie.isNotEmpty()) hb.append("Cookie: ").append(cookie).append("\r\n")
 
                 // 3) 引擎请求：原始 https URL（不改写），ECH 在进程内完成。
