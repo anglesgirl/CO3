@@ -39,18 +39,7 @@ object EchEngineInterceptor {
             throw IOException("引擎不可用（libco3ech.so 未加载）—— fail-closed 不放行明文")
         }
 
-        // 1) DoH → ECH 配置与地址
-        val cfg = EchDohConfig.load()
-        if (cfg.isEmpty) throw IOException("尚无 DoH 配置（JS initEch 未落盘）")
-        val route = EchDohResolver.resolve(
-            host = host,
-            dohEndpoints = cfg.dohEndpoints,
-            addressOverrides = cfg.addressOverrides,
-            configHost = cfg.configHost,
-        )
-        val connectIp = route.addresses.firstOrNull() ?: throw IOException("DoH 未返回任何地址")
-
-        // 2) Cookie：与 WebView 共用 CookieManager
+        // Cookie：与 WebView 共用 CookieManager
         val cookie = runCatching { CookieManager.getInstance().getCookie(req.url.toString()) }
             .getOrNull().orEmpty()
 
@@ -72,19 +61,15 @@ object EchEngineInterceptor {
             buf.readByteArray()
         }
 
-        // 5) 引擎请求（原始 https URL）
-        val resp = EchHttpNative.request(
+        // 5) 引擎请求（原始 https URL）。EchEngineClient 内部选路并逐个试候选地址。
+        val resp = EchEngineClient.request(
+            host = host,
             url = req.url.toString(),
             method = req.method,
             headers = hb.toString(),
             body = reqBody,
-            echConfig = route.echConfig,
-            connectIp = connectIp,
-            timeoutMs = 30_000L,
-        ) ?: throw IOException("引擎返回空（请求未完成）")
-        if (resp.status == 0) {
-            throw IOException("引擎未取得响应（ECH 失败，fail-closed 未降级明文）")
-        }
+            totalTimeoutMs = 30_000L,
+        )
 
         // 6) 拆响应头 + Set-Cookie 写回 CookieManager
         val builder = Response.Builder()

@@ -46,19 +46,7 @@ object CoWebViewHelper {
         var lastError: String = "unknown"
         repeat(2) { attempt ->
             try {
-                // 1) DoH → ECH 配置与地址。引擎不查 DoH，这两样必须我们来准备。
-                val cfg = EchDohConfig.load()
-                if (cfg.isEmpty) throw IOException("尚无 DoH 配置（JS initEch 未落盘）")
-                val route = EchDohResolver.resolve(
-                    host = host,
-                    dohEndpoints = cfg.dohEndpoints,
-                    addressOverrides = cfg.addressOverrides,
-                    configHost = cfg.configHost,
-                )
-                val connectIp = route.addresses.firstOrNull()
-                    ?: throw IOException("DoH 未返回任何地址")
-
-                // 2) Cookie：引擎完全不碰 cookie，统一由 CookieManager 管。
+                // 1) Cookie：引擎完全不碰 cookie，统一由 CookieManager 管。
                 val cookie = runCatching { CookieManager.getInstance().getCookie(url) }
                     .getOrNull().orEmpty()
                 Diagnostics.event(
@@ -79,19 +67,17 @@ object CoWebViewHelper {
                 }
                 if (cookie.isNotEmpty()) hb.append("Cookie: ").append(cookie).append("\r\n")
 
-                // 4) 引擎请求：原始 https URL（不改写），ECH 在进程内完成。
-                val resp = EchHttpNative.request(
+                // 3) 引擎请求：原始 https URL（不改写），ECH 在进程内完成。
+                //    EchEngineClient 内部做 DoH 选路并**逐个尝试**候选地址 ——
+                //    国内到不同 CF IP 段可达性差异极大，只试第一个会时不时全挂。
+                val resp = EchEngineClient.request(
+                    host = host,
                     url = url,
                     method = "GET",
                     headers = hb.toString(),
-                    echConfig = route.echConfig,
-                    connectIp = connectIp,
-                    timeoutMs = 30_000L,
-                ) ?: throw IOException("引擎返回空（请求未完成）")
-                if (resp.status == 0) {
-                    // 引擎侧失败（如 ECH 被拒）。不降级明文 —— fail-closed。
-                    throw IOException("引擎未取得响应（ECH 失败，fail-closed 未降级）")
-                }
+                    body = null,
+                    totalTimeoutMs = 30_000L,
+                )
 
                 // 5) 拆响应头。Set-Cookie 不能用 map 承载（同名多值会互相覆盖），
                 //    单独提出来写进 CookieManager。

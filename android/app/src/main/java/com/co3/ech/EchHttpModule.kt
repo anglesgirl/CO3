@@ -181,24 +181,45 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
                 )
                 val dohMs = System.currentTimeMillis() - t0
 
-                val target = route.addresses.first()
-                val result = EchHttpNative.request(
-                    url = url,
-                    method = method.ifBlank { "GET" },
-                    headers = headers,
-                    // POST 表单等；GET 时 JS 传空串 → null（引擎按无请求体处理）
-                    body = body.takeIf { it.isNotEmpty() }?.toByteArray(Charsets.UTF_8),
-                    echConfig = route.echConfig,
-                    connectIp = target,
-                    timeoutMs = timeoutMs.toLong().takeIf { it > 0 } ?: 30_000L,
-                    maxResponseBytes = 32L * 1024 * 1024,
-                ) ?: throw IllegalStateException("引擎返回空（请求未完成）")
+                // 逐个尝试候选地址：国内到不同 CF IP 段可达性差异极大，
+                // 只试第一个（旧写法）会时不时整条链路失败。总预算按候选数均分。
+                val bodyBytes = body.takeIf { it.isNotEmpty() }?.toByteArray(Charsets.UTF_8)
+                val totalMs = timeoutMs.toLong().takeIf { it > 0 } ?: 30_000L
+                val perTry = (totalMs / route.addresses.size.coerceAtLeast(1)).coerceAtLeast(3_000L)
+                var result: EchHttpNative.Response? = null
+                var target = ""
+                var lastErr: Exception? = null
+                for (ip in route.addresses) {
+                    target = ip
+                    try {
+                        val r = EchHttpNative.request(
+                            url = url,
+                            method = method.ifBlank { "GET" },
+                            headers = headers,
+                            // POST 表单等；GET 时 JS 传空串 → null（引擎按无请求体处理）
+                            body = bodyBytes,
+                            echConfig = route.echConfig,
+                            connectIp = ip,
+                            timeoutMs = perTry,
+                            maxResponseBytes = 32L * 1024 * 1024,
+                        )
+                        if (r != null && r.status != 0) {
+                            result = r
+                            break
+                        }
+                        lastErr = IllegalStateException("地址 $ip 未取得响应（ECH 被拒或超时）")
+                    } catch (e: Exception) {
+                        lastErr = e
+                    }
+                    Log.w(LOG_TAG, "候选地址 $ip 失败，尝试下一个")
+                }
 
-                if (result.status == 0) {
-                    // 引擎侧失败（如 ECH 配置被拒）。不降级、不重试，如实上报。
+                if (result == null) {
+                    // 所有候选都不行。不降级明文 —— fail-closed。
                     promise.reject(
                         "ECH_ENGINE_REQUEST_FAILED",
-                        "引擎未取得响应（ECH 握手失败或被拒绝；fail-closed 未降级明文）",
+                        lastErr?.message
+                            ?: "所有候选地址都失败（共 ${route.addresses.size} 个；fail-closed 未降级明文）",
                     )
                     return@execute
                 }
