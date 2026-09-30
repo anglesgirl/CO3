@@ -28,15 +28,17 @@ import java.io.IOException
 object CoWebViewHelper {
 
     /**
-     * 与 JS 侧 ao3Transport 保持一致。
+     * 真实安卓 Chrome 的 UA（用户从自己手机浏览器上取的），**不含 "wv" 标记**。
      *
      * 安卓 WebView 自带的 UA 形如 "Mozilla/5.0 (Linux; Android 14; ...; wv) ..."，
-     * 其中的 "wv" 标记会被 Cloudflare 判定为非浏览器请求 → 直接 403（真机实测：
-     * 同一域名下 JS 侧用桌面 UA 能通、WebView 这条被 403）。这个桌面 UA 是实测
-     * 能过 CF 的那一个，两边必须一致。
+     * 那个 "wv" 会被 Cloudflare 判定为非浏览器请求 → 直接 403（真机实测：同一域名
+     * 下 JS 侧能通、WebView 这条被 403，差别就在 UA）。
+     *
+     * 用移动版而不是桌面版：页面本身要按移动布局渲染，桌面 UA 会让 AO3 返回
+     * 桌面版页面，在手机上没法看。
      */
     private const val AO3_UA =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
+        "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
 
     fun intercept(request: WebResourceRequest): WebResourceResponse? {
         val host = request.url.host ?: return null
