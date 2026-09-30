@@ -41,6 +41,27 @@ object EchProxyCore {
     // 当前实例实际生效的配置。Go 侧只在 Start() 时读一次 doh/ipList（存进
     // activeDoH），此后无法更新 —— 所以配置变了必须重启，否则新配置永远不会
     // 生效。详见 ensureStarted 里的说明。
+    // 轻量事件环（诊断可见）。"谁重启了代理""cookie 到底写进去几条"这类问题，
+    // 光看 Go 侧日志和 JS console 都拼不出因果 —— 因为重启是 Kotlin 侧发起的。
+    private const val EVENT_KEEP = 60
+    private val events = ArrayDeque<String>()
+
+    /** 记一条事件（JVM monitor 可重入，在 synchronized(lock) 内调用也安全）。 */
+    fun note(msg: String) {
+        synchronized(lock) {
+            events.addLast("${System.currentTimeMillis()} $msg")
+            while (events.size > EVENT_KEEP) events.removeFirst()
+        }
+    }
+
+    /** 取走并清空事件环（诊断导出用）。 */
+    fun drainEvents(): String = synchronized(lock) {
+        if (events.isEmpty()) return ""
+        val out = events.joinToString("\n")
+        events.clear()
+        out
+    }
+
     @Volatile
     private var activeDoh = ""
 
@@ -65,6 +86,7 @@ object EchProxyCore {
                     TAG,
                     "ECH 配置变更，重启代理：doh=[$activeDoh] -> [$doh]；ip=[$activeIpList] -> [$ipList]",
                 )
+                note("配置变更 → 重启：doh=[${activeDoh.take(60)}] -> [${doh.take(60)}]；ip=[$activeIpList] -> [$ipList]")
                 runCatching { Echproxy.stop() }
                 runningPort = 0
             }
@@ -100,6 +122,7 @@ object EchProxyCore {
 
     fun stop() {
         synchronized(lock) {
+            note("stop() 被调用（JS restartProxy / 登出清理都会走这里）")
             runCatching { Echproxy.stop() }
             runningPort = 0
             activeDoh = ""
@@ -139,23 +162,40 @@ object EchProxyCore {
         val info = jarInfo()
         if (info.isBlank() || info.startsWith("jar: nil") || info == "jar: empty") return
         val cm = CookieManager.getInstance()
+        var parsed = 0
+        var written = 0
+        var fallback = 0
         for (line in info.split('\n')) {
             val m = COOKIE_LINE.find(line) ?: continue
+            parsed++
             val name = m.groupValues[1]
             val value = m.groupValues[2]
             val domain = m.groupValues[3]
             val path = m.groupValues[4]
             val secure = m.groupValues[5].equals("true", ignoreCase = true)
-            if (name.isBlank() || !domain.contains(TARGET)) continue
+            if (name.isBlank()) continue
+            // AO3 的 Set-Cookie 不带 Domain 属性 → Go jar 里 Domain 为空。
+            // 原先这里直接 !domain.contains(TARGET) 就 continue，结果**所有**
+            // cookie 都被跳过（2026-09-30 真机诊断里每行都是 domain=""），
+            // CookieManager 拿不到任何登录态，App 表现为"登录成功了但界面仍是
+            // 未登录"。domain 为空时按目标域名兜底。
+            val effectiveDomain = domain.ifBlank { TARGET }
+            if (domain.isBlank()) fallback++
+            if (!effectiveDomain.contains(TARGET)) continue
             val sb = StringBuilder()
             sb.append(name).append('=').append(value)
             if (domain.isNotEmpty()) sb.append("; Domain=").append(domain)
             if (path.isNotEmpty()) sb.append("; Path=").append(path)
             if (secure) sb.append("; Secure")
             try {
-                cm.setCookie("https://$domain/", sb.toString())
+                // 用兜底域名，否则 URL 会变成 "https://" 而 setCookie 直接失败
+                cm.setCookie("https://$effectiveDomain/", sb.toString())
+                written++
             } catch (_: Exception) {}
         }
         cm.flush()
+        if (parsed > 0) {
+            note("cookie 同步：解析 $parsed 行，写入 $written 条（domain 为空兜底 $fallback 条）")
+        }
     }
 }

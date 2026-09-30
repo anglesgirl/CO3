@@ -221,6 +221,11 @@ object Diagnostics {
             sb.append("\n----- Go proxy 内部日志 -----\n")
             sb.append(if (logs.isBlank()) "(空)" else logs).append('\n')
         }
+        runCatching {
+            val ev = com.co3.ech.EchProxyCore.drainEvents()
+            sb.append("\n----- ECH 代理重启/同步事件（Kotlin 侧） -----\n")
+            sb.append(if (ev.isBlank()) "(空)" else ev).append('\n')
+        }
         sb.append("LocalEchProxy: ").append(
             if (com.co3.ech.LocalEchProxy.isRunning)
                 "running on 127.0.0.1:${com.co3.ech.LocalEchProxy.port}"
