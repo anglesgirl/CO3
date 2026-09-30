@@ -27,6 +27,17 @@ import java.io.IOException
  */
 object CoWebViewHelper {
 
+    /**
+     * 与 JS 侧 ao3Transport 保持一致。
+     *
+     * 安卓 WebView 自带的 UA 形如 "Mozilla/5.0 (Linux; Android 14; ...; wv) ..."，
+     * 其中的 "wv" 标记会被 Cloudflare 判定为非浏览器请求 → 直接 403（真机实测：
+     * 同一域名下 JS 侧用桌面 UA 能通、WebView 这条被 403）。这个桌面 UA 是实测
+     * 能过 CF 的那一个，两边必须一致。
+     */
+    private const val AO3_UA =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
+
     fun intercept(request: WebResourceRequest): WebResourceResponse? {
         val host = request.url.host ?: return null
         val method = request.method ?: "GET"
@@ -58,13 +69,22 @@ object CoWebViewHelper {
                     ),
                 )
 
-                // 3) 组请求头：透传 WebView 的头；Cookie 用上面那份，Host 交给引擎。
+                // 2) 组请求头：透传 WebView 的头，但三处必须由我们接管：
+                //    - Host：交给引擎按 URL 生成；
+                //    - User-Agent：安卓 WebView 自带的 UA 里带 "wv" 标记，Cloudflare
+                //      会据此判定为非浏览器请求直接 403（真机实测：同域名下 JS 侧
+                //      用桌面 UA 能通、WebView 这条被 403）。JS 侧 ao3Transport 那个
+                //      UA 是验证过能过 CF 的，这里保持一致；
+                //    - Accept-Encoding：引擎自己做解压，两边协商会打架。
                 val hb = StringBuilder()
                 request.requestHeaders.forEach { (k, v) ->
                     if (k.equals("Cookie", true) || k.equals("Host", true)) return@forEach
+                    if (k.equals("User-Agent", true)) return@forEach
+                    if (k.equals("Accept-Encoding", true)) return@forEach
                     if (k.contains('\n') || k.contains('\r')) return@forEach
                     hb.append(k).append(": ").append(v).append("\r\n")
                 }
+                hb.append("User-Agent: ").append(AO3_UA).append("\r\n")
                 if (cookie.isNotEmpty()) hb.append("Cookie: ").append(cookie).append("\r\n")
 
                 // 3) 引擎请求：原始 https URL（不改写），ECH 在进程内完成。
@@ -78,6 +98,21 @@ object CoWebViewHelper {
                     body = null,
                     totalTimeoutMs = 30_000L,
                 )
+
+                // 4.5) 4xx 打不出原因就只能靠猜。把状态码和响应体前缀落进诊断 ——
+                //      CF 的拦截理由通常就写在 body 里，真机排查全靠它。
+                if (resp.status >= 400) {
+                    Diagnostics.trace(
+                        "webview.httpError",
+                        mapOf(
+                            "host" to host,
+                            "path" to url.removePrefix("https://$host"),
+                            "code" to resp.status.toString(),
+                            "echAccepted" to resp.echAccepted.toString(),
+                            "body" to String(resp.body, Charsets.UTF_8).take(300).replace("\n", " "),
+                        ),
+                    )
+                }
 
                 // 5) 拆响应头。Set-Cookie 不能用 map 承载（同名多值会互相覆盖），
                 //    单独提出来写进 CookieManager。
