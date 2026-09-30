@@ -50,11 +50,14 @@ object EchEngineClient {
         )
 
         // 用户手配的地址优先且独占；否则用 DoH 给出的全部候选。
-        val candidates = if (cfg.addressOverrides.isNotEmpty()) {
+        // 过滤 IPv6：真机日志两次复现 v6 ECH 握手稳定失败（国内 v6 出口到 CF
+        // 的 ECH 不通），白白吃掉 perTry 预算导致整条链路 30s 超时；v4 候选
+        // 足够（AO3 ECH hint 固定给 2 个 v4）。过滤后 perTry 翻倍，冷握手更从容。
+        val candidates = (if (cfg.addressOverrides.isNotEmpty()) {
             cfg.addressOverrides
         } else {
             route.addresses
-        }
+        }).filter { !it.contains(':') }
         if (candidates.isEmpty()) throw IOException("DoH 未返回任何地址")
 
         val perTry = (totalTimeoutMs / candidates.size).coerceAtLeast(3_000L)
