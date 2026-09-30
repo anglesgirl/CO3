@@ -242,17 +242,19 @@ async function echEngineFetch(req) {
   const doh = (await getDohCandidates()).join(',');
   const ips = (await getCustomIPs()) ?? '';
 
-  let hasUA = false;
+  // UA 必须**强制替换**成 AO3_UA —— 与原生侧 CoWebViewHelper 行为一致。
+  // RN fetch 栈默认带 okhttp UA，CF 把它当非浏览器流量挑战，真机日志里
+  // JS 路径 /works 持续 525、同批候选 WebView 全 200 —— 差异就在这里：
+  // 之前是"调用方没带才补"，RN/ky 带了 okhttp UA 就不替换，等于裸奔。
   const headerLines = [];
   req.headers.forEach((v, k) => {
     const name = String(k).toLowerCase();
     // cookie 由原生 CookieManager 注入，避免两处各带一份
     if (name === 'cookie') return;
-    if (name === 'user-agent') hasUA = true;
+    if (name === 'user-agent') return; // 丢弃，统一用 AO3_UA
     headerLines.push(`${k}: ${v}`);
   });
-  // AO3 对空 UA 直接 403（引擎自检曾经就是因此报 403）。调用方没带就补上。
-  if (!hasUA) headerLines.push(`User-Agent: ${AO3_UA}`);
+  headerLines.push(`User-Agent: ${AO3_UA}`);
 
   // 补齐"浏览器会带"的头 —— 这不是锦上添花，是能不能通的开关。
   // 实测（同一 IP、同一路径 /works，只换请求头）：
