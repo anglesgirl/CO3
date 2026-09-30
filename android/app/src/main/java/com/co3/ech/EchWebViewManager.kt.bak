@@ -50,16 +50,12 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
             }
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                 super.onPageStarted(view, url, favicon)
-                // 注入「登录表单劫持」：只接管登录表单的提交，不做任何 URL 改写。
-                // 页面内的 fetch/XHR 仍走 WebView 网络栈，由 shouldInterceptRequest
-                // 交给引擎。
-                if (url != null && isLocalPage(url)) injectLoginHijack(view)
+                // 不再注入 URL 改写脚本：引擎不监听端口，页面内的 fetch/XHR
+                // 直接走 WebView 网络栈，由 shouldInterceptRequest 交给引擎。
             }
             override fun onPageFinished(view: WebView, url: String?) {
                 super.onPageFinished(view, url)
                 if (url != null && isLocalPage(url)) {
-                    // 页面脚本可能重建了表单，再注入一次（脚本内有幂等判断）。
-                    injectLoginHijack(view)
                     // 登录成功检测：页面跳离登录页 且 CookieManager 里有 user_credentials（AO3 登录成功才下发）
                     // 这才是"WebView 登录成功 → App 取到登录信息"的正确路径
                     if (!url.contains("/users/login") && !url.contains("/login") &&
@@ -92,50 +88,6 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
      * （注册/激活/申请排队）提交后的小窗体翻译提示使用。
      * 只取前 700 字符（结果提示都在页面开头）；RN 侧按 URL 过滤场景。
      */
-    /**
-     * 注入「登录表单劫持」：把登录表单的提交接管给原生 postLogin()。
-     *
-     * 为什么必须这么做：Android 的 shouldInterceptRequest **拿不到 POST body**，
-     * 所以登录 POST 只能由原生侧代发；而只有原生侧代发才能走 ech_http 引擎完成
-     * ECH。若交给 WebView 自己提交，那就是明文出网，必被阻断 —— 真机表现就是
-     * 「登录按钮点下去没反应 / 一直转圈」。
-     *
-     * 这里**只劫持登录表单的提交**，不做任何 URL 改写。历史上有过一段注入会把
-     * 页面内的 fetch / XHR / location 全改写成 http://127.0.0.1:<port>，而引擎
-     * 不监听端口 —— 那等于把页面请求全部送去一个不存在的地址。
-     */
-    private fun injectLoginHijack(view: WebView) {
-        view.evaluateJavascript(
-            """
-            (function(){
-              if (window.__coLoginHijack) return;
-              window.__coLoginHijack = 1;
-              document.addEventListener('submit', function(e){
-                var f = e.target;
-                if (!f || !f.getAttribute) return;
-                var action = f.getAttribute('action') || f.action || '';
-                if (action.indexOf('/users/login') < 0) return;
-                e.preventDefault();
-                e.stopPropagation();
-                var parts = [];
-                var els = f.elements || [];
-                for (var i = 0; i < els.length; i++) {
-                  var el = els[i];
-                  if (!el || !el.name || el.disabled) continue;
-                  if ((el.type === 'checkbox' || el.type === 'radio') && !el.checked) continue;
-                  parts.push(encodeURIComponent(el.name) + '=' + encodeURIComponent(el.value === undefined || el.value === null ? '' : el.value));
-                }
-                var body = parts.join('&');
-                try {
-                  CoBridge.onLoginHijacked('submit len=' + body.length);
-                  CoBridge.postLogin(action, body);
-                } catch (err) {}
-              }, true);
-            })();
-            """.trimIndent(), null,
-        )
-    }
-
     private fun extractPageText(view: WebView, url: String?) {
         try {
             view.evaluateJavascript(
