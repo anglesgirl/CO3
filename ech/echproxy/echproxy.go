@@ -851,6 +851,11 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 			// 种子/优选是多余功能）。它同样是降级路径（掩盖真问题，
 			// 且 CF 风控对大众优选段 IP 的 403 几率更高）。
 			// 失败就如实返回，交给上层 fail-closed。
+			// 候选列表为空（DoH 拿不到地址 → 0 addr）时 firstErr 也是 nil，
+			// 直接 %w 会打出 "%!w(<nil>)" 这种没法看的东西。
+			if err == nil {
+				return nil, fmt.Errorf("dial %s failed: no address available（fail-closed：地址来源只有 DoH）", host)
+			}
 			return nil, fmt.Errorf("dial %s failed: %w", host, err)
 		}
 

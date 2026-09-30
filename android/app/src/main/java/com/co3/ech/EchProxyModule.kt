@@ -28,6 +28,8 @@ class EchProxyModule(private val ctx: ReactApplicationContext) : ReactContextBas
     fun start(port: Int, doh: String, ipList: String, promise: Promise) {
         ioQueue.execute {
             try {
+                // 落盘，供 App 下次冷启动直接复用（见 EchProxyCore.saveConfigPrefs 注释）
+                EchProxyCore.saveConfigPrefs(ctx, doh, ipList)
                 val p = EchProxyCore.ensureStarted(port, doh, ipList)
                 if (p > 0) promise.resolve(p) else promise.reject("ECH_START_FAILED", "proxy failed to start")
             } catch (e: Exception) {

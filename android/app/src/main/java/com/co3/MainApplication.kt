@@ -96,7 +96,17 @@ class MainApplication : Application(), ReactApplication {
     runCatching {
       com.co3.ech.EchProxyCore.appContext = this
       Thread {
-        runCatching { com.co3.ech.LocalEchProxy.start() }
+        runCatching {
+          // 带着上次 JS 落盘的配置启动，App 一开机代理即可用；没有落盘
+          // （首次安装、JS 还没跑过）就不启动 —— 空配置起来的代理解析不到
+          // 任何地址，只会让请求 502，还会因幂等短路挡住 JS 的正确配置。
+          val (savedDoh, savedIps) = com.co3.ech.EchProxyCore.loadSavedConfig(this)
+          if (savedDoh.isNotBlank()) {
+            com.co3.ech.LocalEchProxy.start(savedDoh, savedIps)
+          } else {
+            android.util.Log.i("CO-ECH", "no saved DoH yet; deferring proxy start to JS")
+          }
+        }
           .onFailure { android.util.Log.w("CO-ECH", "local ECH proxy start failed: " + it.message) }
       }.apply {
         isDaemon = true

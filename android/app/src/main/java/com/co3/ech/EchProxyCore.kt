@@ -120,6 +120,35 @@ object EchProxyCore {
         }
     }
 
+    // ==================== 配置持久化（消灭启动空窗） ====================
+    //
+    // 背景（2026-09-30 真机日志）：MainApplication 在 App 启动时调用
+    // LocalEchProxy.start()（无参数 → 空 DoH），建出一个解析不到任何地址的代理；
+    // 而 JS 侧要 55 秒后才带着真实 DoH 调 start()，此时幂等短路又会复用那个坏代理。
+    // 结果这 55 秒里 host ready (0 addr(s))，所有请求 502。
+    // 解法：JS 每次 start 都把配置落盘，App 下次冷启动直接读回来 —— 启动即用正确
+    // 配置；从未落盘（首次安装）就不启动，交给 JS 首次调用。
+    private const val PREFS_NAME = "co3_ech_proxy"
+    private const val KEY_DOH = "doh"
+    private const val KEY_IP_LIST = "ip_list"
+
+    fun saveConfigPrefs(context: android.content.Context, doh: String, ipList: String) {
+        runCatching {
+            context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_DOH, doh)
+                .putString(KEY_IP_LIST, ipList)
+                .apply()
+        }.onFailure { android.util.Log.w("CO-ECH", "saveConfigPrefs failed: ${it.message}") }
+    }
+
+    /** @return (doh, ipList)；从未保存过时两者都是空串。 */
+    fun loadSavedConfig(context: android.content.Context): Pair<String, String> =
+        runCatching {
+            val sp = context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+            (sp.getString(KEY_DOH, "") ?: "") to (sp.getString(KEY_IP_LIST, "") ?: "")
+        }.getOrElse { "" to "" }
+
     fun stop() {
         synchronized(lock) {
             note("stop() 被调用（JS restartProxy / 登出清理都会走这里）")
