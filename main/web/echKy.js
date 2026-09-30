@@ -18,9 +18,12 @@ const AO3_HOSTS = new Set(['archiveofourown.org', 'www.archiveofourown.org']);
 // which is why the default is a Cloudflare Gateway endpoint. User-overridable.
 // AO3 请求必须带 User-Agent：CF 会直接 403 掉空 UA 的请求（引擎自检曾经
 // 就是因此显示 403，而不是引擎有问题）。
+// 真机 Chrome 的移动版 UA（用户实测取值），不含 WebView 自带的 "wv" 标记。
+// **必须与原生侧 CoWebViewHelper.AO3_UA 一致** —— 同一域名的两条链路
+// （JS 引擎请求 / WebView 子请求），UA 不一致会让 CF 风控看到两个"客户端"。
 export const AO3_UA =
-  'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) ' +
-  'Chrome/120.0.0.0 Mobile Safari/537.36';
+  'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) ' +
+  'Chrome/152.0.0.0 Mobile Safari/537.36';
 
 export const DEFAULT_DOH = 'https://pieqllv9i7.cloudflare-gateway.com/dns-query';
 export const DEFAULT_DOH_FALLBACKS = [
@@ -373,23 +376,46 @@ function engineHeaders(raw) {
 }
 
 // 走引擎的一次请求，返回 fetch 兼容的响应对象（ky 只用到这几个字段）。
-async function echEngineFetch(url, options = {}) {
+//
+// 入参是 **Request 对象** —— ky 内部是 `fetch(request, nonRequestOptions)`
+// （见 ky 源码 core/Ky.ts），所以必须从它身上取 url/method/headers/body。
+// 早期实现用 `String(input)` 兜底，得到的是 "[object Request]"：域名判定随之
+// 失效、请求被误判成"非保护域"原样交给原生 fetch → 明文出网（真机表现就是
+// 快速自检 4ms「Network request failed」）。
+async function echEngineFetch(req) {
   const mod = NativeModules.EchHttp;
   if (!mod || typeof mod.request !== 'function') {
     throw new Error('ECH engine unavailable; refusing direct HTTPS request');
   }
   const doh = (await getDohCandidates()).join(',');
   const ips = (await getCustomIPs()) ?? '';
-  const headers = Object.entries(options.headers || {})
+
+  let hasUA = false;
+  const headerLines = [];
+  req.headers.forEach((v, k) => {
+    const name = String(k).toLowerCase();
     // cookie 由原生 CookieManager 注入，避免两处各带一份
-    .filter(([k]) => String(k).toLowerCase() !== 'cookie')
-    .map(([k, v]) => `${k}: ${v}`)
-    .join('\r\n');
-  const body = typeof options.body === 'string' ? options.body : '';
+    if (name === 'cookie') return;
+    if (name === 'user-agent') hasUA = true;
+    headerLines.push(`${k}: ${v}`);
+  });
+  // AO3 对空 UA 直接 403（引擎自检曾经就是因此报 403）。调用方没带就补上。
+  if (!hasUA) headerLines.push(`User-Agent: ${AO3_UA}`);
+
+  let body = '';
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    // Request 的 body 是流，只能读一次；clone 后再读，避免影响原对象。
+    try {
+      body = await req.clone().text();
+    } catch (_) {
+      body = '';
+    }
+  }
+
   const res = await mod.request(
-    url,
-    String(options.method || 'GET').toUpperCase(),
-    headers,
+    req.url,
+    req.method,
+    headerLines.join('\r\n'),
     body,
     doh,
     ips,
@@ -401,7 +427,7 @@ async function echEngineFetch(url, options = {}) {
     ok: res.status >= 200 && res.status < 300,
     status: res.status,
     statusText: '',
-    url,
+    url: req.url,
     headers: engineHeaders(res.headers),
     text: async () => text,
     json: async () => JSON.parse(text),
@@ -420,12 +446,23 @@ function engineAvailable() {
 // echFetch sends a request for ANY HTTPS host; ECH applies when the target
 // qualifies. Android → ech_http 引擎；iOS → 本地 Go 代理（原样保留）。
 // 引擎/代理都不可用时对 https 直接抛错（fail-closed）。
-export async function echFetch(url, options = {}) {
+export async function echFetch(input, init = {}) {
+  // ky 传进来的是 Request 对象（ky 源码：`fetch(request, nonRequestOptions)`），
+  // 这里统一规范化，之后一律用 req.url 取域名。**不能 String(input)** ——
+  // 那会得到 "[object Request]"，域名判定失效后请求会被当"非保护域"直连明文。
+  let req;
+  try {
+    req = input instanceof Request ? input : new Request(input, init);
+  } catch (e) {
+    throw new Error(`ECH: 无法规范化请求（${String((e && e.message) || e)}）`);
+  }
+  const url = req.url;
+
   // 非保护域（站外图片、统计上报等）不接管：fail-closed 只针对受保护域，
   // 否则引擎一有问题连无关请求都会一起失败。
-  if (!isEchProtectedUrl(url)) return fetch(url, options);
+  if (!isEchProtectedUrl(url)) return fetch(input, init);
 
-  if (engineAvailable()) return echEngineFetch(url, options);
+  if (engineAvailable()) return echEngineFetch(req);
 
   const base = await getEchBase();
   const u = new URL(url);
@@ -433,8 +470,10 @@ export async function echFetch(url, options = {}) {
     throw new Error('ECH proxy unavailable; refusing direct HTTPS request');
   }
   return fetch(base + u.pathname + u.search, {
-    ...options,
-    headers: { ...(options.headers || {}), 'X-Ech-Target': u.hostname },
+    method: req.method,
+    headers: req.headers,
+    body: init.body ?? undefined,
+    'X-Ech-Target': u.hostname,
   });
 }
 
@@ -595,7 +634,9 @@ const echKy = ky.create({
   // 请求转发全部交给 echFetch：Android 走 ech_http 引擎（原始 https URL +
   // 进程内 ECH），iOS 走本地 Go 代理。原来那个把 URL 改写成 127.0.0.1 的
   // beforeRequest hook 已删除 —— 引擎不监听端口，改写反而会绕过 ECH。
-  fetch: (input, init) => echFetch(typeof input === 'string' ? input : String(input), init || {}),
+  // 不要 String(input)：ky 传的是 Request 对象，String() 会得到
+  // "[object Request]" 从而绕过域名判定。echFetch 内部自行规范化。
+  fetch: (input, init) => echFetch(input, init || {}),
   // Generous timeout: the first request may have to bootstrap the ECH handshake.
   timeout: 30000,
   // AO3 的 session cookie 由 Go 代理的 cookiejar 统一管理。RN fetch 层
