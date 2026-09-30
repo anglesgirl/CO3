@@ -104,9 +104,12 @@ object Diagnostics {
     }
 
     fun event(name: String, fields: Map<String, Any?> = emptyMap()) {
-        // 远程诊断开关：默认关（关于页连点 7 次版本号开启），避免大量无关日志上传
-        if (!isEnabled()) return
         val safe = fields.mapNotNull { (k, v) -> if (v == null) null else k to v.toString().take(512) }.toMap()
+        // 同步也写一份本地 trace。**这一步不能省**：远程上报默认是关的，
+        // 只发远程的话，关掉开关时 webview.* / login_* 这类关键事件在诊断导出里
+        // 完全看不到 —— "文章打不开""登录没反应"就只剩猜（踩过）。
+        trace(name, safe)
+        if (!isEnabled()) return
         scope.launch { runCatching { upload(name, safe) } }
     }
 

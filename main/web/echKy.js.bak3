@@ -255,39 +255,16 @@ async function echEngineFetch(req) {
     }
   }
 
-  // 5xx 重试。525 是 Cloudflare 报的"连不上 AO3 源站"，间歇性极强 ——
-  // 真机日志里同一分钟既有 200 也有 525。这条路径此前一次失败就直接抛，
-  // 而 WebView 那条是有重试的，所以表现为"页面能开、接口全挂"。
-  const RETRYABLE = new Set([500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526]);
-  let res = null;
-  let lastErr = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const r = await mod.request(
-        req.url,
-        req.method,
-        headerLines.join('\r\n'),
-        body,
-        doh,
-        ips,
-        '',      // configHost：AO3 自己发 ECH 记录，不借用
-        30000,
-      );
-      if (r && RETRYABLE.has(r.status)) {
-        lastErr = new Error(
-          `Request failed with status code ${r.status}: ${req.method} ${req.url}`,
-        );
-        await new Promise((done) => setTimeout(done, 700 * (attempt + 1)));
-        continue;
-      }
-      res = r;
-      break;
-    } catch (e) {
-      lastErr = e;
-      await new Promise((done) => setTimeout(done, 700 * (attempt + 1)));
-    }
-  }
-  if (!res) throw lastErr ?? new Error('ECH engine request failed');
+  const res = await mod.request(
+    req.url,
+    req.method,
+    headerLines.join('\r\n'),
+    body,
+    doh,
+    ips,
+    '',      // configHost：AO3 自己发 ECH 记录，不借用
+    30000,
+  );
   const text = res.body ?? '';
   return {
     ok: res.status >= 200 && res.status < 300,

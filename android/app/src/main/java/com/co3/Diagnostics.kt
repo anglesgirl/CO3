@@ -142,10 +142,18 @@ object Diagnostics {
      *
      * 例：net.doh.begin / net.doh.ok / ech.config.miss / tls.ech.inject.fail
      */
+    /** 版本号只查一次（每次 trace 都问 PackageManager 太浪费）。 */
+    private val versionTag: String by lazy { appVersion() }
+
     fun trace(step: String, fields: Map<String, Any?> = emptyMap()) {
-        if (!isEnabled()) return
+        // 注意：这里**不能**用 isEnabled() 提前返回。
+        // 关闭"远程上报"是「不上传」，不是「不记录」—— 用户复现问题后必须还能
+        // 导出本地日志。此前写成 if (!isEnabled()) return，导致关掉开关时本地
+        // 一条 trace 都没有，排查时只能干看着（踩过）。
         val line = buildString {
             append(Instant.now().toString()); append(' '); append(step)
+            // 带上 App 版本：否则从上报数据里分辨不出用户装的是哪个包。
+            append(" ver="); append(versionTag)
             if (fields.isNotEmpty()) {
                 append(' ')
                 append(
