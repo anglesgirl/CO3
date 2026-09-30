@@ -235,8 +235,10 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
                 // ② Set-Cookie 写回 CookieManager —— 否则 JS 路径拿到的会话
                 //    cookie 只活在这次响应里，下个请求又是匿名的。
                 runCatching {
+                    // result 为 null 时（所有候选地址都失败）没有响应头可写，直接跳过。
+                    val r = result ?: return@runCatching
                     val cm = android.webkit.CookieManager.getInstance()
-                    result.headers.split("\r\n", "\n").forEach { line ->
+                    r.headers.split("\r\n", "\n").forEach { line ->
                         val idx = line.indexOf(':')
                         if (idx <= 0) return@forEach
                         if (!line.substring(0, idx).trim().equals("Set-Cookie", true)) return@forEach
