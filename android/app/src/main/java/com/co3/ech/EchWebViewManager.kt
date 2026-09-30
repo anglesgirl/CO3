@@ -55,6 +55,44 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                 // 劫持后的登录成功跳转由 Bridge 负责 loadUrl，这里不拦截
                 return false
             }
+            // 页面加载失败以前完全不留痕 —— 全仓没有 onReceivedError /
+            // onReceivedHttpError，出错时只有屏幕上闪一下的提示，事后无从排查。
+            // 只记主框架：子资源（图片/字体）失败量大且通常无害。
+            override fun onReceivedError(
+                view: WebView,
+                request: WebResourceRequest,
+                error: android.webkit.WebResourceError,
+            ) {
+                super.onReceivedError(view, request, error)
+                if (!request.isForMainFrame) return
+                com.co3.Diagnostics.trace(
+                    "webview.error",
+                    mapOf(
+                        "url" to request.url.toString(),
+                        "code" to error.errorCode,
+                        "desc" to (error.description?.toString() ?: ""),
+                    ),
+                )
+            }
+
+            // 主框架收到 >=400 的响应 —— 典型就是 CF 的挑战页 / 5xx 错误页
+            // （屏幕上显示「425」「失败」之类时，真实原因在这里）。
+            override fun onReceivedHttpError(
+                view: WebView,
+                request: WebResourceRequest,
+                errorResponse: WebResourceResponse,
+            ) {
+                super.onReceivedHttpError(view, request, errorResponse)
+                if (!request.isForMainFrame) return
+                com.co3.Diagnostics.trace(
+                    "webview.httpError",
+                    mapOf(
+                        "url" to request.url.toString(),
+                        "status" to errorResponse.statusCode,
+                    ),
+                )
+            }
+
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                 super.onPageStarted(view, url, favicon)
                 // ★ 尽早注入：运行时 JS 请求改写必须在页面脚本运行前装好。
