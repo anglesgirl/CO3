@@ -358,6 +358,15 @@ async function echEngineFetch(req) {
       break;
     }
     if (attemptRes.status >= 300 && attemptRes.status < 400) {
+      // 只对 GET/HEAD 跟随。POST 等带 body 的请求跟随会改方法/重发 body，
+      // AO3 登录（POST /users/login → 302 跳出登录页）**就是靠业务层读
+      // 302 + Location 判定成功**（login.js 注释明确：引擎不跟随、302 原样
+      // 返回由业务层判断）。跟随会把成功的 302 吞成 200，登录永远判失败。
+      const isGetLike = req.method === 'GET' || req.method === 'HEAD';
+      if (!isGetLike) {
+        res = attemptRes;
+        break;
+      }
       const loc = engineHeaders(attemptRes.headers).get('location');
       if (!loc) {
         // 无 Location 的 3xx：返回原样（真实状态码由调用方读取）。
