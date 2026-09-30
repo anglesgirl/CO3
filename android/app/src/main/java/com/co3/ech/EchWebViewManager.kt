@@ -158,7 +158,7 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                         // HAR 成功样本：Referer 必带 ?return_to=%2F，Origin 必带
                         "Referer: https://archiveofourown.org/users/login?return_to=%2F",
                         "Origin: https://archiveofourown.org",
-                        "User-Agent: $AO3_UA",
+                        "User-Agent: ${CoWebViewHelper.AO3_UA}",
                         "Content-Type: application/x-www-form-urlencoded",
                         "Upgrade-Insecure-Requests: 1",
                         "Sec-Fetch-Dest: document",

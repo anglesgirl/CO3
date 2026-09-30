@@ -37,7 +37,7 @@ object CoWebViewHelper {
      * 用移动版而不是桌面版：页面本身要按移动布局渲染，桌面 UA 会让 AO3 返回
      * 桌面版页面，在手机上没法看。
      */
-    private const val AO3_UA =
+    internal const val AO3_UA =
         "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36"
 
     fun intercept(request: WebResourceRequest): WebResourceResponse? {
