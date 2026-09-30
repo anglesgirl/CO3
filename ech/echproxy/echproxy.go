@@ -446,44 +446,12 @@ func Start(listen, target, echB64, doh, ipList, cpArg string, insecure bool) err
 		setDNSInfo("per-host DoH; ECH only for AS13335-qualified hosts")
 	}
 
-	// 2026-08-15 CF IP 三阶段优选（用户方案）：
-	// 有缓存(12h)立即返回；无缓存 → 采样50不同网段 + TCP延迟排序2s
-	// top10 → speed.cloudflare.com 下载测速8s top3 → 写缓存。
-	// 同步执行：启动即绑定最快 IP（"不再乱跳"），总耗时 ≤10s。
-	// ⚠️ 2026-08-15 实测修正：优选 IP 只能作兜底，不能前置！04:06 日志
-	// 优选 IP 前置后 403 复现，而 00:52/01:26 用远程配置官方 IP 一直
-	// 200 —— CF 风控信誉机制盯上大众优选段 IP（自选 IP 被标记的几率
-	// 远高于官方解析 IP）。候选顺序：官方解析 IP 优先，优选 IP 殿后。
-	fastStart := time.Now()
-	mu.Lock()
-	officialIPs := append([]string(nil), customIPs...)
-	mu.Unlock()
-	fastIPs := optimizeFastIPs(cpArg, officialIPs)
-	if len(fastIPs) > 0 {
-		mu.Lock()
-		seen := make(map[string]bool, len(customIPs)+len(fastIPs))
-		fresh := make([]string, 0, len(customIPs)+len(fastIPs))
-		// 1) 官方解析 IP（远程配置）优先 —— 信誉高，403 概率低
-		for _, ip := range customIPs {
-			if !seen[ip] {
-				seen[ip] = true
-				fresh = append(fresh, ip)
-			}
-		}
-		// 2) 优选 IP 殿后 —— 官方 IP 失败（被墙/超时）时兜底
-		for _, ip := range fastIPs {
-			if !seen[ip] && isCloudflareAS13335(ip) {
-				seen[ip] = true
-				fresh = append(fresh, ip)
-			}
-		}
-		customIPs = fresh
-		mu.Unlock()
-		setDNSInfo("preferred IP scan: %d fallback edge IPs appended: %v (took %v)", len(fastIPs), fastIPs, time.Since(fastStart))
-		noteLog("preferred IP scan done in %v: %v", time.Since(fastStart), fastIPs)
-	} else {
-		noteLog("preferred IP scan: none (took %v)", time.Since(fastStart))
-	}
+	// 2026-09-30 移除「CF IP 三阶段优选」（用户定调：种子/优选是多余功能）。
+	// 它是降级路径，会把真问题掩盖成「还能用」—— 真机日志里 DoH 全程报
+	// "no DoH endpoint configured"，却因为优选出来的种子 IP 照常出网，
+	// 白查了两轮才定位到根因。地址的唯一权威来源是 DoH；
+	// 拿不到就 fail-closed。保留下来的 customIPs 只承载
+	// 用户在设置页手配的 IP（Start 的 ipList 参数）。
 
 	// Remember the settings so every requested host can be resolved the same way.
 	hostsMu.Lock()
@@ -769,24 +737,13 @@ func transportFor(host string) (*http.Transport, error) {
 		hc.as13335 = allCloudflareAS13335(ips)
 		setDNSInfo("%s: %d DoH address(es), AS13335=%v", host, len(ips), hc.as13335)
 	} else {
-		noteLog("DoH resolve for %s failed: %v", host, err)
-		// DoH 失败时用种子 TXT 下发的优选 IP 兜底直连（不抛错断网）。
-		// 与 Han1meViewer 已验证方案一致：宁可走种子 IP 直连 + ECH，
-		// 也不要因为 DoH 被墙/抖动就完全断网。
-		mu.Lock()
-		fallbackIPs := append([]string(nil), customIPs...)
-		mu.Unlock()
-		if len(fallbackIPs) > 0 {
-			hc.ips = fallbackIPs
-			// 种子 IP 一般是 Cloudflare 边缘，按 AS13335 处理以启用 ECH。
-			hc.as13335 = allCloudflareAS13335(fallbackIPs)
-			setDNSInfo("%s: DoH failed, using %d seed IP(s) fallback, AS13335=%v",
-				host, len(fallbackIPs), hc.as13335)
-		} else {
-			hc.ips = nil
-			hc.as13335 = false
-			setDNSInfo("%s: DoH failed and no seed IP fallback", host)
-		}
+		// 2026-09-30 移除种子 IP 兜底（用户定调）：不再拿 customIPs 顶着用。
+		// 降级只会掩盖 DoH 失效这类真问题，而且 CF 风控对大众
+		// 优选段 IP 的 403 几率明显更高。拿不到地址就 fail-closed。
+		noteLog("DoH resolve for %s failed: %v（fail-closed：无种子兜底）", host, err)
+		hc.ips = nil
+		hc.as13335 = false
+		setDNSInfo("%s: DoH failed → fail-closed（无种子兜底）", host)
 	}
 	// ECH 配置获取顺序(AS13335 主机):
 	//   1. 本地缓存(5h TTL)—— 之前从 cloudflare-ech.com / 目标 ech= / retry 学到的
@@ -890,42 +847,10 @@ func hostDialContext(host string, hc *hostConf, insecure bool) func(ctx context.
 			}
 		}
 		if raw == nil {
-			// 2026-08-15 失败重扫（用户方案："如果出现连接失败，重复这个模块"）：
-			// 所有候选 dial 失败 = 优选 IP 失效（网络切换/IP 被墙）→
-			// 清缓存 + 后台重跑三阶段优选，新 IP 前置到 customIPs。
-			go func() {
-				cachePathMu.RLock()
-				cp := cachePath
-				cachePathMu.RUnlock()
-				mu.Lock()
-				officialIPs := append([]string(nil), customIPs...)
-				mu.Unlock()
-				clearIPCache(cp)
-				ips := optimizeFastIPs(cp, officialIPs)
-				if len(ips) > 0 {
-					mu.Lock()
-					seen := make(map[string]bool, len(customIPs)+len(ips))
-					var fresh []string
-					// 官方解析 IP（远程配置）优先，优选 IP 殿后兜底
-					for _, ip := range customIPs {
-						if !seen[ip] {
-							seen[ip] = true
-							fresh = append(fresh, ip)
-						}
-					}
-					for _, ip := range ips {
-						if !seen[ip] && isCloudflareAS13335(ip) {
-							seen[ip] = true
-							fresh = append(fresh, ip)
-						}
-					}
-					customIPs = fresh
-					mu.Unlock()
-					noteLog("re-scan after dial failure: %v", ips)
-				} else {
-					noteLog("re-scan after dial failure: no reachable IP")
-				}
-			}()
+			// 2026-09-30 移除「dial 失败后重扫优选 IP」（用户定调：
+			// 种子/优选是多余功能）。它同样是降级路径（掩盖真问题，
+			// 且 CF 风控对大众优选段 IP 的 403 几率更高）。
+			// 失败就如实返回，交给上层 fail-closed。
 			return nil, fmt.Errorf("dial %s failed: %w", host, err)
 		}
 
