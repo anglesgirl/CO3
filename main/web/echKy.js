@@ -270,6 +270,7 @@ export function initEch() {
     dohDefault: DEFAULT_DOH,
   });
   startNativeLogDrain();
+  pushDohConfigToNative();
   // 只在没有进行中的启动时才触发，避免 App 启动瞬间多处 import 同时
   // 调用造成并发 start()（原生侧会抛 "echproxy already running"，
   // JS 侧则丢掉端口 → 之后 30s 冷却里全部请求 fail-closed。
@@ -294,6 +295,25 @@ export function initEch() {
     } catch {}
   };
   warm();
+}
+
+// 引擎路线（ech_http）专用：把 DoH 端点/优选 IP 交给原生一份。
+//
+// 为什么需要：ech_http 引擎自己不查 DoH —— 它只接受 echConfig + connectIp 两个
+// 参数，都要调用方准备好；而 DoH 端点的权威在 JS（AsyncStorage），原生读不到。
+// WebView 的拦截路径（CoWebViewHelper）因此需要这份落盘配置，否则整条引擎链路
+// 只能 fail-closed。失败不抛：只影响引擎路径，旧链路照旧。
+async function pushDohConfigToNative() {
+  try {
+    const mod = NativeModules.EchHttp;
+    if (!mod || typeof mod.setDohConfig !== 'function') return;
+    const doh = (await getDohCandidates()).join(',');
+    const ips = await getCustomIPs();
+    // configHost 留空：AO3 自己就发 ECH 记录，不需要借用别的域名。
+    await mod.setDohConfig(doh, '', ips ?? '');
+  } catch (e) {
+    console.warn('[ECH] push doh config to native failed:', e?.message ?? e);
+  }
 }
 
 // Validates a remote value before we trust it — a broken TXT record should not
@@ -451,12 +471,14 @@ export async function clearSessionCookies() {
 // `manual` marks it as a user edit, which stops remote config from overriding it.
 export async function setDoh(doh, manual = true) {
   await AsyncStorage.setItem(DOH_KEY, doh ?? '');
+  await pushDohConfigToNative(); // 引擎路线：原生那份也要跟着更新
   return restartProxy();
 }
 
 // Set preferred edge IPs (comma-separated) and restart. Pass '' to use DNS.
 export async function setCustomIPs(ips, manual = true) {
   await AsyncStorage.setItem(IP_KEY, ips ?? '');
+  await pushDohConfigToNative(); // 引擎路线：原生那份也要跟着更新
   return restartProxy();
 }
 

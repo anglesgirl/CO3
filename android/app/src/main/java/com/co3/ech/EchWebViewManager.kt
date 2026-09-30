@@ -330,20 +330,15 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
 
     @ReactProp(name = "sourceUrl")
     fun setSourceUrl(view: WebView, url: String?) {
-        // 入口改写：AO3 的 https URL → http://127.0.0.1:<port>/<原路径>，
-        // WebView 全程只访问本地转发服务（ECH 由服务侧 Conscrypt 完成），
-        // 登录 POST 是浏览器原生提交（body 完整），不再依赖 JS 劫持拼参数。
+        // 引擎路线：原始 https URL 直接交给 WebView，子请求由
+        // CoWebViewHelper.intercept 逐个交给 ech_http 引擎。
         if (!url.isNullOrEmpty()) {
-            // 竞态保护：MainApplication 后台线程启动服务可能晚于用户首次打开浏览器，
-            // 这里幂等确保服务已就绪；起不来则 fail-closed（绝不回退明文直连 AO3）。
-            if (!LocalEchProxy.start()) {
-                android.util.Log.e("CO-ECH", "local ECH proxy unavailable, refusing to load $url")
-                view.loadUrl("about:blank")
-                return
-            }
-            val rewritten = LocalEchProxy.rewriteWebUrl(url)
-            android.util.Log.i("CO-ECH", "load $url -> $rewritten")
-            view.loadUrl(rewritten)
+            // ech_http 引擎不监听端口，所以这里**不再做 URL 改写**：直接把原始
+            // https URL 交给 WebView，子请求由 CoWebViewHelper.intercept 逐个交给
+            // 引擎（ECH 在同一进程内完成）。若仍改写，拦截路径收到的会是 127.0.0.1
+            // 而被当成本地转发直接放行 —— 等于绕过引擎、退回明文风险。
+            android.util.Log.i("CO-ECH", "load $url (via ech_http engine)")
+            view.loadUrl(url)
         }
     }
 }

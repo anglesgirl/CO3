@@ -30,6 +30,28 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
 
     override fun getName() = "EchHttp"
 
+    init {
+        // WebView 拦截路径（CoWebViewHelper）拿不到 Context，但需要读 DoH 配置，
+        // 所以在这里把 applicationContext 交给 EchDohConfig（用 app context，不泄漏 Activity）。
+        EchDohConfig.appContext = ctx.applicationContext
+    }
+
+    /**
+     * 落盘 DoH 配置，供 WebView 拦截路径（CoWebViewHelper）使用。
+     *
+     * 引擎自己不查 DoH，只接受 echConfig + connectIp；而端点权威在 JS（AsyncStorage）。
+     * JS 在 initEch 时调用本方法存一份，改 DoH 的设置页也应重调。
+     */
+    @ReactMethod
+    fun setDohConfig(doh: String, configHost: String, ipList: String, promise: Promise) {
+        try {
+            EchDohConfig.save(ctx, doh, configHost, ipList)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ECH_DOH_CONFIG_SAVE_FAILED", e.message ?: "unknown", e)
+        }
+    }
+
     private val io: ExecutorService = Executors.newSingleThreadExecutor()
 
     private val LOG_TAG = "CO3-ECHHTTP"

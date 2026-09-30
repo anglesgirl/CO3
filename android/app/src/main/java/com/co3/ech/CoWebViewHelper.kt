@@ -4,170 +4,185 @@ import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import com.co3.Diagnostics
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import java.io.ByteArrayInputStream
+import java.io.IOException
 
 /**
- * WebView 子请求的唯一入口（shouldInterceptRequest）：
- * WebView 里发起的图片/脚本/页面请求无法被 RN 层拦截，必须在这里接管。
+ * WebView 子请求的唯一入口（shouldInterceptRequest）。
  *
- * 改造要点（安卓回迁 Go 后）：
- *   - AO3 子请求重写为 http://127.0.0.1:<port>（本地 Go ECH 代理，明文仅本机
- *     回环），传输/ECH/重定向/Cookie 全部由 Go 代理统一处理
- *   - Go 已把 Set-Cookie 改写成 WebView 可收形式（127 域），这里只做翻译
- *     （OkHttp Response -> WebResourceResponse）
- *   - 任何失败一律 fail-closed（返回 502 页面），绝不放行明文 SNI
+ * 引擎版（ech_http 接管，2026-09-30）：C++ 引擎**不监听端口**，所以这里不再把
+ * URL 改写成 http://127.0.0.1:<port>，而是**原地**调用引擎：
+ *
+ *   1. DoH 取 ECH 配置 + 地址（引擎自己不查 DoH，只接受 echConfig / connectIp）
+ *   2. Cookie 全交 CookieManager（C++ 侧零 cookie 代码）：
+ *      请求从这里读 Cookie，响应里的 Set-Cookie 写回这里
+ *   3. EchHttpNative.request() 在同一进程内完成 TLS + ECH
+ *   4. 包装成 WebResourceResponse 交回 WebView
+ *
+ * 这样一整类问题随之消失：没有端口、没有「代理没起来」、没有「配置没生效」；
+ * 而且 cookie 落在 CookieManager（本身持久），登录态天然跨进程存活。
+ *
+ * 失败语义：受保护域一律 fail-closed（502），绝不放行明文 SNI；
+ * 非保护域如实交回 WebView，避免把无关故障归因给 ECH。
  */
 object CoWebViewHelper {
-
-    /** 本地代理专用客户端（无 Conscrypt —— ECH 在 Go 侧）。 */
-    private val localClient by lazy { OkHttpClient.Builder().build() }
 
     fun intercept(request: WebResourceRequest): WebResourceResponse? {
         val host = request.url.host ?: return null
         val method = request.method ?: "GET"
         val url = request.url.toString()
 
-        // ★ 本地转发服务直连放行：WebView 页面/资源/表单全走 http://127.0.0.1:<port>
-        // （LocalEchProxy），由本地 Go ECH 代理还原 Host/SNI/Origin 后转发 ——
-        // WebView 原生栈直接访问本地回环即可，无需（也不该）在此再拦一层。
+        // 本地回环仍然直接放行：没有任何东西需要经过引擎。
         if (host == "127.0.0.1" || host == "localhost") return null
 
-        // 登录 POST 完全放行：交给 JS 劫持（postLogin）走原生 ECH POST + 渲染结果
+        // 登录 POST 交给 JS 桥：WebView 的 POST body 在 shouldInterceptRequest 里取不到。
         if (method == "POST" && url.contains("/users/login")) {
             Diagnostics.event("webview_login_post_passthrough", mapOf("url" to url.take(80)))
             return null
         }
-        // 所有 GET 统一走本地 Go ECH 代理（回迁 Go 后不再直连 Conscrypt）。
-        // WebView 的 POST body 取不到，因此 POST 只通过上面的登录 JS 桥处理。
+        // 其余非 GET：同样取不到 body，交回 WebView。
         if (method != "GET") return null
-
-        // 惰性确保：Go 代理未就绪时主动启动一次（幂等）。仍失败则 fail-closed
-        // 返回 502 —— 绝不放行 WebView 明文直连 AO3（SNI 泄露被 RST）。
-        if (EchProxyCore.port == 0) {
-            if (!LocalEchProxy.start()) {
-                Diagnostics.event("webview_ech_not_ready", mapOf("host" to host))
-                return WebResourceResponse(
-                    "text/plain",
-                    "utf-8",
-                    502,
-                    "ECH proxy not ready",
-                    mapOf("Cache-Control" to "no-store"),
-                    ByteArrayInputStream("ECH proxy not ready".toByteArray()),
-                )
-            }
-        }
 
         var lastError: String = "unknown"
         repeat(2) { attempt ->
             try {
-                var hasSession = false
-                try {
-                    val cmCookie = CookieManager.getInstance().getCookie(url)
-                    hasSession = cmCookie?.contains("_otwarchive_session") == true
-                    Diagnostics.event(
-                        "webview_cookie_send",
-                        mapOf("host" to host, "hasSession" to hasSession.toString(), "len" to (cmCookie?.length ?: 0).toString()),
-                    )
-                } catch (e: Exception) {
-                    Diagnostics.event("webview_cookie_err", mapOf("host" to host, "err" to (e.message ?: "")))
-                }
+                // 1) DoH → ECH 配置与地址。引擎不查 DoH，这两样必须我们来准备。
+                val cfg = EchDohConfig.load()
+                if (cfg.isEmpty) throw IOException("尚无 DoH 配置（JS initEch 未落盘）")
+                val route = EchDohResolver.resolve(
+                    host = host,
+                    dohEndpoints = cfg.dohEndpoints,
+                    addressOverrides = cfg.addressOverrides,
+                    configHost = cfg.configHost,
+                )
+                val connectIp = route.addresses.firstOrNull()
+                    ?: throw IOException("DoH 未返回任何地址")
 
-                // ★ 重写为本地 Go 代理地址（明文仅本机回环，Go 还原 Host/SNI/Origin
-                //   后经 ECH 转发 AO3）。Referer/Origin 保持原值（Go 只重写 127 来源）。
-                val port = EchProxyCore.port
-                val localUrl = url
-                    .replaceFirst("https://www.archiveofourown.org", "http://127.0.0.1:$port")
-                    .replaceFirst("https://archiveofourown.org", "http://127.0.0.1:$port")
-                val builder = Request.Builder().url(localUrl).get()
+                // 2) Cookie：引擎完全不碰 cookie，统一由 CookieManager 管。
+                val cookie = runCatching { CookieManager.getInstance().getCookie(url) }
+                    .getOrNull().orEmpty()
+                Diagnostics.event(
+                    "webview_cookie_send",
+                    mapOf(
+                        "host" to host,
+                        "hasSession" to cookie.contains("_otwarchive_session").toString(),
+                        "len" to cookie.length.toString(),
+                    ),
+                )
+
+                // 3) 组请求头：透传 WebView 的头；Cookie 用上面那份，Host 交给引擎。
+                val hb = StringBuilder()
                 request.requestHeaders.forEach { (k, v) ->
-                    // Cookie 交给 Go jar 统一注入；Host/Content-Length 由 OkHttp 自己管
-                    if (k.equals("Host", true) || k.equals("Content-Length", true)) return@forEach
-                    if (k.equals("Cookie", true)) return@forEach
-                    try {
-                        builder.header(k, v)
-                    } catch (_: Exception) {
+                    if (k.equals("Cookie", true) || k.equals("Host", true)) return@forEach
+                    if (k.contains('\n') || k.contains('\r')) return@forEach
+                    hb.append(k).append(": ").append(v).append("\r\n")
+                }
+                if (cookie.isNotEmpty()) hb.append("Cookie: ").append(cookie).append("\r\n")
+
+                // 4) 引擎请求：原始 https URL（不改写），ECH 在进程内完成。
+                val resp = EchHttpNative.request(
+                    url = url,
+                    method = "GET",
+                    headers = hb.toString(),
+                    echConfig = route.echConfig,
+                    connectIp = connectIp,
+                    timeoutMs = 30_000L,
+                ) ?: throw IOException("引擎返回空（请求未完成）")
+                if (resp.status == 0) {
+                    // 引擎侧失败（如 ECH 被拒）。不降级明文 —— fail-closed。
+                    throw IOException("引擎未取得响应（ECH 失败，fail-closed 未降级）")
+                }
+
+                // 5) 拆响应头。Set-Cookie 不能用 map 承载（同名多值会互相覆盖），
+                //    单独提出来写进 CookieManager。
+                val responseHeaders = LinkedHashMap<String, String>()
+                val setCookies = ArrayList<String>()
+                resp.headers.split("\r\n", "\n").forEach { line ->
+                    val idx = line.indexOf(':')
+                    if (idx <= 0) return@forEach
+                    val name = line.substring(0, idx).trim()
+                    val value = line.substring(idx + 1).trim()
+                    when {
+                        name.equals("Set-Cookie", true) -> setCookies.add(value)
+                        // 交给 WebView 自己按 body 长度算，免得长度对不上导致截断。
+                        name.equals("Content-Length", true) -> Unit
+                        name.equals("Transfer-Encoding", true) -> Unit
+                        name.isNotEmpty() -> responseHeaders[name] = value
                     }
                 }
 
-                localClient.newCall(builder.build()).execute().use { resp ->
-                    val bodyBytes = resp.body?.bytes() ?: ByteArray(0)
-                    val contentType = resp.header("Content-Type") ?: "text/html"
-                    var mimeType = "text/html"
-                    var encoding = "utf-8"
-                    contentType.split(";").forEachIndexed { idx, part ->
-                        if (idx == 0) mimeType = part.trim().ifEmpty { "text/html" }
-                        else if (part.trim().startsWith("charset=", true)) {
-                            encoding = part.trim().substringAfter("=").trim()
-                        }
+                // 6) Set-Cookie → CookieManager。沿用旧路线的属性改写：WebView 对
+                //    Secure / SameSite=None 的接受度差，不改写会直接丢 cookie。
+                runCatching {
+                    val cm = CookieManager.getInstance()
+                    var sessionRecv = false
+                    var credsRecv = false
+                    for (raw in setCookies) {
+                        var fixed = raw
+                        fixed = fixed.replace(Regex(";\\s*Domain=[^;]+", RegexOption.IGNORE_CASE), "")
+                        fixed = fixed.replace(Regex(";\\s*Secure", RegexOption.IGNORE_CASE), "")
+                        fixed = fixed.replace(Regex(";\\s*SameSite=[^;]+", RegexOption.IGNORE_CASE), "; SameSite=Lax")
+                        cm.setCookie(url, fixed)
+                        runCatching { cm.setCookie("https://archiveofourown.org/", fixed) }
+                        if (raw.contains("_otwarchive_session")) sessionRecv = true
+                        if (raw.contains("user_credentials")) credsRecv = true
                     }
-
-                    val responseHeaders = LinkedHashMap<String, String>()
-                    for (name in resp.headers.names()) {
-                        responseHeaders[name] = resp.headers.get(name) ?: ""
-                    }
-
-                    // Set-Cookie 诊断（值脱敏只记特征）+ 兼容旧行为的属性改写，确保 WebView 能收下 user_credentials
-                    try {
-                        val cm = CookieManager.getInstance()
-                        var sessionCount = 0
-                        for (raw in resp.headers.values("Set-Cookie")) {
-                            var fixed = raw
-                            fixed = fixed.replace(Regex(";\\s*Domain=[^;]+", RegexOption.IGNORE_CASE), "")
-                            fixed = fixed.replace(Regex(";\\s*Secure", RegexOption.IGNORE_CASE), "")
-                            fixed = fixed.replace(Regex(";\\s*SameSite=[^;]+", RegexOption.IGNORE_CASE), "; SameSite=Lax")
-                            cm.setCookie(url, fixed)
-                            try {
-                                cm.setCookie("https://archiveofourown.org/", fixed)
-                            } catch (_: Exception) {
-                            }
-                            if (raw.contains("_otwarchive_session")) {
-                                sessionCount++
-                                Diagnostics.event("webview_cookie_recv_session", mapOf("host" to host))
-                            }
-                            if (raw.contains("user_credentials")) {
-                                Diagnostics.event("webview_cookie_recv_creds", mapOf("host" to host))
-                            }
-                        }
-                        cm.flush()
-                        if (sessionCount > 0) {
-                            Diagnostics.event("webview_cookie_recv", mapOf("host" to host, "sessionCount" to sessionCount.toString()))
-                        }
-                    } catch (e: Exception) {
-                        Diagnostics.event("webview_cookie_recv_err", mapOf("host" to host, "err" to (e.message ?: "")))
-                    }
-
-                    val redirected = if (resp.priorResponse != null) "yes" else "no"
+                    cm.flush()
+                    if (sessionRecv) Diagnostics.event("webview_cookie_recv_session", mapOf("host" to host))
+                    if (credsRecv) Diagnostics.event("webview_cookie_recv_creds", mapOf("host" to host))
+                }.onFailure {
                     Diagnostics.event(
-                        "webview_ok",
-                        mapOf(
-                            "host" to host,
-                            "code" to resp.code.toString(),
-                            "len" to bodyBytes.size.toString(),
-                            "redirected" to redirected,
-                            "hasSession" to hasSession.toString(),
-                        ),
-                    )
-                    return WebResourceResponse(
-                        mimeType,
-                        encoding,
-                        resp.code,
-                        resp.message.ifEmpty { "OK" },
-                        responseHeaders,
-                        ByteArrayInputStream(bodyBytes),
+                        "webview_cookie_recv_err",
+                        mapOf("host" to host, "err" to (it.message ?: "")),
                     )
                 }
+
+                // 7) 包装成 WebResourceResponse
+                val contentType = responseHeaders.entries
+                    .firstOrNull { it.key.equals("Content-Type", true) }?.value ?: "text/html"
+                var mimeType = "text/html"
+                var encoding = "utf-8"
+                contentType.split(";").forEachIndexed { idx, part ->
+                    if (idx == 0) {
+                        mimeType = part.trim().ifEmpty { "text/html" }
+                    } else if (part.trim().startsWith("charset=", true)) {
+                        encoding = part.trim().substringAfter("=").trim()
+                    }
+                }
+
+                Diagnostics.event(
+                    "webview_ok",
+                    mapOf(
+                        "host" to host,
+                        "code" to resp.status.toString(),
+                        "len" to resp.body.size.toString(),
+                        "ech" to resp.echAccepted.toString(),
+                        "echRetries" to resp.echRetries.toString(),
+                        "attempt" to (attempt + 1).toString(),
+                    ),
+                )
+
+                return WebResourceResponse(
+                    mimeType,
+                    encoding,
+                    resp.status,
+                    "OK",
+                    responseHeaders,
+                    ByteArrayInputStream(resp.body),
+                )
             } catch (e: Exception) {
                 lastError = e.message ?: e.javaClass.simpleName
-                Diagnostics.event("webview_fail", mapOf("host" to host, "attempt" to (attempt + 1).toString(), "err" to lastError.take(120)))
+                Diagnostics.event(
+                    "webview_fail",
+                    mapOf(
+                        "host" to host,
+                        "attempt" to (attempt + 1).toString(),
+                        "err" to lastError.take(120),
+                    ),
+                )
                 if (attempt == 0) {
-                    // 失败重试：ECH 配置轮换由 Go 侧自愈（retry_configs 缓存 +
-                    // 单飞刷新），Kotlin 不再维护自己的 ECH 缓存，无需失效动作。
-                    try {
-                        Thread.sleep(300)
-                    } catch (_: Exception) {
-                    }
+                    // 一次重试：ECH 配置轮换 / DoH 抖动用一次机会（resolver 自带 TTL 缓存）。
+                    runCatching { Thread.sleep(300) }
                 }
             }
         }
