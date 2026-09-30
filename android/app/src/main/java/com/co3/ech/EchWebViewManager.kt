@@ -374,7 +374,10 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
         if (!url.isNullOrEmpty()) {
             // 竞态保护：MainApplication 后台线程启动服务可能晚于用户首次打开浏览器，
             // 这里幂等确保服务已就绪；起不来则 fail-closed（绝不回退明文直连 AO3）。
-            if (!LocalEchProxy.start()) {
+            // 只在「还没跑」时才尝试拉起：以前无条件调用，而 start() 的默认参数是
+            // 空串，会触发 ensureStarted 的「配置变更」分支把代理重启成空 DoH
+            // （2026-09-30 真机日志：每次加载页面都掉一次 DoH，登录必 502）。
+            if (EchProxyCore.port == 0 && !LocalEchProxy.start()) {
                 android.util.Log.e("CO-ECH", "local ECH proxy unavailable, refusing to load $url")
                 view.loadUrl("about:blank")
                 return

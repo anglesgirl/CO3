@@ -39,7 +39,20 @@ object LocalEchProxy {
      * port=0 自动选空闲端口；已在跑直接复用。成功返回 true。
      */
     fun start(doh: String = "", ipList: String = ""): Boolean {
-        val p = EchProxyCore.ensureStarted(0, doh, ipList)
+        // ⚠️ 无参调用（WebView 的幂等确保路径：CoWebViewHelper / EchWebViewManager）
+        // 曾经把代理重启成空 DoH：默认参数是空串 → ensureStarted 发现 ""≠当前配置，
+        // 走「配置变更」分支重启，Go 侧 activeDoH 被写成空 → 加载登录页的那一瞬间
+        // 代理就从「4 DoH address(es)」掉成「no DoH endpoint configured」，请求全 502
+        // （2026-09-30 真机日志实证）。
+        // 这里在参数为空时回落到落盘配置，语义变成「确保代理在跑，且配置和上次 JS
+        // 给的一致」。JS 显式改配置仍直调 EchProxyCore.ensureStarted，所以用户在
+        // 设置页清空 DoH 的意图不受影响。
+        val (savedDoh, savedIps) = EchProxyCore.appContext
+            ?.let { EchProxyCore.loadSavedConfig(it) }
+            ?: ("" to "")
+        val useDoh = doh.ifBlank { EchProxyCore.effectiveDoh(savedDoh) }
+        val useIps = ipList.ifBlank { savedIps }
+        val p = EchProxyCore.ensureStarted(0, useDoh, useIps)
         if (p > 0) {
             port = p
             Log.i(TAG, "Go ECH proxy running on 127.0.0.1:$p")
