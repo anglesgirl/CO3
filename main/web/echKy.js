@@ -227,6 +227,27 @@ function engineHeaders(raw) {
   };
 }
 
+// 手写 3xx Location 拼接（避开 RN/Hermes URL polyfill 的相对路径解析 bug）：
+//   绝对 URL       → 原样
+//   //host/path    → 协议相对
+//   /path?query    → 根相对（最常见：AO3 的 Location 都是 / 开头）
+//   相对目录       → 相对当前 URL 目录
+function resolveLocation(loc, baseUrl) {
+  const raw = String(loc || '').trim();
+  if (!raw) return baseUrl;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('//')) return (baseUrl.startsWith('https:') ? 'https:' : 'http:') + raw;
+  try {
+    const u = new URL(baseUrl);
+    const origin = u.protocol + '//' + u.host;
+    if (raw.startsWith('/')) return origin + raw;
+    const dir = u.pathname.includes('/') ? u.pathname.replace(/[^/]*$/, '') : '/';
+    return origin + dir + raw;
+  } catch (e) {
+    return raw;
+  }
+}
+
 // 走引擎的一次请求，返回 fetch 兼容的响应对象（ky 只用到这几个字段）。
 //
 // 入参是 **Request 对象** —— ky 内部是 `fetch(request, nonRequestOptions)`
@@ -343,7 +364,12 @@ async function echEngineFetch(req) {
         res = attemptRes;
         break;
       }
-      currentUrl = new URL(loc, currentUrl).toString();
+      // **必须手写拼接，不能用 new URL(loc, base)**：RN/Hermes 的 URL polyfill
+      // 解析相对路径有 bug —— 真机日志实证 view_adult 的 302 把相对路径拼进了
+      // query（...?view_adult=true/works/xxx/chapters/yyy），跳去不存在的地址
+      // 又 302，死循环到 MAX_REDIRECTS 后抛 "ECH engine request failed"。
+      // WebView 正常正是因为它自己跟（浏览器解析对）；JS 只能自己拼。
+      currentUrl = resolveLocation(loc, currentUrl);
       lastErr = null;
       continue;
     }
