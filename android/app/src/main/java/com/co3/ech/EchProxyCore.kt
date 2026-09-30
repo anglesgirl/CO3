@@ -142,6 +142,16 @@ object EchProxyCore {
         }.onFailure { android.util.Log.w("CO-ECH", "saveConfigPrefs failed: ${it.message}") }
     }
 
+    // 首次安装（还没有任何落盘配置）时的兜底 DoH。
+    // 取值与 JS 侧 echKy.js 的 DEFAULT_DOH 完全一致 —— 仓库里本来就有这个地址，
+    // Kotlin 侧再用一次不扩大暴露面；换来的是「首启就有网」：否则 MainApplication
+    // 不敢启动代理，而 JS 要几十秒才到场（真机 03:07:03 开机 → 03:07:49 才
+    // startProxy），这段时间全线 502（webview.httpError status=502 实证）。
+    private const val FALLBACK_DOH = "https://pieqllv9i7.cloudflare-gateway.com/dns-query"
+
+    /** 落盘为空（首次安装）时退回 FALLBACK_DOH，保证开机即有代理可用。 */
+    fun effectiveDoh(saved: String): String = saved.ifBlank { FALLBACK_DOH }
+
     /** @return (doh, ipList)；从未保存过时两者都是空串。 */
     fun loadSavedConfig(context: android.content.Context): Pair<String, String> =
         runCatching {
