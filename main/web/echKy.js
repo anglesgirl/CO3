@@ -294,41 +294,67 @@ async function echEngineFetch(req) {
   // 真机日志里同一分钟既有 200 也有 525。这条路径此前一次失败就直接抛，
   // 而 WebView 那条是有重试的，所以表现为"页面能开、接口全挂"。
   const RETRYABLE = new Set([500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526]);
+  // 3xx 跟随重定向：引擎 FOLLOWLOCATION=0 不自动跳，而 AO3 的登录跳转、
+  // view_adult 确认跳转都是 302（真机日志统一判成 "Request failed with status
+  // code 302"）。WebView 拦截路径对 3xx 是包装 200 透传 Location 由 WebView 跟，
+  // JS 路径直接跟到最终响应 —— 两条路径行为一致（"与 WebView 完全同构"）。
+  const MAX_REDIRECTS = 5;
   let res = null;
   let lastErr = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const r = await mod.request(
-        req.url,
-        req.method,
-        headerLines.join('\r\n'),
-        body,
-        doh,
-        ips,
-        '',      // configHost：AO3 自己发 ECH 记录，不借用
-        30000,
-      );
-      if (r && RETRYABLE.has(r.status)) {
-        lastErr = new Error(
-          `Request failed with status code ${r.status}: ${req.method} ${req.url}`,
+  let currentUrl = req.url;
+  for (let redirect = 0; redirect < MAX_REDIRECTS; redirect += 1) {
+    let attemptRes = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const r = await mod.request(
+          currentUrl,
+          req.method,
+          headerLines.join('\r\n'),
+          body,
+          doh,
+          ips,
+          '',      // configHost：AO3 自己发 ECH 记录，不借用
+          30000,
         );
+        if (r && RETRYABLE.has(r.status)) {
+          lastErr = new Error(
+            `Request failed with status code ${r.status}: ${req.method} ${currentUrl}`,
+          );
+          await new Promise((done) => setTimeout(done, 700 * (attempt + 1)));
+          continue;
+        }
+        attemptRes = r;
+        break;
+      } catch (e) {
+        lastErr = e;
         await new Promise((done) => setTimeout(done, 700 * (attempt + 1)));
-        continue;
       }
-      res = r;
-      break;
-    } catch (e) {
-      lastErr = e;
-      await new Promise((done) => setTimeout(done, 700 * (attempt + 1)));
     }
+    if (!attemptRes) {
+      res = null;
+      break;
+    }
+    if (attemptRes.status >= 300 && attemptRes.status < 400) {
+      const loc = engineHeaders(attemptRes.headers).get('location');
+      if (!loc) {
+        // 无 Location 的 3xx：返回原样（真实状态码由调用方读取）。
+        res = attemptRes;
+        break;
+      }
+      currentUrl = new URL(loc, currentUrl).toString();
+      lastErr = null;
+      continue;
+    }
+    res = attemptRes;
+    break;
   }
   if (!res) throw lastErr ?? new Error('ECH engine request failed');
   const text = res.body ?? '';
   return {
-    ok: res.status >= 200 && res.status < 300,
+    ok: res.status >= 200 && res.status < 400,
     status: res.status,
     statusText: '',
-    url: req.url,
+    url: currentUrl,
     headers: engineHeaders(res.headers),
     text: async () => text,
     json: async () => JSON.parse(text),
