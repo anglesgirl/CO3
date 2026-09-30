@@ -94,14 +94,11 @@ class MainApplication : Application(), ReactApplication {
     // 后台线程启动（幂等）；Go 库跑在 App 自身进程内（同进程内嵌，非独立进程，
     // 不存在"单独 Go 进程被系统回收"）。
     runCatching {
-      com.co3.ech.EchProxyCore.appContext = this
-      Thread {
-        runCatching { com.co3.ech.LocalEchProxy.start() }
-          .onFailure { android.util.Log.w("CO-ECH", "local ECH proxy start failed: " + it.message) }
-      }.apply {
-        isDaemon = true
-        name = "co-local-proxy-boot"
-      }.start()
+      // Android 侧请求已全部改走 ech_http 引擎（不监听端口，因此没有「代理没起来 /
+      // 配置没生效 / 端口对不上」这一整类问题），这里不再启动本地 Go 代理。
+      // 引擎就绪由调用方保证（CoWebViewHelper / EchEngineInterceptor），
+      // DoH 配置由 JS 在 initEch 时落盘给 EchDohConfig。
+      android.util.Log.i("CO-ECH", "ECH 走 ech_http 引擎，不再启动本地 Go 代理")
     }
   }
 }

@@ -70,6 +70,51 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
     }
 
     /**
+     * 清 AO3 的 cookie（登出走这里）。
+     *
+     * 引擎零 cookie 代码，cookie 权威在 CookieManager，所以登出就是清它。
+     * @param keepCf true = 保留 Cloudflare 的 cf_clearance/__cf_bm/_cfuvid
+     *   （清 session 而非登出，避免把用户刚过的 CF 验证作废）。
+     */
+    @ReactMethod
+    fun clearCookies(keepCf: Boolean, promise: Promise) {
+        try {
+            val cm = android.webkit.CookieManager.getInstance()
+            val url = "https://archiveofourown.org/"
+            val raw = cm.getCookie(url) ?: ""
+            val names = raw.split(';').mapNotNull { it.substringBefore('=').trim().ifEmpty { null } }
+            var removed = 0
+            for (name in names) {
+                if (keepCf && (name == "cf_clearance" || name == "__cf_bm" || name == "_cfuvid")) continue
+                cm.setCookie(url, "$name=; Max-Age=0; path=/")
+                removed++
+            }
+            cm.flush()
+            promise.resolve(removed)
+        } catch (e: Exception) {
+            promise.reject("ECH_CLEAR_COOKIES_FAILED", e.message ?: "unknown", e)
+        }
+    }
+
+    /** 当前 AO3 cookie 摘要（诊断用；只报名字与长度，不返回凭证值）。 */
+    @ReactMethod
+    fun cookieSummary(promise: Promise) {
+        try {
+            val raw = android.webkit.CookieManager.getInstance()
+                .getCookie("https://archiveofourown.org/") ?: ""
+            val parts = raw.split(';').map { it.trim() }.filter { it.isNotEmpty() }
+            val map = Arguments.createMap()
+            map.putInt("count", parts.size)
+            map.putBoolean("hasSession", raw.contains("_otwarchive_session"))
+            map.putBoolean("hasCreds", raw.contains("user_credentials"))
+            map.putString("names", parts.map { it.substringBefore('=') }.joinToString(","))
+            promise.resolve(map)
+        } catch (e: Exception) {
+            promise.reject("ECH_COOKIE_SUMMARY_FAILED", e.message ?: "unknown", e)
+        }
+    }
+
+    /**
      * 只做 DoH 解析，不发起 TLS。
      * 用于把"取不到 ECH 配置"和"ECH 握手失败"这两类问题分开定位。
      */
@@ -113,6 +158,7 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
         url: String,
         method: String,
         headers: String,
+        body: String,
         doh: String,
         connectIp: String,
         configHost: String,
@@ -140,6 +186,8 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
                     url = url,
                     method = method.ifBlank { "GET" },
                     headers = headers,
+                    // POST 表单等；GET 时 JS 传空串 → null（引擎按无请求体处理）
+                    body = body.takeIf { it.isNotEmpty() }?.toByteArray(Charsets.UTF_8),
                     echConfig = route.echConfig,
                     connectIp = target,
                     timeoutMs = timeoutMs.toLong().takeIf { it > 0 } ?: 30_000L,

@@ -59,6 +59,9 @@ struct Accumulator {
   std::string headers;
   std::string error;
   std::vector<uint8_t> body;
+  // 请求体必须活到请求结束：引擎异步工作，options.body 只是指针，不拷贝。
+  // 放在累加器里而不是栈上局部变量，否则函数返回后就是悬垂指针。
+  std::vector<uint8_t> request_body;
   std::atomic<EhRequest *> request{nullptr};
 };
 
@@ -138,6 +141,7 @@ Java_com_co3_ech_EchHttpNative_nativeVersion(JNIEnv *env, jclass) {
 extern "C" JNIEXPORT jobject JNICALL
 Java_com_co3_ech_EchHttpNative_nativeRequest(JNIEnv *env, jclass, jstring j_url,
                                              jstring j_method, jstring j_headers,
+                                             jbyteArray j_body,
                                              jstring j_ech_config,
                                              jstring j_connect_ip,
                                              jlong timeout_ms,
@@ -164,11 +168,23 @@ Java_com_co3_ech_EchHttpNative_nativeRequest(JNIEnv *env, jclass, jstring j_url,
 
   auto *acc = new Accumulator();
 
+  // 请求体（POST 表单等）。JS 侧以 UTF-8 字符串传入，这里取原始字节。
+  if (j_body != nullptr) {
+    const jsize body_len = env->GetArrayLength(j_body);
+    if (body_len > 0) {
+      acc->request_body.resize(static_cast<size_t>(body_len));
+      env->GetByteArrayRegion(j_body, 0, body_len,
+                             reinterpret_cast<jbyte *>(acc->request_body.data()));
+    }
+  }
+
   EhOptions options;
   memset(&options, 0, sizeof(options));
   options.url = url.c_str();
   options.method = method.empty() ? "GET" : method.c_str();
   options.headers = headers.empty() ? nullptr : headers.c_str();
+  options.body = acc->request_body.empty() ? nullptr : acc->request_body.data();
+  options.body_length = acc->request_body.size();
   // ech_config 为空 = 不启用 ECH（仅供对照/排障，AO3 必须带 ECH）
   options.ech_config = ech_config.empty() ? nullptr : ech_config.c_str();
   options.connect_ip = connect_ip.empty() ? nullptr : connect_ip.c_str();

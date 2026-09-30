@@ -57,6 +57,7 @@ object EchHttpNative {
         url: String,
         method: String,
         headers: String,
+        body: ByteArray?,
         echConfig: String?,
         connectIp: String?,
         timeoutMs: Long,
@@ -74,6 +75,7 @@ object EchHttpNative {
         url: String,
         method: String = "GET",
         headers: String = "",
+        body: ByteArray? = null,
         echConfig: String? = null,
         connectIp: String? = null,
         timeoutMs: Long = 30_000L,
@@ -85,7 +87,7 @@ object EchHttpNative {
         }
         return try {
             nativeRequest(
-                url, method, headers, echConfig, connectIp, timeoutMs, maxResponseBytes,
+                url, method, headers, body, echConfig, connectIp, timeoutMs, maxResponseBytes,
             )
         } catch (t: Throwable) {
             Log.e(TAG, "nativeRequest 异常: $method $url", t)

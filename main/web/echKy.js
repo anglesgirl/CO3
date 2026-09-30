@@ -197,6 +197,9 @@ function startProxy() {
 }
 
 export function getEchBase() {
+  // Android：请求已全部走 ech_http 引擎（原生桥 EchHttp），没有本地代理地址了。
+  // 返回 'engine' 作为就绪标记，调用方据此判断「可用」而不去拼 URL。
+  if (engineAvailable()) return Promise.resolve('engine');
   if (echBasePromise) return echBasePromise;
   if (shouldRetryStart()) return startProxy();
   // 冷却期内不重复启动，返回一个立即失败的 promise（调用方会走 WebView 兜底）。
@@ -222,6 +225,8 @@ const NATIVE_LOG_CHUNK = 360;   // remoteLog 单字段上限 400，留余量避�
 const NATIVE_LOG_INTERVAL_MS = 5000;
 
 async function drainNativeLogs() {
+  // Android：没有 Go 代理了（引擎不产这类日志），直接跳过。
+  if (engineAvailable()) return;
   let raw;
   try {
     const mod = NativeModules.EchProxy;
@@ -275,6 +280,9 @@ export function initEch() {
   // 调用造成并发 start()（原生侧会抛 "echproxy already running"，
   // JS 侧则丢掉端口 → 之后 30s 冷却里全部请求 fail-closed。
   // 2026-08-11 iOS 真机日志实测到这个竞态）。
+  // Android：请求全部走 ech_http 引擎，不再启动本地 Go 代理（引擎不监听端口，
+  // 也没有「代理没起来 / 配置没生效」这一整类问题）。只把 DoH 配置推给原生。
+  if (engineAvailable()) return;
   if (echBasePromise) return;
   // 2026-08-15 App 启动即预热 ECH（用户要求：不等用户操作）：
   // 代理启动只是监听端口，DoH 解析/ECH 配置获取/TLS 握手是首个真实
@@ -334,66 +342,90 @@ function isValidIPList(s) {
 // 「启动时从运营方域名拉 TXT / JSON 下发 DoH、优选 IP、翻译端点」这类逻辑。
 // 需要改配置时一律走 app 内设置项（setDoh / setCustomIPs，写入本地存储）。
 
-// echUrl rewrites an AO3 URL so it goes through the local ECH proxy. Use it for
-// raw fetch() calls (form POSTs, cookie-sensitive requests) that can't use the
-// `echKy` instance. Throws when the proxy isn't running (fail-closed on both
-// Android and iOS).
-export async function echUrl(url) {
-  try {
-    const base = await getEchBase();
-    const u = new URL(url);
-    if (!base) {
-      if (u.protocol === 'https:') {
-        throw new Error('ECH proxy unavailable; refusing direct HTTPS request');
-      }
-      return url;
-    }
-    if (!AO3_HOSTS.has(u.hostname)) return url;
-    return base + u.pathname + u.search;
-  } catch (error) {
-    throw error;
-  }
+// ---- 引擎 fetch（Android） ----
+//
+// ech_http 引擎不监听端口，所以没有「把 URL 改写成 127.0.0.1:<port>」这一步了：
+// 直接把原始 https URL 交给原生引擎，TLS + ECH 在同一进程内完成。cookie 由原生
+// CookieManager 读写（引擎零 cookie 代码），这里不传也不收 cookie。
+
+// 把引擎返回的「纯文本响应头」包装成 fetch Response 需要的最小 headers 接口。
+function engineHeaders(raw) {
+  const map = new Map();
+  String(raw || '')
+    .split(/\r?\n/)
+    .forEach((line) => {
+      const i = line.indexOf(':');
+      if (i <= 0) return;
+      map.set(line.slice(0, i).trim().toLowerCase(), line.slice(i + 1).trim());
+    });
+  return {
+    get: (name) => map.get(String(name).toLowerCase()) ?? null,
+    has: (name) => map.has(String(name).toLowerCase()),
+    forEach: (fn) => map.forEach((v, k) => fn(v, k)),
+    entries: () => map.entries(),
+  };
 }
 
-// Returns a URL and headers suitable for native streaming clients. Unlike
-// echUrl(), this also supports AO3's separate download host.
-export async function echRequest(url) {
-  try {
-    const base = await getEchBase();
-    const parsed = new URL(url);
-    if (!base) {
-      if (parsed.protocol === 'https:') {
-        throw new Error('ECH proxy unavailable; refusing direct HTTPS request');
-      }
-      return { url, headers: {} };
-    }
-    return {
-      url: base + parsed.pathname + parsed.search,
-      headers: { 'X-Ech-Target': parsed.hostname },
-    };
-  } catch (error) {
-    throw error;
+// 走引擎的一次请求，返回 fetch 兼容的响应对象（ky 只用到这几个字段）。
+async function echEngineFetch(url, options = {}) {
+  const mod = NativeModules.EchHttp;
+  if (!mod || typeof mod.request !== 'function') {
+    throw new Error('ECH engine unavailable; refusing direct HTTPS request');
   }
+  const doh = (await getDohCandidates()).join(',');
+  const ips = (await getCustomIPs()) ?? '';
+  const headers = Object.entries(options.headers || {})
+    // cookie 由原生 CookieManager 注入，避免两处各带一份
+    .filter(([k]) => String(k).toLowerCase() !== 'cookie')
+    .map(([k, v]) => `${k}: ${v}`)
+    .join('\r\n');
+  const body = typeof options.body === 'string' ? options.body : '';
+  const res = await mod.request(
+    url,
+    String(options.method || 'GET').toUpperCase(),
+    headers,
+    body,
+    doh,
+    ips,
+    '',      // configHost：AO3 自己发 ECH 记录，不借用
+    30000,
+  );
+  const text = res.body ?? '';
+  return {
+    ok: res.status >= 200 && res.status < 300,
+    status: res.status,
+    statusText: '',
+    url,
+    headers: engineHeaders(res.headers),
+    text: async () => text,
+    json: async () => JSON.parse(text),
+    clone() {
+      return this;
+    },
+  };
 }
 
-// echFetch sends a request for ANY HTTPS host through the local proxy, so it
-// gets DoH resolution and ECH only when the target qualifies. Refuses a direct
-// HTTPS fallback when the proxy is unavailable (fail-closed, Android + iOS).
+// 引擎是否可用（Android 且桥已注册）。iOS 仍是 Go 代理，不走这里。
+function engineAvailable() {
+  const mod = NativeModules.EchHttp;
+  return Platform.OS === 'android' && !!mod && typeof mod.request === 'function';
+}
+
+// echFetch sends a request for ANY HTTPS host; ECH applies when the target
+// qualifies. Android → ech_http 引擎；iOS → 本地 Go 代理（原样保留）。
+// 引擎/代理都不可用时对 https 直接抛错（fail-closed）。
 export async function echFetch(url, options = {}) {
-  const base = await getEchBase();
-  let u;
-  try {
-    u = new URL(url);
-  } catch (error) {
-    throw error;
-  }
-  if (!base) {
-    if (u.protocol === 'https:') {
-      throw new Error('ECH proxy unavailable; refusing direct HTTPS request');
-    }
-    return fetch(url, options);
-  }
+  // 非保护域（站外图片、统计上报等）不接管：fail-closed 只针对受保护域，
+  // 否则引擎一有问题连无关请求都会一起失败。
+  if (!isEchProtectedUrl(url)) return fetch(url, options);
 
+  if (engineAvailable()) return echEngineFetch(url, options);
+
+  const base = await getEchBase();
+  const u = new URL(url);
+  if (!base || base === 'engine') {
+    throw new Error('ECH proxy unavailable; refusing direct HTTPS request');
+  }
   return fetch(base + u.pathname + u.search, {
     ...options,
     headers: { ...(options.headers || {}), 'X-Ech-Target': u.hostname },
@@ -402,6 +434,18 @@ export async function echFetch(url, options = {}) {
 
 // Latest native handshake/status line (e.g. "... ECHAccepted=true ...").
 export async function getEchStatus() {
+  // Android：请求由 ech_http 引擎接管，状态来自引擎桥。
+  if (engineAvailable()) {
+    const ehttp = NativeModules.EchHttp;
+    if (ehttp && typeof ehttp.status === 'function') {
+      try {
+        const s = await ehttp.status();
+        return `引擎 ${s.version}（Android 已接管请求，无本地端口）`;
+      } catch (e) {
+        return `engine status error: ${e?.message ?? e}`;
+      }
+    }
+  }
   const mod = NativeModules.EchProxy;
   if (!mod || typeof mod.status !== 'function') {
     // 明确区分"桥没注册"和"原生报错"，别都返回 unavailable 让人猜。
@@ -421,6 +465,9 @@ export async function getEchStatus() {
 
 // Restart the proxy so new settings take effect.
 async function restartProxy() {
+  // Android：引擎不监听端口，没有「重启代理」这回事。配置变更由
+  // pushDohConfigToNative() 更新原生那份 DoH 即可（每次请求实时读取）。
+  if (engineAvailable()) return 'engine';
   const mod = NativeModules.EchProxy;
   try {
     if (mod?.stop) await mod.stop();
@@ -435,6 +482,12 @@ async function restartProxy() {
 // picks up any fresh DoH/IP settings. Call this on logout so that a subsequent
 // login request does not arrive still "already logged in" with the old cookie.
 export async function clearAuthCookies() {
+  // Android：cookie 权威在 CookieManager（引擎零 cookie 代码），登出=清它。
+  if (engineAvailable()) {
+    const mod = NativeModules.EchHttp;
+    if (mod && typeof mod.clearCookies === 'function') return mod.clearCookies(false);
+    return null;
+  }
   await restartProxy();
 }
 
@@ -443,6 +496,13 @@ export async function clearAuthCookies() {
 // 永不弹出),且不会作废用户刚完成的 Cloudflare 验证 —— 重启代理会连
 // cf_clearance 一起丢,导致无限 challenge 循环。
 export async function clearSessionCookies() {
+  // Android：cookie 权威在 CookieManager。keepCf=true 保留 cf_clearance / __cf_bm /
+  // _cfuvid，只清 session —— 清掉 CF 验证会陷入无限 challenge 循环。
+  if (engineAvailable()) {
+    const ehttp = NativeModules.EchHttp;
+    if (ehttp && typeof ehttp.clearCookies === 'function') return ehttp.clearCookies(true);
+    return null;
+  }
   const mod = NativeModules.EchProxy;
   if (mod && typeof mod.clearSessionCookies === 'function') {
     try {
@@ -489,6 +549,22 @@ export async function setCustomIPs(ips, manual = true) {
 // 读取代理 cookiejar 的完整内容(文本)。交互式登录窗口用它轮询
 // 检测登录是否成功(_otwarchive_session 出现在清空后的 jar 里)。
 export async function getJarInfo() {
+  // Android：没有 Go jar 了，cookie 全在 CookieManager（只报名字与长度，不含值）。
+  if (engineAvailable()) {
+    const ehttp = NativeModules.EchHttp;
+    if (ehttp && typeof ehttp.cookieSummary === 'function') {
+      try {
+        const s = await ehttp.cookieSummary();
+        return (
+          `CookieManager(AO3): ${s.count} 条` +
+          ` hasSession=${s.hasSession} hasCreds=${s.hasCreds}\n` +
+          `  ${s.names}`
+        );
+      } catch (e) {
+        return `cookieSummary 失败: ${e?.message ?? e}`;
+      }
+    }
+  }
   const mod = NativeModules.EchProxy;
   if (!mod || typeof mod.jarInfo !== 'function') return null;
   try {
@@ -510,6 +586,10 @@ export async function getJarInfo() {
 // the built-in default) for the lookup, so it works even with poisoned DNS.
 
 const echKy = ky.create({
+  // 请求转发全部交给 echFetch：Android 走 ech_http 引擎（原始 https URL +
+  // 进程内 ECH），iOS 走本地 Go 代理。原来那个把 URL 改写成 127.0.0.1 的
+  // beforeRequest hook 已删除 —— 引擎不监听端口，改写反而会绕过 ECH。
+  fetch: (input, init) => echFetch(typeof input === 'string' ? input : String(input), init || {}),
   // Generous timeout: the first request may have to bootstrap the ECH handshake.
   timeout: 30000,
   // AO3 的 session cookie 由 Go 代理的 cookiejar 统一管理。RN fetch 层
@@ -518,38 +598,9 @@ const echKy = ky.create({
   // credentials:'omit' 让 RN 层完全不碰 cookie, 全部交给代理 jar。
   credentials: 'omit',
   hooks: {
-    beforeRequest: [
-      async (request) => {
-        const t0 = Date.now();
-        let base;
-        try {
-          base = await getEchBase();
-        } catch (e) {
-          console.log(`[ECH] getEchBase failed in ${Date.now() - t0}ms: ${e?.message ?? e}`);
-          throw e;
-        }
-        let u;
-        try {
-          u = new URL(request.url);
-        } catch {
-          return;
-        }
-        if (u.protocol !== 'https:') return;
-        // ⚠️ 只代理需要 ECH 的域名（AO3）。
-        // 原因有二：① fail-closed 只该针对受保护域名 —— 否则代理没起来时，
-        // 连站外图片、统计上报这些非敏感请求也会一起被拒，功能整体瘫痪；
-        // ② 非受保护流量没必要绕一圈本地代理，徒增延迟。
-        if (!isEchProtectedUrl(request.url)) return;
-        if (!base) {
-          console.log(`[ECH] proxy unavailable, refusing direct HTTPS to ${u.hostname}`);
-          throw new Error('ECH proxy unavailable; refusing direct HTTPS request');
-        }
-        const rewritten = new Request(base + u.pathname + u.search, request);
-        rewritten.headers.set('X-Ech-Target', u.hostname);
-        console.log(`[ECH] → ${u.hostname}${u.pathname} via proxy ${base} (waited ${Date.now() - t0}ms)`);
-        return rewritten;
-      },
-    ],
+    // beforeRequest 的 URL 改写已删除：转发逻辑统一在 echFetch（Android 引擎 /
+    // iOS 本地代理）。留着它会继续把 URL 改写成 127.0.0.1 —— 而引擎不监听端口，
+    // 那等于绕开 ECH。
     afterResponse: [
       async (request, options, response) => {
         const url = new URL(request.url);
