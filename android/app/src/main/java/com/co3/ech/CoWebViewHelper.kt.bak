@@ -56,15 +56,6 @@ object CoWebViewHelper {
         // 其余非 GET：同样取不到 body，交回 WebView。
         if (method != "GET") return null
 
-        // 非保护域直接放行，**不要先送去引擎**。
-        // 理由（真机诊断实证）：第三方 JS/CSS（ajax.googleapis.com 等）不发布
-        // ECHConfigList，引擎必然在 DoH 阶段失败，而每次失败要等 1 秒以上；
-        // 一个页面有十几个第三方资源，白白拖慢加载。它们本来也不会被墙。
-        if (!EchHosts.isProtected(host)) return null
-
-        // 5xx（含 525 CF↔源站握手失败）多为瞬时错误，值得再试一次；
-        // 4xx 是确定性拒绝，重试无意义。
-        val retryableStatuses = setOf(500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526)
         var lastError: String = "unknown"
         repeat(2) { attempt ->
             try {
@@ -109,12 +100,6 @@ object CoWebViewHelper {
                     body = null,
                     totalTimeoutMs = 30_000L,
                 )
-
-                // 4.4) 5xx 当成可重试失败处理（丢给下面的 catch 走重试），
-                //      否则会把错误页当正常内容渲染，用户看到的是 CF 的错误页。
-                if (resp.status in retryableStatuses) {
-                    throw IOException("上游 ${resp.status}（可重试）")
-                }
 
                 // 4.5) 4xx 打不出原因就只能靠猜。把状态码和响应体前缀落进诊断 ——
                 //      CF 的拦截理由通常就写在 body 里，真机排查全靠它。
@@ -200,27 +185,12 @@ object CoWebViewHelper {
                     ),
                 )
 
-                // WebResourceResponse 的 statusCode **不允许落在 [300,399]**，
-                // 否则 Android 直接抛 "statusCode can't be in the [300, 399] range"
-                // —— 真机诊断里 AO3 的 302 全部因此失败（登录跳转、权限检查…）。
-                // 做法：用 200 包装真实状态码，并把 Location 等跳转头原样透传，
-                // 由 WebView 自己决定是否跟随重定向。
-                val wrapped = resp.status in 300..399
-                val finalHeaders = LinkedHashMap(responseHeaders)
-                if (wrapped) {
-                    finalHeaders["X-Ech-Real-Status"] = resp.status.toString()
-                    Diagnostics.event(
-                        "webview_redirect_wrapped",
-                        mapOf("host" to host, "code" to resp.status.toString(),
-                              "location" to (finalHeaders["Location"] ?: "").take(120)),
-                    )
-                }
                 return WebResourceResponse(
                     mimeType,
                     encoding,
-                    if (wrapped) 200 else resp.status,
-                    if (wrapped) "OK" else "OK",
-                    finalHeaders,
+                    resp.status,
+                    "OK",
+                    responseHeaders,
                     ByteArrayInputStream(resp.body),
                 )
             } catch (e: Exception) {
@@ -234,9 +204,8 @@ object CoWebViewHelper {
                     ),
                 )
                 if (attempt == 0) {
-                    // 一次重试：ECH 配置轮换 / DoH 抖动 / 上游 5xx 用一次机会
-                    // （resolver 自带 TTL 缓存）。间隔稍长一点，给上游缓过来。
-                    runCatching { Thread.sleep(700) }
+                    // 一次重试：ECH 配置轮换 / DoH 抖动用一次机会（resolver 自带 TTL 缓存）。
+                    runCatching { Thread.sleep(300) }
                 }
             }
         }
