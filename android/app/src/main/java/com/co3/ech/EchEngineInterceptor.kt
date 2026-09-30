@@ -45,12 +45,34 @@ object EchEngineInterceptor {
 
         // 3) 组请求头
         val hb = StringBuilder()
+        val seen = HashSet<String>()
         req.headers.forEach { (k, v) ->
             if (k.equals("Cookie", true) || k.equals("Host", true)) return@forEach
-            // 交给引擎自己协商/解压，避免双重编码
-            if (k.equals("Accept-Encoding", true)) return@forEach
+            if (k.equals("User-Agent", true)) return@forEach
             if (k.contains('\n') || k.contains('\r')) return@forEach
+            seen.add(k.lowercase())
             hb.append(k).append(": ").append(v).append("\r\n")
+        }
+        // UA 与 WebView/JS 路径一致（AO3_UA 是验证过能过 CF 的）
+        hb.append("User-Agent: ").append(CoWebViewHelper.AO3_UA).append("\r\n")
+
+        // 补齐 Cloudflare 要求的"浏览器式"头 —— 实测决定性（同一 IP 只换请求头）：
+        // 缺 Accept-Language + Accept-Encoding → 525；齐全 → 200。
+        // ⚠️ Accept-Encoding 此前被误过滤（注释"避免双重编码"），引擎自带
+        // auto_uncompress（curl），声明 gzip 安全且必需 —— 与 CoWebViewHelper 对齐。
+        listOf(
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language" to "zh-CN,zh;q=0.9,en;q=0.8",
+            "Accept-Encoding" to "gzip, deflate",
+            "Upgrade-Insecure-Requests" to "1",
+            "Sec-Fetch-Dest" to "document",
+            "Sec-Fetch-Mode" to "navigate",
+            "Sec-Fetch-Site" to "same-origin",
+            "Sec-Fetch-User" to "?1",
+        ).forEach { (name, value) ->
+            if (!seen.contains(name.lowercase())) {
+                hb.append(name).append(": ").append(value).append("\r\n")
+            }
         }
         if (cookie.isNotEmpty()) hb.append("Cookie: ").append(cookie).append("\r\n")
 
