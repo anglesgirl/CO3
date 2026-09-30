@@ -35,7 +35,7 @@ target 'CO3' do
   # 本地直接 `pod install` 而没有先跑 gomobile bind 的话，这里会找不到 xcframework。
   # iOS 侧的 ECH 实现与 Android 不同源：Android 用 Conscrypt(OkHttp)，
   # iOS 用这套 Go 代理（跨平台复用同一份 Go 代码，见 ech/ 目录）。
-  pod 'EchProxyBridge', :path => './EchProxyBridge'
+  # EchProxyBridge（Go 本地代理）已移除：两端统一走进程内 ech_http 引擎。
 
   # 本地桥接 pod：端侧翻译（llama.cpp + HY-MT1.5-1.8B 标准量化 GGUF）。
   # 依赖 CI 在 `pod install` **之前**生成的 llama.xcframework ——

@@ -195,7 +195,7 @@ object Diagnostics {
     /**
      * 生成完整诊断文本（调试页"导出诊断日志"用）。
      *
-     * 内容：环境信息 + 系统代理 + ECH 状态 + LocalEchProxy 状态 + crash.log +
+     * 内容：环境信息 + 系统代理 + ECH 引擎状态 + CookieManager 摘要 + crash.log +
      * 落盘 trace（含上次会话）+ 本会话内存缓冲。调用方应放在非主线程（CoDiagModule 桥线程）。
      */
     fun snapshotText(): String {
@@ -211,33 +211,14 @@ object Diagnostics {
             val proxy = Settings.Global.getString(ctx.contentResolver, "http_proxy")
             sb.append("系统代理(global http_proxy): ").append(proxy ?: "(未设置)").append('\n')
         }
-        runCatching {
-            val st = com.co3.ech.EchProxyCore.lastStatus()
-            sb.append("Go ECH proxy status: ").append(if (st.isBlank()) "(no handshake yet)" else st).append('\n')
-        }
-        runCatching {
-            // Go 侧详细事件（解析 IP / ECH 来源 / 竞速 / 拉黑 / 切换 / reresolve）。
-            val logs = com.co3.ech.EchProxyCore.drainLogs()
-            sb.append("\n----- Go proxy 内部日志 -----\n")
-            sb.append(if (logs.isBlank()) "(空)" else logs).append('\n')
-        }
-        sb.append("LocalEchProxy: ").append(
-            if (com.co3.ech.LocalEchProxy.isRunning)
-                "running on 127.0.0.1:${com.co3.ech.LocalEchProxy.port}"
-            else "NOT running"
-        ).append('\n')
         // ech_http 原生引擎（去 Dart 化后的 C++ 桥）是否随包投放且能加载。
         // 本阶段它只提供门面、尚未接管任何请求，用于真机确认 .so 正常加载。
         runCatching {
             sb.append("ech_http 引擎: ").append(
                 if (com.co3.ech.EchHttpNative.isAvailable)
-                    "${com.co3.ech.EchHttpNative.version}（已加载，未接管请求）"
+                    "${com.co3.ech.EchHttpNative.version}（Android 已接管请求）"
                 else "不可用（libco3ech.so 未加载）"
             ).append('\n')
-        }
-        runCatching {
-            val jar = com.co3.ech.EchProxyCore.jarInfo()
-            sb.append("ECH cookie jar: ").append(if (jar.isBlank()) "(empty)" else jar.take(600).replace("\n", " | ")).append('\n')
         }
 
         sb.append("\n----- crash.log -----\n")

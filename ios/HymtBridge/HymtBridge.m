@@ -6,7 +6,7 @@
 //  注册表在编译期由 ObjC 宏 RCT_EXTERN_MODULE 填充。少了这个文件，App 能正常编译、
 //  xcframework 也能链接，但运行时 `NativeModules.Hymt` 是 undefined，
 //  deviceTranslate.js 里 `if (!Hymt) return false` 会静默返回 ——
-//  表现为"iOS 上本机 AI 永远不可用"（ECH 那边踩过同样的坑，见 EchProxyBridge.m）。
+//  表现为"iOS 上本机 AI 永远不可用"。
 //
 //  方法签名必须与 HymtModule.swift 的 @objc(...) 选择器逐字对应。
 //

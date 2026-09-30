@@ -18,7 +18,7 @@ import React
 // `RCT_EXTERN_REMAP_MODULE(Hymt, HymtModule, RCTEventEmitter)` 第一个参数才是 JS 侧名字（Hymt），
 // 第二个参数是它要链接的 ObjC 类名。之前写成 @objc(Hymt) 导致符号名不匹配 ——
 // 链接期报 `_OBJC_CLASS_$_HymtModule` undefined，而 Xcode 只把它报成"符号缺失"，看不出是名字写错。
-// 对照：EchProxyModule.swift 写的是 @objc(EchProxyModule)，与它的 .m 一致，所以那个桥能链上。
+// 对照：桥的 @objc 名必须与 .m 里 RCT_EXTERN_MODULE 的名字完全一致，否则链不上。
 @objc(HymtModule)
 class HymtModule: RCTEventEmitter {
 

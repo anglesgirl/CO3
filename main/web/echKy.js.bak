@@ -1,5 +1,5 @@
 // echKy: a drop-in `ky` instance that routes archiveofourown.org traffic through
-// the in-process ech_http engine (native module `EchHttp`). Both platforms.
+// the on-device ECH proxy (native module `EchProxy`, backed by the gomobile AAR).
 //
 // The proxy listens on http://127.0.0.1:<port> and re-originates each request to
 // https://archiveofourown.org over a TLS handshake whose SNI is hidden with ECH.
@@ -66,6 +66,10 @@ const IP_KEY = 'ech_ip';
 // Set once the user edits DoH/IP by hand — remote config must not clobber that.
 // Last remote values we applied, so we only restart when they actually change.
 
+let echBasePromise = null; // Promise<string|null> — memoised
+// 代理是否已成功启动（startProxy resolve 后 true）。区别于 echBasePromise
+let echBaseReady = false;
+
 // Returns the configured DoH endpoint. Unset -> default. Empty string means the
 // user explicitly disabled DoH (proxy will use its baked-in config + retry_configs).
 export async function getDoh() {
@@ -106,18 +110,170 @@ export async function getCustomIPs() {
   }
 }
 
-// Go 本地代理已从两端移除（Android 与 iOS 都由进程内 ech_http 引擎承担）。
-// 保留 getLastStartError 供诊断页复用 —— 现在不存在"代理启动失败"这回事。
-const lastStartError = null;
+let lastStartAttempt = 0;  // 上次启动尝试时间戳(ms)，用于失败后冷却重试
+const START_RETRY_COOLDOWN_MS = 30_000; // 启动失败后 30 秒内不重复尝试，之后惰性重试
+// 记住首次启动失败的原因。initEch() 在模块导入时就跑（App 启动瞬间），
+// 那时用户还没打开调试日志 → 原因丢失，之后只剩"proxy unavailable"这种
+// 无从下手的下游日志。存下来让调试页/后续日志能报出真正的根因。
+let lastStartError = null;
+let startAttempts = 0;
 
 export function getLastStartError() {
   return lastStartError;
 }
 
+// 代理是否处于"启动失败需重试"状态。失败后返回 false，冷却期过后返回 true。
+// 例外：上次失败是 "already running"（原生代理其实活着，只是 JS 丢了端口）
+// 时不进冷却——那种情况重试一次就能拿回端口，罚 30 秒等待毫无意义。
+function shouldRetryStart() {
+  if (lastStartError && /already running/i.test(lastStartError)) return true;
+  return Date.now() - lastStartAttempt >= START_RETRY_COOLDOWN_MS;
+}
+
+// ⚠️ 这里以前有个「远程配置就绪 gate」：启动代理前先等远程 TXT 下发
+// （历史上限时 6–8s），好让首次启动就用上远程下发的优选 IP。
+// 远程 TXT 下发**已永久移除**（用户明确要求，勿加回），gate 随之删除 ——
+// 代理启动不再等待任何网络请求，直接用本地存储/内置配置起，启动更快。
+// 需要改 DoH/IP 时走 app 内设置项（setDoh / setCustomIPs）。
+
+
+function startProxy() {
+  lastStartAttempt = Date.now();
+  startAttempts += 1;
+  echBasePromise = (async () => {
+    const mod = NativeModules.EchProxy;
+    if (!mod || typeof mod.start !== 'function') {
+      // 原来这里静默 return null，iOS 上桥没注册时完全看不出问题（页面直接
+      // 走兜底/失败），排查了很久。现在明确打日志 + 上报事件 + 记住原因。
+      const available = Object.keys(NativeModules || {}).length;
+      lastStartError =
+        `native module unavailable on ${Platform.OS} ` +
+        `(EchProxy=${mod ? 'present-but-no-start()' : 'undefined'}, ${available} native modules registered). ` +
+        (Platform.OS === 'ios'
+          ? 'iOS: EchProxyBridge.m 的 RCT_EXTERN_REMAP_MODULE 注册没生效。'
+          : 'Android: EchProxyPackage 是否加入 getPackages()。');
+      rlog('proxy_unavailable', { platform: Platform.OS, detail: lastStartError });
+      console.warn(`[ECH] ${lastStartError}`);
+      return null;
+    }
+    // t0 必须在 try 外面：原来声明在 try 里，catch 块又引用 t0 计算耗时，
+    // 一旦 start 抛错就会变成 ReferenceError（把真正的失败原因吃掉）。
+    const t0 = Date.now();
+    try {
+      const doh = (await getDohCandidates()).join(',');
+      const ips = await getCustomIPs();
+      console.log(`[ECH] starting proxy (attempt ${startAttempts}, doh=${doh || '(none)'}, ip=${ips || '(dns)'})`);
+      rlog('proxy_start_begin', {
+        attempt: startAttempts,
+        hasDoh: !!doh,
+        hasIp: !!ips,
+        doh,
+        ips,
+      });
+      const port = await mod.start(0, doh, ips); // 0 = auto-pick a free port
+      const base = `http://127.0.0.1:${port}`;
+      const ms = Date.now() - t0;
+      console.log(`[ECH] proxy started on ${base} in ${ms}ms`);
+      lastStartError = null;
+      echBaseReady = true;
+      trackEvent('ech_proxy_start', { ok: true, ms });
+      rlog('proxy_start_ok', { port, ms, hasDoh: !!doh, hasIp: !!ips, doh, ips });
+      try {
+        const st = await mod.status();
+        rlog('native_status_after_start', { phase: 'after_start', status: String(st ?? '') });
+      } catch (e) {
+        rlog('native_status_query_fail', { error: String(e?.message ?? e).slice(0, 200) });
+      }
+      return base;
+    } catch (e) {
+      const ms = Date.now() - t0;
+      lastStartError = `start() failed after ${ms}ms: ${e?.message ?? e}`;
+      console.warn(`[ECH] proxy failed to start in ${ms}ms:`, e?.message ?? e);
+      trackEvent('ech_proxy_start', {
+        ok: false,
+        ms,
+        error: String(e?.message ?? e).slice(0, 120),
+      });
+      // 失败不永久 memoise：置空并清掉 promise，让下次请求走 shouldRetryStart 冷却后重试。
+      // 否则一次失败(DoH 抖动/被墙)会让整个 App 会话永久断网。
+      echBaseReady = false;
+      echBasePromise = null;
+      rlog('proxy_start_fail', { attempt: startAttempts, ms, error: String(e?.message ?? e).slice(0, 300) });
+      return null;
+    }
+  })();
+  return echBasePromise;
+}
+
 export function getEchBase() {
-  // 引擎不监听端口，没有本地代理地址。'engine' 是"就绪"标记，
-  // 调用方据此判断可用，而不是去拼 URL。
-  return Promise.resolve('engine');
+  // Android：请求已全部走 ech_http 引擎（原生桥 EchHttp），没有本地代理地址了。
+  // 返回 'engine' 作为就绪标记，调用方据此判断「可用」而不去拼 URL。
+  if (engineAvailable()) return Promise.resolve('engine');
+  if (echBasePromise) return echBasePromise;
+  if (shouldRetryStart()) return startProxy();
+  // 冷却期内不重复启动，返回一个立即失败的 promise（调用方会走 WebView 兜底）。
+  // 打出上次失败原因——否则日志里只有一串 "proxy unavailable"，看不到根因
+  // （首次失败发生在 App 启动瞬间，用户往往还没开调试日志）。
+  console.log(
+    `[ECH] proxy in cooldown (${Math.round((START_RETRY_COOLDOWN_MS - (Date.now() - lastStartAttempt)) / 1000)}s left). ` +
+    `last error: ${lastStartError ?? '(unknown)'}`,
+  );
+  return Promise.resolve(null);
+}
+
+// ---- 原生侧日志回收（iOS 的 Go 代理）----
+//
+// 为什么需要：Go 的 log.Printf 只进 Xcode console。iOS 是侧载测试（未签名
+// IPA），测试者拿不到 console，于是每次排查都要"麻烦别人导出日志"。原生侧
+// 现在把关键事件留在 ring buffer（echproxy.DrainLogs），这里定时取走并走
+// remoteLog 的统一上报通路 —— 复用它的队列/限流/脱敏，不另造一套。
+//
+// 冷启动那批（DoH 解析失败、host ready、dial 失败）最关键，所以启动时立刻
+// 拉一次，不能只等定时器 —— 否则最关键的一段会被"5 秒后才开始收"漏掉。
+const NATIVE_LOG_CHUNK = 360;   // remoteLog 单字段上限 400，留余量避免被静默截断
+const NATIVE_LOG_INTERVAL_MS = 5000;
+
+async function drainNativeLogs() {
+  // Android：没有 Go 代理了（引擎不产这类日志），直接跳过。
+  if (engineAvailable()) return;
+  let raw;
+  try {
+    const mod = NativeModules.EchProxy;
+    if (!mod || typeof mod.drainLogs !== 'function') return;
+    // Swift 桥是 RCTPromise（同 status()），必须 await —— 同步取值会拿到 Promise 对象
+    raw = await mod.drainLogs();
+  } catch {
+    return; // 原生侧不可用绝不能影响主流程
+  }
+  // 原生侧刻意返回换行分隔的 string 而非数组：gomobile 导出 []string 不可靠
+  // （实测会让 EchproxyDrainLogs 符号缺失，iOS 直接编译不过）。
+  if (typeof raw !== 'string' || raw.length === 0) return;
+  const lines = raw.split('\n');
+
+  // 按字符预算切块（块内多行）。超长字符串会被 remoteLog 静默截断，
+  // 截掉的往往正是后半段的关键错误，所以主动切。
+  const chunks = [];
+  let buf = '';
+  for (const line of lines) {
+    const t = String(line ?? '').trim();
+    if (!t) continue;
+    if (buf && buf.length + t.length + 1 > NATIVE_LOG_CHUNK) {
+      chunks.push(buf);
+      buf = '';
+    }
+    buf = buf ? `${buf}\n${t}` : t;
+  }
+  if (buf) chunks.push(buf);
+
+  // 只报最新几块：队列上限 40、限流 1200ms，报太多会把其他诊断挤掉
+  chunks.slice(-6).forEach((c, i) => rlog('native_log', { i, n: chunks.length, lines: c }));
+}
+
+let nativeLogTimer = null;
+function startNativeLogDrain() {
+  if (nativeLogTimer) return; // initEch 可能被多处 import 触发，只允许起一个
+  drainNativeLogs();          // 立刻拉一次：冷启动那批最关键
+  nativeLogTimer = setInterval(drainNativeLogs, NATIVE_LOG_INTERVAL_MS);
 }
 
 // Eagerly warm up the proxy so it's ready before the first AO3 request.
@@ -127,9 +283,10 @@ export function initEch() {
     osVersion: String(Platform.Version ?? ''),
     dohDefault: DEFAULT_DOH,
   });
+  startNativeLogDrain();
   pushDohConfigToNative();
   // 只在没有进行中的启动时才触发，避免 App 启动瞬间多处 import 同时
-  // 调用造成并发请求（引擎侧会返回已经在处理，
+  // 调用造成并发 start()（原生侧会抛 "echproxy already running"，
   // JS 侧则丢掉端口 → 之后 30s 冷却里全部请求 fail-closed。
   // 2026-08-11 iOS 真机日志实测到这个竞态）。
   // Android：请求全部走 ech_http 引擎，不再启动本地 Go 代理（引擎不监听端口，
@@ -280,11 +437,10 @@ async function echEngineFetch(req) {
   };
 }
 
-// 引擎是否可用。**Android 与 iOS 共用同一条引擎路线**（ech_http 全平台支持），
-// 不再存在"某个平台走 Go 本地代理"的分支。
+// 引擎是否可用（Android 且桥已注册）。iOS 仍是 Go 代理，不走这里。
 function engineAvailable() {
   const mod = NativeModules.EchHttp;
-  return !!mod && typeof mod.request === 'function';
+  return Platform.OS === 'android' && !!mod && typeof mod.request === 'function';
 }
 
 // echFetch sends a request for ANY HTTPS host; ECH applies when the target
@@ -335,13 +491,35 @@ export async function getEchStatus() {
       }
     }
   }
-  // 引擎桥没注册时如实说明 —— 已不存在"退回 Go 本地代理"这条分支。
-  return `unavailable: EchHttp 引擎桥未注册（当前注册 ${Object.keys(NativeModules || {}).length} 个原生模块）`;
+  const mod = NativeModules.EchProxy;
+  if (!mod || typeof mod.status !== 'function') {
+    // 明确区分"桥没注册"和"原生报错"，别都返回 unavailable 让人猜。
+    const names = Object.keys(NativeModules || {});
+    return (
+      `unavailable: EchProxy native module not registered on ${Platform.OS} ` +
+      `(${names.length} modules; EchProxy=${mod ? 'present-but-no-status()' : 'undefined'})` +
+      (lastStartError ? `\nlast start error: ${lastStartError}` : '')
+    );
+  }
+  try {
+    return await mod.status();
+  } catch (e) {
+    return `error: ${e?.message ?? e}`;
+  }
 }
 
-// 配置变更不需要"重启代理"：引擎每次请求都实时读取原生那份 DoH。
+// Restart the proxy so new settings take effect.
 async function restartProxy() {
-  return 'engine';
+  // Android：引擎不监听端口，没有「重启代理」这回事。配置变更由
+  // pushDohConfigToNative() 更新原生那份 DoH 即可（每次请求实时读取）。
+  if (engineAvailable()) return 'engine';
+  const mod = NativeModules.EchProxy;
+  try {
+    if (mod?.stop) await mod.stop();
+  } catch {}
+  echBasePromise = null;
+  echBaseReady = false;
+  return startProxy();
 }
 
 // Clear all cookies held by the proxy's in-memory cookie jar. The jar is
@@ -370,8 +548,28 @@ export async function clearSessionCookies() {
     if (ehttp && typeof ehttp.clearCookies === 'function') return ehttp.clearCookies(true);
     return null;
   }
-  // 引擎桥不可用：如实返回 null，不假装清成功（调用方据返回值判断）。
-  return null;
+  const mod = NativeModules.EchProxy;
+  if (mod && typeof mod.clearSessionCookies === 'function') {
+    try {
+      // 诊断:打印清前 jar 内容,确认 session 是否真的存在/删得掉。
+      if (typeof mod.jarInfo === 'function') {
+        try {
+          console.log(`[ECH] jar BEFORE clearSessionCookies:\n${await mod.jarInfo()}`);
+        } catch (e) {}
+      }
+      await mod.clearSessionCookies();
+      if (typeof mod.jarInfo === 'function') {
+        try {
+          console.log(`[ECH] jar AFTER clearSessionCookies:\n${await mod.jarInfo()}`);
+        } catch (e) {}
+      }
+      return;
+    } catch (e) {
+      console.warn('[ECH] native clearSessionCookies failed:', e?.message ?? e);
+    }
+  }
+  // 原生不支持时回退:重启代理(会丢 cf_clearance,但至少能清 session)。
+  await restartProxy();
 }
 
 // Change the DoH endpoint and restart the proxy with it. Pass '' to disable DoH.
@@ -412,7 +610,14 @@ export async function getJarInfo() {
       }
     }
   }
-  return null;
+  const mod = NativeModules.EchProxy;
+  if (!mod || typeof mod.jarInfo !== 'function') return null;
+  try {
+    return await mod.jarInfo();
+  } catch (e) {
+    console.warn('[ECH] jarInfo failed:', e?.message ?? e);
+    return null;
+  }
 }
 
 
@@ -426,17 +631,18 @@ export async function getJarInfo() {
 // the built-in default) for the lookup, so it works even with poisoned DNS.
 
 const echKy = ky.create({
-  // 请求转发全部交给 echFetch：两端都走进程内 ech_http 引擎（原始 https URL +
-  // 进程内 ECH），没有本地端口。原来那个把 URL 改写成 127.0.0.1 的
+  // 请求转发全部交给 echFetch：Android 走 ech_http 引擎（原始 https URL +
+  // 进程内 ECH），iOS 走本地 Go 代理。原来那个把 URL 改写成 127.0.0.1 的
   // beforeRequest hook 已删除 —— 引擎不监听端口，改写反而会绕过 ECH。
   // 不要 String(input)：ky 传的是 Request 对象，String() 会得到
   // "[object Request]" 从而绕过域名判定。echFetch 内部自行规范化。
   fetch: (input, init) => echFetch(input, init || {}),
   // Generous timeout: the first request may have to bootstrap the ECH handshake.
   timeout: 30000,
-  // AO3 的 session cookie 只有一份权威来源：原生 CookieManager。引擎零 cookie
-  // 代码，cookie 由 shouldInterceptRequest / 引擎请求两侧统一交给它保管。
-  // credentials:'omit' 让 RN fetch 层不去掺一脚，避免出现第二份 cookie。
+  // AO3 的 session cookie 由 Go 代理的 cookiejar 统一管理。RN fetch 层
+  // (Android OkHttp java.net.CookieManager) 会把 127.0.0.1 的 Set-Cookie 也存
+  // 一份, 登出/清 jar 清不掉它 → 重试登录仍带旧 cookie ("already logged in")。
+  // credentials:'omit' 让 RN 层完全不碰 cookie, 全部交给代理 jar。
   credentials: 'omit',
   hooks: {
     // beforeRequest 的 URL 改写已删除：转发逻辑统一在 echFetch（Android 引擎 /

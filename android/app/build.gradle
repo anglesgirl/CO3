@@ -103,9 +103,8 @@ dependencies {
     implementation "androidx.lifecycle:lifecycle-process:2.11.0"
     // FileProvider：诊断日志分享导出用
     implementation "androidx.core:core:1.13.1"
-    // Go ECH 代理（同进程内嵌）：ech/echproxy.go 由 CI 的 gomobile 步骤
-    // bind 生成 android/app/libs/echproxy.aar（见 android-build.yml）
-    implementation files('libs/echproxy.aar')
+    // Go ECH 代理已从 Android 侧移除：改用进程内 ech_http C++ 引擎
+    // （app/src/main/cpp + com.co3.ech.EchHttpNative），不再打包 Go 的 aar。
 
     // Firebase Analytics 改走 @react-native-firebase（npm），版本由它自己管理，
     // 这里不再手写 platform/analytics（会与 RNFB 的版本打架）。google-services

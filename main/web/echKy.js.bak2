@@ -1,5 +1,5 @@
 // echKy: a drop-in `ky` instance that routes archiveofourown.org traffic through
-// the in-process ech_http engine (native module `EchHttp`). Both platforms.
+// the on-device ECH proxy (native module `EchProxy`, backed by the gomobile AAR).
 //
 // The proxy listens on http://127.0.0.1:<port> and re-originates each request to
 // https://archiveofourown.org over a TLS handshake whose SNI is hidden with ECH.
@@ -129,7 +129,7 @@ export function initEch() {
   });
   pushDohConfigToNative();
   // 只在没有进行中的启动时才触发，避免 App 启动瞬间多处 import 同时
-  // 调用造成并发请求（引擎侧会返回已经在处理，
+  // 调用造成并发 start()（原生侧会抛 "echproxy already running"，
   // JS 侧则丢掉端口 → 之后 30s 冷却里全部请求 fail-closed。
   // 2026-08-11 iOS 真机日志实测到这个竞态）。
   // Android：请求全部走 ech_http 引擎，不再启动本地 Go 代理（引擎不监听端口，
@@ -335,8 +335,21 @@ export async function getEchStatus() {
       }
     }
   }
-  // 引擎桥没注册时如实说明 —— 已不存在"退回 Go 本地代理"这条分支。
-  return `unavailable: EchHttp 引擎桥未注册（当前注册 ${Object.keys(NativeModules || {}).length} 个原生模块）`;
+  const mod = NativeModules.EchProxy;
+  if (!mod || typeof mod.status !== 'function') {
+    // 明确区分"桥没注册"和"原生报错"，别都返回 unavailable 让人猜。
+    const names = Object.keys(NativeModules || {});
+    return (
+      `unavailable: EchProxy native module not registered on ${Platform.OS} ` +
+      `(${names.length} modules; EchProxy=${mod ? 'present-but-no-status()' : 'undefined'})` +
+      (lastStartError ? `\nlast start error: ${lastStartError}` : '')
+    );
+  }
+  try {
+    return await mod.status();
+  } catch (e) {
+    return `error: ${e?.message ?? e}`;
+  }
 }
 
 // 配置变更不需要"重启代理"：引擎每次请求都实时读取原生那份 DoH。
@@ -370,8 +383,28 @@ export async function clearSessionCookies() {
     if (ehttp && typeof ehttp.clearCookies === 'function') return ehttp.clearCookies(true);
     return null;
   }
-  // 引擎桥不可用：如实返回 null，不假装清成功（调用方据返回值判断）。
-  return null;
+  const mod = NativeModules.EchProxy;
+  if (mod && typeof mod.clearSessionCookies === 'function') {
+    try {
+      // 诊断:打印清前 jar 内容,确认 session 是否真的存在/删得掉。
+      if (typeof mod.jarInfo === 'function') {
+        try {
+          console.log(`[ECH] jar BEFORE clearSessionCookies:\n${await mod.jarInfo()}`);
+        } catch (e) {}
+      }
+      await mod.clearSessionCookies();
+      if (typeof mod.jarInfo === 'function') {
+        try {
+          console.log(`[ECH] jar AFTER clearSessionCookies:\n${await mod.jarInfo()}`);
+        } catch (e) {}
+      }
+      return;
+    } catch (e) {
+      console.warn('[ECH] native clearSessionCookies failed:', e?.message ?? e);
+    }
+  }
+  // 原生不支持时回退:重启代理(会丢 cf_clearance,但至少能清 session)。
+  await restartProxy();
 }
 
 // Change the DoH endpoint and restart the proxy with it. Pass '' to disable DoH.
@@ -426,17 +459,18 @@ export async function getJarInfo() {
 // the built-in default) for the lookup, so it works even with poisoned DNS.
 
 const echKy = ky.create({
-  // 请求转发全部交给 echFetch：两端都走进程内 ech_http 引擎（原始 https URL +
-  // 进程内 ECH），没有本地端口。原来那个把 URL 改写成 127.0.0.1 的
+  // 请求转发全部交给 echFetch：Android 走 ech_http 引擎（原始 https URL +
+  // 进程内 ECH），iOS 走本地 Go 代理。原来那个把 URL 改写成 127.0.0.1 的
   // beforeRequest hook 已删除 —— 引擎不监听端口，改写反而会绕过 ECH。
   // 不要 String(input)：ky 传的是 Request 对象，String() 会得到
   // "[object Request]" 从而绕过域名判定。echFetch 内部自行规范化。
   fetch: (input, init) => echFetch(input, init || {}),
   // Generous timeout: the first request may have to bootstrap the ECH handshake.
   timeout: 30000,
-  // AO3 的 session cookie 只有一份权威来源：原生 CookieManager。引擎零 cookie
-  // 代码，cookie 由 shouldInterceptRequest / 引擎请求两侧统一交给它保管。
-  // credentials:'omit' 让 RN fetch 层不去掺一脚，避免出现第二份 cookie。
+  // AO3 的 session cookie 由 Go 代理的 cookiejar 统一管理。RN fetch 层
+  // (Android OkHttp java.net.CookieManager) 会把 127.0.0.1 的 Set-Cookie 也存
+  // 一份, 登出/清 jar 清不掉它 → 重试登录仍带旧 cookie ("already logged in")。
+  // credentials:'omit' 让 RN 层完全不碰 cookie, 全部交给代理 jar。
   credentials: 'omit',
   hooks: {
     // beforeRequest 的 URL 改写已删除：转发逻辑统一在 echFetch（Android 引擎 /
