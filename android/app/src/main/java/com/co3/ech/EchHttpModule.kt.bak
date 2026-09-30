@@ -181,24 +181,6 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
                 )
                 val dohMs = System.currentTimeMillis() - t0
 
-                // ① 注入 CookieManager 的 cookie —— 这一步不能省。
-                //    JS 侧（echEngineFetch）刻意把 cookie 交给"原生侧统一注入"，
-                //    但这里一直没实现，导致 JS 路径全是匿名请求：AO3 认不出会话，
-                //    也更容易被 CF 拦。真机实证：同样走引擎，WebView 那条因为带了
-                //    cookie 大量 200，而这条 /works 持续 525。
-                val cookieHeader = runCatching {
-                    android.webkit.CookieManager.getInstance().getCookie(url)
-                }.getOrNull().orEmpty()
-                val effectiveHeaders = if (
-                    cookieHeader.isNotEmpty() &&
-                    !headers.lineSequence().any { it.startsWith("Cookie:", ignoreCase = true) }
-                ) {
-                    if (headers.isEmpty()) "Cookie: $cookieHeader"
-                    else headers + "\r\nCookie: $cookieHeader"
-                } else {
-                    headers
-                }
-
                 // 逐个尝试候选地址：国内到不同 CF IP 段可达性差异极大，
                 // 只试第一个（旧写法）会时不时整条链路失败。总预算按候选数均分。
                 val bodyBytes = body.takeIf { it.isNotEmpty() }?.toByteArray(Charsets.UTF_8)
@@ -213,7 +195,7 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
                         val r = EchHttpNative.request(
                             url = url,
                             method = method.ifBlank { "GET" },
-                            headers = effectiveHeaders,
+                            headers = headers,
                             // POST 表单等；GET 时 JS 传空串 → null（引擎按无请求体处理）
                             body = bodyBytes,
                             echConfig = route.echConfig,
@@ -230,28 +212,6 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
                         lastErr = e
                     }
                     Log.w(LOG_TAG, "候选地址 $ip 失败，尝试下一个")
-                }
-
-                // ② Set-Cookie 写回 CookieManager —— 否则 JS 路径拿到的会话
-                //    cookie 只活在这次响应里，下个请求又是匿名的。
-                runCatching {
-                    val cm = android.webkit.CookieManager.getInstance()
-                    result.headers.split("\r\n", "\n").forEach { line ->
-                        val idx = line.indexOf(':')
-                        if (idx <= 0) return@forEach
-                        if (!line.substring(0, idx).trim().equals("Set-Cookie", true)) return@forEach
-                        var fixed = line.substring(idx + 1).trim()
-                        fixed = fixed.replace(Regex(";\\s*Domain=[^;]+", RegexOption.IGNORE_CASE), "")
-                        fixed = fixed.replace(Regex(";\\s*Secure", RegexOption.IGNORE_CASE), "")
-                        fixed = fixed.replace(Regex(";\\s*SameSite=[^;]+", RegexOption.IGNORE_CASE), "; SameSite=Lax")
-                        cm.setCookie(url, fixed)
-                        if (line.contains("user_credentials") || line.contains("_otwarchive_session")) {
-                            runCatching { cm.setCookie("https://archiveofourown.org/", fixed) }
-                        }
-                    }
-                    cm.flush()
-                }.onFailure {
-                    com.co3.Diagnostics.event("js_cookie_writeback_fail", mapOf("err" to (it.message ?: "")))
                 }
 
                 if (result == null) {
