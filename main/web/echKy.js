@@ -16,6 +16,12 @@ const AO3_HOSTS = new Set(['archiveofourown.org', 'www.archiveofourown.org']);
 // Default DoH endpoint (JSON API) used to fetch AO3's current ech= record.
 // A reachable DoH is important behind the GFW — dns.google is usually blocked,
 // which is why the default is a Cloudflare Gateway endpoint. User-overridable.
+// AO3 请求必须带 User-Agent：CF 会直接 403 掉空 UA 的请求（引擎自检曾经
+// 就是因此显示 403，而不是引擎有问题）。
+export const AO3_UA =
+  'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) ' +
+  'Chrome/120.0.0.0 Mobile Safari/537.36';
+
 export const DEFAULT_DOH = 'https://pieqllv9i7.cloudflare-gateway.com/dns-query';
 export const DEFAULT_DOH_FALLBACKS = [
   DEFAULT_DOH,
@@ -652,7 +658,10 @@ export async function echSelfTest() {
   }
   const t0 = Date.now();
   try {
-    const res = await echKy.get('https://archiveofourown.org/', { timeout: 30000 });
+    const res = await echKy.get('https://archiveofourown.org/', {
+      timeout: 30000,
+      headers: { 'User-Agent': AO3_UA },
+    });
     const ms = Date.now() - t0;
     const status = await getEchStatus();
     trackEvent('ech_self_test', { ok: true, ms, http: res.status });

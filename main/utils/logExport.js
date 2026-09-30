@@ -10,7 +10,7 @@
  * 导出时一并带上 —— 重启后 JS 日志丢失但原生 trace 已落盘，两头互补。
  */
 import { NativeModules, Platform } from 'react-native';
-import { getDoh, getCustomIPs, getLastStartError, getEchStatus, getJarInfo, getDohCandidates } from '../web/echKy';
+import { getDoh, getCustomIPs, getLastStartError, getEchStatus, getJarInfo, getDohCandidates, AO3_UA } from '../web/echKy';
 import { ao3Text } from '../web/ao3Transport';
 import { remoteLogStats } from './remoteLog';
 
@@ -120,7 +120,19 @@ export async function buildDiagnosticText() {
 
     t = Date.now();
     try {
-      const r = await eh.request('https://archiveofourown.org/', 'GET', '', dohList, ipList, '', 15000);
+      // ⚠️ 参数顺序必须与 EchHttpModule.request 严格一致（RN 桥按位置绑定，
+      // 少一个就报 "called with 7 arguments (expected 8)"）：
+      // url, method, headers, body, doh, connectIp, configHost, timeoutMs
+      const r = await eh.request(
+        'https://archiveofourown.org/',
+        'GET',
+        `User-Agent: ${AO3_UA}\r\nAccept: text/html`,
+        '', // body：GET 无请求体
+        dohList,
+        ipList,
+        '',
+        15000,
+      );
       parts.push(
         `② 引擎请求: HTTP ${r.status} ${Date.now() - t}ms echAccepted=${r.echAccepted} ` +
         `重试=${r.echRetries} 连到=${r.connectIp} DoH耗时=${r.dohMs}ms body=${(r.body || '').length}B`,
