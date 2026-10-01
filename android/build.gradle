@@ -1,7 +1,8 @@
 buildscript {
     ext {
         buildToolsVersion = "35.0.0"
-        minSdkVersion = 24
+        // 26：kathttp3-ech（H3+ECH 引擎）要求 minSdk 26
+        minSdkVersion = 26
         compileSdkVersion = 36
         targetSdkVersion = 35
         ndkVersion = "27.1.12297006"
