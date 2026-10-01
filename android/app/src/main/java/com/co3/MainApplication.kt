@@ -64,11 +64,22 @@ class MainApplication : Application(), ReactApplication {
     // （2026-09-11 真机实测：java.lang.NullPointerException at ReactImageManager.createViewInstance）。
     loadReactNative(this)
 
-    // 不在冷启动阶段主动访问网关或解析 AO3。
-    // 之前的后台预热会触发 5～11 秒的网关校验/目标 DoH，占用同一网络资源，
-    // 用户随后点击文章时反而与它争用连接；ECH/IP 已有按需 single-flight 和落盘缓存
-    // （Go 侧 ech-public-config.json 5h TTL，Kotlin 不再维护自己的 ECH 缓存）。
-    com.co3.Diagnostics.trace("boot.prewarm.skip", mapOf("reason" to "按需单航班，避免冷启动争用"))
+    // kathttp3（H3 引擎）冷启动预热：H3 首击冷路径 6~8s（native 初始化 +
+    // DoH 解析 + ECH 配置 + 建 QUIC 会话）会踩业务 8s 超时线，启动后后台
+    // 提前完成，用户点击时走热路径秒开（实测 683ms）。预热在 loadReactNative
+    // 之后（SoLoader 已就绪），低优先级线程 + 延迟 3s，避免与首屏渲染争用。
+    Thread {
+        try {
+            Thread.sleep(3_000)
+            com.co3.ech.EchHttp3Client.warmup()
+            com.co3.Diagnostics.trace("boot.prewarm.h3", mapOf("result" to "ok"))
+        } catch (t: Throwable) {
+            com.co3.Diagnostics.trace("boot.prewarm.h3", mapOf("result" to "fail", "err" to (t.message ?: "")))
+        }
+    }.apply {
+        priority = Thread.MIN_PRIORITY
+        start()
+    }
     com.co3.Diagnostics.flushAsync()
 
     // 【再兜一道】上面那条只保证"不会因为提前加载 native 而跳过 loadReactNative"。

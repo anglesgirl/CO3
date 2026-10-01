@@ -54,6 +54,33 @@ object EchHttp3Client {
         )
     }
 
+    /**
+     * 冷启动预热。真机日志实证：H3 首击冷路径 6~8s（native 初始化 +
+     * DoH 解析 + ECH 配置获取 + 建 QUIC 会话），会踩业务 8s 超时线；
+     * 预热后热路径 <1s（实测 683ms）。启动阶段后台调一次，把冷路径
+     * 提前完成，用户点击时秒开。
+     */
+    fun warmup() {
+        val c = client // 触发 lazy：native 加载 + worker 启动
+        // DoH + ECH 配置冷路径提前完成（EchDohResolver 有 5h 落盘缓存）
+        val cfg = EchDohConfig.load()
+        if (!cfg.isEmpty) {
+            runCatching {
+                EchDohResolver.resolve(
+                    host = "archiveofourown.org",
+                    dohEndpoints = cfg.dohEndpoints,
+                    addressOverrides = cfg.addressOverrides,
+                    configHost = cfg.configHost,
+                )
+            }
+        }
+        // 一次轻量 H3 请求真实建立 QUIC 会话；失败不致命（缓存已热），
+        // 用户点击时按需重试。
+        runCatching {
+            request("https://archiveofourown.org/favicon.ico", "GET", "", null, 8_000)
+        }
+    }
+
     /** 与 [EchHttpNative.request] 同签名；headers 为 \r\n 拼接的原始头。 */
     fun request(
         url: String,
