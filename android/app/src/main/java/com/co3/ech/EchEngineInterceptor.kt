@@ -15,7 +15,7 @@ import java.io.IOException
  * 与 WebView 那条路（CoWebViewHelper）是**同一套分工**：
  *   1. DoH 取 ECH 配置 + 地址（引擎自己不查 DoH）
  *   2. Cookie 交 CookieManager（引擎零 cookie 代码），请求读出、响应写回
- *   3. EchHttpNative.request() 在同进程内完成 TLS + ECH
+ *   3. EchEngineClient.request() 经 Conscrypt+OkHttp 在同进程内完成 TLS + ECH
  *   4. 结果包装回 okhttp3.Response 交给调用方（Fresco / fetch）
  *
  * 为什么不改写 URL 交给本地端口了：引擎不监听端口。改写那套（127.0.0.1:<port>）
@@ -35,8 +35,8 @@ object EchEngineInterceptor {
         // 非保护域：不接管，按原样发出去（否则会把无关故障归因给 ECH）。
         if (!EchHosts.isProtected(host)) return chain.proceed(req)
 
-        if (!EchHttpNative.isAvailable) {
-            throw IOException("引擎不可用（libco3ech.so 未加载）—— fail-closed 不放行明文")
+        if (!ConscryptEch.install()) {
+            throw IOException("Conscrypt 初始化失败 —— fail-closed 不放行明文")
         }
 
         // Cookie：与 WebView 共用 CookieManager

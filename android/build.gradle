@@ -1,7 +1,7 @@
 buildscript {
     ext {
         buildToolsVersion = "35.0.0"
-        // 26：kathttp3-ech（H3+ECH 引擎）要求 minSdk 26
+        // minSdk 26：Conscrypt 2.7 与 OkHttp 4.12 的基线要求
         minSdkVersion = 26
         compileSdkVersion = 36
         targetSdkVersion = 35

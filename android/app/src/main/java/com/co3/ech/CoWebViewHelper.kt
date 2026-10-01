@@ -16,7 +16,7 @@ import java.io.IOException
  *   1. DoH 取 ECH 配置 + 地址（引擎自己不查 DoH，只接受 echConfig / connectIp）
  *   2. Cookie 全交 CookieManager（C++ 侧零 cookie 代码）：
  *      请求从这里读 Cookie，响应里的 Set-Cookie 写回这里
- *   3. EchHttpNative.request() 在同一进程内完成 TLS + ECH
+ *   3. EchEngineClient.request() 经 Conscrypt+OkHttp 在同一进程内完成 TLS + ECH
  *   4. 包装成 WebResourceResponse 交回 WebView
  *
  * 这样一整类问题随之消失：没有端口、没有「代理没起来」、没有「配置没生效」；

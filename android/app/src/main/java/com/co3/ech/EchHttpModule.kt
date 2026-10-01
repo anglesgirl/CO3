@@ -13,7 +13,7 @@ import java.util.concurrent.Executors
 /**
  * RN 桥：`NativeModules.EchHttp`。
  *
- * 把 ech_http 的 C++ 引擎（去 Dart 化后编进 libco3ech.so）暴露给 JS：
+ * 把 Conscrypt ECH 引擎（进程内 OkHttp + BoringSSL，2026-10-02 起替代 kathttp3/H3）暴露给 JS：
  *   request(url, method, headers, doh, connectIp, configHost, timeoutMs) -> Promise<响应>
  *   probeDoh(host, doh, configHost) -> Promise<解析结果>
  *   status() -> Promise<{available, version}>
@@ -22,8 +22,8 @@ import java.util.concurrent.Executors
  * 请求在调用线程上同步完成，不需要 127.0.0.1 转发，也就没有"代理没起来 /
  * 配置没生效 / 端口对不上"这一整类问题。
  *
- * 职责划分（刻意如此）：DoH 解析（[EchDohResolver]）+ 引擎调用（[EchHttpNative]）
- * 都在本模块串起来，JS 侧只负责提供 DoH 端点与优选 IP —— 配置的权威仍是 JS
+ * 职责划分（刻意如此）：DoH（[EchDoh]，直查自有网关）+ 引擎调用（[EchEngineClient]）
+ * 都在本模块串起来，JS 侧只负责提供 DoH 端点 —— 配置的权威仍是 JS
  * （设置页写 AsyncStorage），避免出现"两处配置各说各话"。
  */
 class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBaseJavaModule() {
@@ -61,8 +61,8 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
     fun status(promise: Promise) {
         try {
             val map = Arguments.createMap()
-            map.putBoolean("available", EchHttpNative.isAvailable)
-            map.putString("version", EchHttpNative.version)
+            map.putBoolean("available", ConscryptEch.install())
+            map.putString("version", "conscrypt/" + org.conscrypt.Conscrypt.version())
             promise.resolve(map)
         } catch (e: Exception) {
             promise.reject("ECH_STATUS_FAILED", e.message ?: "unknown", e)
@@ -123,19 +123,17 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
         io.execute {
             try {
                 val t0 = System.currentTimeMillis()
-                val route = EchDohResolver.resolve(
-                    host = host,
-                    dohEndpoints = EchDohResolver.splitEndpoints(doh),
-                    addressOverrides = emptyList(),
-                    configHost = configHost.takeIf { it.isNotBlank() },
-                )
+                // 诊断工具：直查目标域名自己的 HTTPS 记录（网关），不经过借用逻辑
+                val rec = EchDoh.record(host)
+                    ?: throw java.io.IOException("网关未返回 $host 的 HTTPS 记录")
+                val addrs = EchDoh.resolve(host)
                 val map = Arguments.createMap()
                 map.putInt("ms", (System.currentTimeMillis() - t0).toInt())
-                map.putInt("echBytes", route.echConfig.length)
-                map.putString("configHost", route.configHost)
-                map.putString("connectIp", route.addresses.firstOrNull() ?: "")
-                map.putInt("addressCount", route.addresses.size)
-                map.putDouble("ttlSeconds", route.ttlSeconds.toDouble())
+                map.putInt("echBytes", rec.ech?.size ?: 0)
+                map.putString("configHost", host)
+                map.putString("connectIp", addrs.firstOrNull()?.hostAddress ?: "")
+                map.putInt("addressCount", addrs.size)
+                map.putDouble("ttlSeconds", (rec.ttlMs / 1000).toDouble())
                 promise.resolve(map)
             } catch (e: Exception) {
                 promise.reject("ECH_DOH_FAILED", e.message ?: "unknown", e)
@@ -166,8 +164,8 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
         promise: Promise,
     ) {
         io.execute {
-            if (!EchHttpNative.isAvailable) {
-                promise.reject("ECH_ENGINE_UNAVAILABLE", "libco3ech.so 未加载")
+            if (!ConscryptEch.install()) {
+                promise.reject("ECH_ENGINE_UNAVAILABLE", "Conscrypt 初始化失败")
                 return@execute
             }
             val t0 = System.currentTimeMillis()

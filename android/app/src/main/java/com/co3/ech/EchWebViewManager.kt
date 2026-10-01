@@ -20,8 +20,8 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
     override fun getName() = "EchWebView"
 
     /**
-     * 登录 POST 专用客户端：不跟随重定向（302 + Set-Cookie 原样回转发层），
-     * 走本地 Go ECH 代理（回迁 Go 后无 Conscrypt —— ECH 在 Go 侧）。
+     * 登录 POST 经 EchEngineClient（Conscrypt ECH + OkHttp）：不跟随重定向，
+     * 302 + Set-Cookie 原样回转发层处理。
      */
     companion object {
     }

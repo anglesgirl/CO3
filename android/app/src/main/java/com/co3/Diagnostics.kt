@@ -222,13 +222,12 @@ object Diagnostics {
             val proxy = Settings.Global.getString(ctx.contentResolver, "http_proxy")
             sb.append("系统代理(global http_proxy): ").append(proxy ?: "(未设置)").append('\n')
         }
-        // ech_http 原生引擎（去 Dart 化后的 C++ 桥）是否随包投放且能加载。
-        // 本阶段它只提供门面、尚未接管任何请求，用于真机确认 .so 正常加载。
+        // Conscrypt ECH 引擎是否可用（真机诊断用）。
         runCatching {
-            sb.append("ech_http 引擎: ").append(
-                if (com.co3.ech.EchHttpNative.isAvailable)
-                    "${com.co3.ech.EchHttpNative.version}（Android 已接管请求）"
-                else "不可用（libco3ech.so 未加载）"
+            sb.append("ECH 引擎: ").append(
+                if (com.co3.ech.ConscryptEch.install())
+                    "conscrypt/${org.conscrypt.Conscrypt.version()}（Android 已接管请求）"
+                else "不可用（Conscrypt 初始化失败）"
             ).append('\n')
         }
 

@@ -56,6 +56,7 @@ class MainApplication : Application(), ReactApplication {
         android.util.Log.w("CO-ECH", "OkHttp hook failed: " + t.message)
     }
     com.co3.Diagnostics.initialize(this)
+    com.co3.ech.EchState.attach(this)
     ProcessLifecycleOwner.get().lifecycle.addObserver(AppForegroundTracker)
     // ⚠️ 【绝不可在此行之前加载任何 native 库】
     // loadReactNative 里才初始化 SoLoader 与 Fresco。若在它之前调用 native 库（例如 Go aar），
@@ -64,17 +65,17 @@ class MainApplication : Application(), ReactApplication {
     // （2026-09-11 真机实测：java.lang.NullPointerException at ReactImageManager.createViewInstance）。
     loadReactNative(this)
 
-    // kathttp3（H3 引擎）冷启动预热：H3 首击冷路径 6~8s（native 初始化 +
-    // DoH 解析 + ECH 配置 + 建 QUIC 会话）会踩业务超时线，启动后立即后台
-    // 完成，用户点击时走热路径秒开（实测 683ms）。预热在 loadReactNative
-    // 之后（SoLoader 已就绪）。真机日志实证：预热设 3s 延迟时，用户点击
-    // 抢在预热前、lazy 单例被业务请求先初始化，预热形同虚设，故不设延迟。
+    // Conscrypt ECH 冷启动预热：首击冷路径（native 初始化 + 网关 DoH 查 HTTPS 记录）
+    // 会踩业务超时线，启动后立即在后台完成，用户点击时走热路径。
+    // 预热在 loadReactNative 之后（SoLoader 已就绪）。不设延迟 —— 真机日志实证：
+    // 预热设 3s 延迟时用户点击抢在预热前，预热形同虚设。
+    com.co3.ech.EchDoh.prefetch("archiveofourown.org")
     Thread {
         try {
-            com.co3.ech.EchHttp3Client.warmup()
-            com.co3.Diagnostics.trace("boot.prewarm.h3", mapOf("result" to "ok"))
+            val ok = com.co3.ech.ConscryptEch.install()
+            com.co3.Diagnostics.trace("boot.prewarm.conscrypt", mapOf("result" to if (ok) "ok" else "fail"))
         } catch (t: Throwable) {
-            com.co3.Diagnostics.trace("boot.prewarm.h3", mapOf("result" to "fail", "err" to (t.message ?: "")))
+            com.co3.Diagnostics.trace("boot.prewarm.conscrypt", mapOf("result" to "fail", "err" to (t.message ?: "")))
         }
     }.apply {
         priority = Thread.MIN_PRIORITY

@@ -111,17 +111,17 @@ android {
 
 dependencies {
     implementation "com.facebook.react:react-android"
-    // kathttp3-ech：H3+ECH 原生引擎（QUIC/UDP 放行）。CI 独立构建 AAR 放
-    // app/libs/kathttp3-release.aar（见 android-build.yml），AAR 不传递
-    // pom 依赖，coroutines 需 app 显式声明。
-    implementation files('libs/kathttp3-release.aar')
+    // Conscrypt ECH 引擎（2026-10-02 起替代 kathttp3/H3 与 libco3ech.so）：
+    // 纯 Java/Kotlin，无 JNI、无子模块、无 NDK 构建。
+    // conscrypt-android 2.7.0+ 原生支持 ECH（EchOptions / setEchConfigList）。
+    implementation "org.conscrypt:conscrypt-android:2.7.0"
+    // OkHttp 显式声明（RN 也自带，版本由 Gradle 统一仲裁）
+    implementation "com.squareup.okhttp3:okhttp:4.12.0"
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0"
     implementation "androidx.work:work-runtime:2.11.2"
     implementation "androidx.lifecycle:lifecycle-process:2.11.0"
     // FileProvider：诊断日志分享导出用
     implementation "androidx.core:core:1.13.1"
-    // Go ECH 代理已从 Android 侧移除：改用进程内 ech_http C++ 引擎
-    // （app/src/main/cpp + com.co3.ech.EchHttpNative），不再打包 Go 的 aar。
 
     // Firebase Analytics 改走 @react-native-firebase（npm），版本由它自己管理，
     // 这里不再手写 platform/analytics（会与 RNFB 的版本打架）。google-services
