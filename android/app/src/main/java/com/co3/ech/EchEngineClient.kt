@@ -39,8 +39,9 @@ object EchEngineClient {
         if (cfg.isEmpty) throw IOException("尚无 DoH 配置（JS initEch 未落盘）")
 
         // ============ 第一优先：H3（QUIC/UDP，被放行） ============
-        // H3 内部通过 Co3DnsResolver 复用上面的 DoH 结果（地址 + ECH 配置），
-        // 自己处理候选回退；只给它 8s，失败立即回退 H1.1，不让两套吃满预算。
+        // H3 内部用 kathttp3 自带 DohResolver + CO3 网关 DoH 端点解析
+        // （地址 + ECH 配置，见 EchHttp3Client），自己处理候选回退；
+        // 只给它 8s，失败立即回退 H1.1，不让两套吃满预算。
         var h3Error: String? = null
         if (totalTimeoutMs > 8_000L) {
             val h3t0 = System.currentTimeMillis()
