@@ -23,7 +23,8 @@ import java.util.concurrent.TimeUnit
  */
 object EchDohResolver {
     private const val TAG = "CO3-ECHHTTP"
-    private const val DEFAULT_TIMEOUT_MS = 8000L
+    /** 单次 DoH 查询超时：4s 够一个正常往返；并行端点下最坏链=最快端点+2s。 */
+    private const val DEFAULT_TIMEOUT_MS = 4000L
 
     /** CF 侧 ECH 配置约 5 小时轮换，缓存上限与之一致。 */
     private const val MAX_CACHE_AGE_MS = 5L * 60 * 60 * 1000
@@ -89,17 +90,25 @@ object EchDohResolver {
         val borrowed = configHost?.lowercase()?.takeIf { it.isNotEmpty() && it != target }
         val queryHost = borrowed ?: target
 
-        var lastError: Exception? = null
-        for (endpoint in endpoints) {
-            try {
-                return resolveVia(endpoint, target, queryHost, borrowed != null, addressOverrides)
-                    .also { cache[target] = Entry(it, System.currentTimeMillis() + it.ttlSeconds * 1000) }
-            } catch (e: Exception) {
-                lastError = e
-                Log.w(TAG, "DoH 解析失败 via $endpoint: ${e.message}")
+        // 多端点并行探测，先到先得：串行时最坏 N×8s（首个端点卡满超时才轮到
+        // 下一个），冷启动首击会因此踩 6~8s；并行把耗时压到"最快端点"水平。
+        val futures = endpoints.map { endpoint ->
+            java.util.concurrent.CompletableFuture.supplyAsync {
+                try {
+                    resolveVia(endpoint, target, queryHost, borrowed != null, addressOverrides)
+                        .also { cache[target] = Entry(it, System.currentTimeMillis() + it.ttlSeconds * 1000) }
+                } catch (e: Exception) {
+                    Log.w(TAG, "DoH 解析失败 via $endpoint: ${e.message}")
+                    null
+                }
             }
         }
-        throw IOException("全部 DoH 端点都失败：${lastError?.message}", lastError)
+        // 逐个取最先成功的（后续端点即使也成功，缓存已被第一个写入）
+        for (f in futures) {
+            val route = try { f.get(2_000, TimeUnit.MILLISECONDS) } catch (e: Exception) { null }
+            if (route != null) return route
+        }
+        throw IOException("全部 DoH 端点都失败（并行探测无成功）", null)
     }
 
     private fun resolveVia(
