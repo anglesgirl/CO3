@@ -59,59 +59,70 @@ object EchEngineClient {
         }
         if (candidates.isEmpty()) throw IOException("DoH 未返回任何地址")
 
-        val perTry = (totalTimeoutMs / candidates.size).coerceAtLeast(3_000L)
+        // perTry 固定 3s：H1.1 ECH 冷握手在移动网络经常瞬时失败（真机日志
+        // totalMs=30033 = 4 候选 × 7.5s 全灭），单地址 7.5s 太慢。3s×4=12s
+        // 一轮出结果，失败立即整轮重试（2 轮 ≤ 24s，不超调用方 30s 预算）。
+        val perTry = 3_000L
         var lastError: Exception? = null
-
-        for ((idx, ip) in candidates.withIndex()) {
-            val t0 = System.currentTimeMillis()
-            try {
-                val resp = EchHttpNative.request(
-                    url = url,
-                    method = method,
-                    headers = headers,
-                    body = body,
-                    echConfig = route.echConfig,
-                    connectIp = ip,
-                    timeoutMs = perTry,
-                )
-                if (resp != null && resp.status != 0) {
-                    if (idx > 0) {
-                        Log.i(TAG, "第 ${idx + 1} 个候选地址可用: $ip（前 ${idx} 个失败）")
-                    }
-                    // 诊断：成功路径带实际连接 IP / echAccepted / 状态码 / 耗时，
-                    // 服务器统计才能区分"哪个 IP 行、哪个 IP 不行"。
-                    com.co3.Diagnostics.event(
-                        "engine_ok",
-                        mapOf(
-                            "host" to host,
-                            "url" to url.take(100),
-                            "ip" to ip,
-                            "echAccepted" to resp.echAccepted.toString(),
-                            "status" to resp.status.toString(),
-                            "attempt" to (idx + 1).toString(),
-                            "totalMs" to (System.currentTimeMillis() - tStart).toString(),
-                            "dohEndpoints" to cfg.dohEndpoints.joinToString("|").take(200),
-                        ),
+        val attemptLog = mutableListOf<String>()
+        for (round in 0 until 2) {
+            for ((idx, ip) in candidates.withIndex()) {
+                val t0 = System.currentTimeMillis()
+                try {
+                    val resp = EchHttpNative.request(
+                        url = url,
+                        method = method,
+                        headers = headers,
+                        body = body,
+                        echConfig = route.echConfig,
+                        connectIp = ip,
+                        timeoutMs = perTry,
                     )
-                    return resp
+                    if (resp != null && resp.status != 0) {
+                        if (idx > 0) {
+                            Log.i(TAG, "第 ${idx + 1} 个候选地址可用: $ip（前 ${idx} 个失败）")
+                        }
+                        // 诊断：成功路径带实际连接 IP / echAccepted / 状态码 / 耗时，
+                        // 服务器统计才能区分"哪个 IP 行、哪个 IP 不行"。
+                        com.co3.Diagnostics.event(
+                            "engine_ok",
+                            mapOf(
+                                "host" to host,
+                                "url" to url.take(100),
+                                "ip" to ip,
+                                "echAccepted" to resp.echAccepted.toString(),
+                                "status" to resp.status.toString(),
+                                "attempt" to (idx + 1).toString(),
+                                "round" to (round + 1).toString(),
+                                "totalMs" to (System.currentTimeMillis() - tStart).toString(),
+                                "dohEndpoints" to cfg.dohEndpoints.joinToString("|").take(200),
+                            ),
+                        )
+                        return resp
+                    }
+                    attemptLog += "$ip:无响应"
+                    lastError = IOException("地址 $ip 未取得响应（ECH 握手失败或被拒绝）")
+                } catch (e: Exception) {
+                    attemptLog += "$ip:${e.message?.take(40) ?: "异常"}"
+                    lastError = e
                 }
-                lastError = IOException("地址 $ip 未取得响应（ECH 握手失败或被拒绝）")
-            } catch (e: Exception) {
-                lastError = e
+                Log.w(
+                    TAG,
+                    "候选地址 $ip 失败（${System.currentTimeMillis() - t0}ms），尝试下一个",
+                )
             }
-            Log.w(
-                TAG,
-                "候选地址 $ip 失败（${System.currentTimeMillis() - t0}ms），尝试下一个",
-            )
+            Log.w(TAG, "第 ${round + 1} 轮候选全灭（${candidates.size} 个），立即整轮重试")
         }
 
-        // 诊断：失败路径上报全部候选 IP 与最终错误 —— 定位"是 IP 不可达还是 ECH 被拒"。
+        // 诊断：失败路径上报全部候选 IP、逐地址失败明细与最终错误 ——
+        // 定位"是 IP 不可达还是 ECH 被拒、哪些地址失败"。
         com.co3.Diagnostics.event(
             "engine_fail",
             mapOf(
                 "host" to host,
                 "url" to url.take(100),
                 "candidates" to candidates.joinToString("|").take(200),
+                "attempts" to attemptLog.joinToString("|").take(300),
                 "err" to (lastError?.message ?: "所有候选地址都失败"),
                 "totalMs" to (System.currentTimeMillis() - tStart).toString(),
             ),

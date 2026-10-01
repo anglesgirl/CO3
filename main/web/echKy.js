@@ -141,16 +141,23 @@ export function initEch() {
   // 请求时才做（移动宽带上首次可卡 30s+，用户日志实证）。这里启动
   // 代理后立即后台预请求 AO3 主页，把整条链路（transportFor 的 DoH
   // 解析 + ECH 配置 + 连接池）全部热起来 —— 用户点浏览时直接秒出。
+  // 2026-10-01 预热失败不再一次放弃：H1.1 ECH 冷握手在移动网络经常
+  // 瞬时失败（真机日志 4 候选 × 7.5s 全灭 30s），2.5s 间隔循环重试，
+  // 通常几秒内撞通 —— 用户点击前把链路热好，"启动直接点必定超时"
+  // 的第一击由预热承担，用户点击时走热连接。
   const warm = async () => {
     try {
       await getEchBase();
-      const t0 = Date.now();
-      try {
-        await echKy.get('https://archiveofourown.org/', { timeout: 20000 }).text();
-        console.log(`[ECH] warm-up complete in ${Date.now() - t0}ms`);
-      } catch (e) {
-        // 预热失败不阻塞：真实请求仍会正常走（只是慢一次）
-        console.log(`[ECH] warm-up request failed in ${Date.now() - t0}ms: ${e?.message ?? e}`);
+      for (let i = 0; i < 6; i += 1) {
+        const t0 = Date.now();
+        try {
+          await echKy.get('https://archiveofourown.org/', { timeout: 15000 }).text();
+          console.log(`[ECH] warm-up complete in ${Date.now() - t0}ms (try ${i + 1})`);
+          return;
+        } catch (e) {
+          console.log(`[ECH] warm-up try ${i + 1} failed in ${Date.now() - t0}ms: ${e?.message ?? e}`);
+          await new Promise((done) => setTimeout(done, 2500));
+        }
       }
     } catch {}
   };
