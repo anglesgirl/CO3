@@ -167,6 +167,9 @@ jobs:
           cd android/kathttp3-ech
           # example 模块配置阶段要求 kathttp3DohUrl 属性（仅校验非空），
           # 传任意值即可；实际只构建 :kathttp3。
+          # kathttp3 默认 compileSdk 37，CO3 app 是 36（AGP 8.12 上限），
+          # 构建前降到 36，避免 AAR 元数据检查失败。
+          sed -i 's/compileSdk = 37/compileSdk = 36/' kathttp3/build.gradle.kts
           ./gradlew :kathttp3:assembleRelease --no-daemon -Pkathttp3DohUrl=https://1.12.12.12/dns-query
           mkdir -p ../app/libs
           cp kathttp3/build/outputs/aar/kathttp3-release.aar ../app/libs/
