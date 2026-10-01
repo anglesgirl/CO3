@@ -82,6 +82,7 @@ object EchHttp3Client {
             headers = headerText,
             body = resp.body,
             echAccepted = true,
+            echRetries = 0, // kathttp3 无应用层重试计数（网络层内部处理）
         )
     }
 }
