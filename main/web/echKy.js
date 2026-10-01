@@ -141,22 +141,26 @@ export function initEch() {
   // 请求时才做（移动宽带上首次可卡 30s+，用户日志实证）。这里启动
   // 代理后立即后台预请求 AO3 主页，把整条链路（transportFor 的 DoH
   // 解析 + ECH 配置 + 连接池）全部热起来 —— 用户点浏览时直接秒出。
-  // 2026-10-01 预热失败不再一次放弃：H1.1 ECH 冷握手在移动网络经常
-  // 瞬时失败（真机日志 4 候选 × 7.5s 全灭 30s），2.5s 间隔循环重试，
-  // 通常几秒内撞通 —— 用户点击前把链路热好，"启动直接点必定超时"
-  // 的第一击由预热承担，用户点击时走热连接。
+  // 2026-10-01 冷启动不通的机制（真机日志 + 用户实测 h2 打不开/h3 通）：
+  // H1.1 ECH 握手（TCP+TLS 带 ECH 的 ClientHello）在移动网络被概率性
+  // 干扰，冷启动第一击连续 4 候选全撞上干扰窗口就 30s 全灭；撞通一次后
+  // libcurl 连接池 keep-alive 保持好连接，之后全通。所以预热**不设次数
+  // 上限**：后台间隔递增重试直到撞通（连接池热起来），用户点击时第一击
+  // 直接复用热连接秒出 —— 把"启动必超时"从用户路径挪到后台预热路径。
   const warm = async () => {
     try {
       await getEchBase();
-      for (let i = 0; i < 6; i += 1) {
+      let delay = 2500;
+      for (let i = 1; ; i += 1) {
         const t0 = Date.now();
         try {
           await echKy.get('https://archiveofourown.org/', { timeout: 15000 }).text();
-          console.log(`[ECH] warm-up complete in ${Date.now() - t0}ms (try ${i + 1})`);
+          console.log(`[ECH] warm-up complete in ${Date.now() - t0}ms (try ${i})`);
           return;
         } catch (e) {
-          console.log(`[ECH] warm-up try ${i + 1} failed in ${Date.now() - t0}ms: ${e?.message ?? e}`);
-          await new Promise((done) => setTimeout(done, 2500));
+          console.log(`[ECH] warm-up try ${i} failed in ${Date.now() - t0}ms: ${e?.message ?? e}`);
+          await new Promise((done) => setTimeout(done, delay));
+          delay = Math.min(delay + 2500, 15000);
         }
       }
     } catch {}
