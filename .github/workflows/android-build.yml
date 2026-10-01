@@ -165,7 +165,9 @@ jobs:
         run: |
           set -euo pipefail
           cd android/kathttp3-ech
-          ./gradlew :kathttp3:assembleRelease --no-daemon
+          # example 模块配置阶段要求 kathttp3DohUrl 属性（仅校验非空），
+          # 传任意值即可；实际只构建 :kathttp3。
+          ./gradlew :kathttp3:assembleRelease --no-daemon -Pkathttp3DohUrl=https://1.12.12.12/dns-query
           mkdir -p ../app/libs
           cp kathttp3/build/outputs/aar/kathttp3-release.aar ../app/libs/
           ls -lh ../app/libs/
