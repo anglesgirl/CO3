@@ -65,12 +65,12 @@ class MainApplication : Application(), ReactApplication {
     loadReactNative(this)
 
     // kathttp3（H3 引擎）冷启动预热：H3 首击冷路径 6~8s（native 初始化 +
-    // DoH 解析 + ECH 配置 + 建 QUIC 会话）会踩业务 8s 超时线，启动后后台
-    // 提前完成，用户点击时走热路径秒开（实测 683ms）。预热在 loadReactNative
-    // 之后（SoLoader 已就绪），低优先级线程 + 延迟 3s，避免与首屏渲染争用。
+    // DoH 解析 + ECH 配置 + 建 QUIC 会话）会踩业务超时线，启动后立即后台
+    // 完成，用户点击时走热路径秒开（实测 683ms）。预热在 loadReactNative
+    // 之后（SoLoader 已就绪）。真机日志实证：预热设 3s 延迟时，用户点击
+    // 抢在预热前、lazy 单例被业务请求先初始化，预热形同虚设，故不设延迟。
     Thread {
         try {
-            Thread.sleep(3_000)
             com.co3.ech.EchHttp3Client.warmup()
             com.co3.Diagnostics.trace("boot.prewarm.h3", mapOf("result" to "ok"))
         } catch (t: Throwable) {

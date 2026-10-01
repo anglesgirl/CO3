@@ -45,7 +45,10 @@ object EchHttp3Client {
                 // CO3 JS 侧（echKy）统一跟 302，引擎不跟随 —— 与 H1.1 引擎
                 // CURLOPT_FOLLOWLOCATION=0 同构。
                 followRedirects = false,
-                requestTimeoutMillis = 8_000,
+                // 15s：真机日志实证 H3 首击冷路径 6.3s（engine_ok_h3
+                // totalMs=6294），8s 超时线太紧会误杀首击；热路径 683ms
+                // 不受影响。
+                requestTimeoutMillis = 15_000,
                 resolver = Co3DnsResolver(),
                 trustMode = TrustMode.PLATFORM,
             ),
@@ -75,9 +78,9 @@ object EchHttp3Client {
             }
         }
         // 一次轻量 H3 请求真实建立 QUIC 会话；失败不致命（缓存已热），
-        // 用户点击时按需重试。
+        // 用户点击时按需重试。超时与业务一致（15s：首击冷路径 6.3s 实测）。
         runCatching {
-            request("https://archiveofourown.org/favicon.ico", "GET", "", null, 8_000)
+            request("https://archiveofourown.org/favicon.ico", "GET", "", null, 15_000)
         }
     }
 
