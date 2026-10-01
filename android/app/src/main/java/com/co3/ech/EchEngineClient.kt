@@ -4,27 +4,23 @@ import android.util.Log
 import java.io.IOException
 
 /**
- * 引擎请求的统一入口：DoH 选路 + 逐个尝试候选地址。
+ * 引擎请求的统一入口：H3 首选（QUIC/UDP 放行）→ 失败回退 H1.1 候选逐个试。
  *
- * 为什么要逐个试：国内到 Cloudflare 不同 IP 段的可达性差异极大（有的秒连、
- * 有的直接超时），而 DoH 的 ipv4hint / A 记录一次会给好几个地址。以前只取
- * `addresses.first()`，撞上不可达的那个就整条链路失败 —— 真机上表现为
- * 「引擎请求失败 15006ms」+ 首页自检超时（2026-09-30 诊断实证）。
- * 历史上 Go 版本靠「优选 IP 扫描」回避这个问题，那层已按用户要求移除，
- * 所以现在必须自己在候选里挑能用的。
- *
- * 用户显式配置的优选 IP 优先级最高：非空时只用它，不再自动试其它地址
- * （用户既然手填，就按他说的走）。
+ * 为什么 H3 首选（2026-10-01 真机日志 + 用户实测）：H1.1/H2 走 TCP，带 ECH
+ * 的 ClientHello 在移动网络被概率性干扰（用户实测 h2 打不开、浏览器 h3 一直
+ * 正常），冷启动第一击连续 4 候选全撞上干扰窗口就 30s 全灭；H3 走 UDP/QUIC
+ * 被放行 —— 浏览器一切正常的通路就是 H3。kathttp3-ech 提供原生 H3+ECH，
+ * 一次调用内部自行处理候选与地址族回退；失败立即回退本文件的 H1.1 引擎
+ * （同样是 ECH，TCP 路径作为兜底）。
  */
 object EchEngineClient {
 
     private const val TAG = "CO3-ECHHTTP"
 
     /**
-     * 发一次请求，成功（引擎拿到响应且 status != 0）即返回。
+     * 发一次请求，H3 成功即返回；否则 H1.1 候选逐个试。
      *
-     * @param totalTimeoutMs 所有候选地址共享的总预算，内部按候选数均分，
-     *   避免 N 个地址各等 30 秒把用户体验拖到一分钟以上。
+     * @param totalTimeoutMs 总预算（含 H3 + H1.1 回退），默认 30s。
      */
     fun request(
         host: String,
@@ -42,16 +38,50 @@ object EchEngineClient {
         val cfg = EchDohConfig.load()
         if (cfg.isEmpty) throw IOException("尚无 DoH 配置（JS initEch 未落盘）")
 
+        // ============ 第一优先：H3（QUIC/UDP，被放行） ============
+        // H3 内部通过 Co3DnsResolver 复用上面的 DoH 结果（地址 + ECH 配置），
+        // 自己处理候选回退；只给它 8s，失败立即回退 H1.1，不让两套吃满预算。
+        var h3Error: String? = null
+        if (totalTimeoutMs > 8_000L) {
+            val h3t0 = System.currentTimeMillis()
+            try {
+                val h3 = EchHttp3Client.request(
+                    url = url,
+                    method = method,
+                    headers = headers,
+                    body = body,
+                    timeoutMs = 8_000L,
+                )
+                if (h3 != null && h3.status != 0) {
+                    com.co3.Diagnostics.event(
+                        "engine_ok_h3",
+                        mapOf(
+                            "host" to host,
+                            "url" to url.take(100),
+                            "echAccepted" to "true",
+                            "status" to h3.status.toString(),
+                            "totalMs" to (System.currentTimeMillis() - tStart).toString(),
+                            "h3Ms" to (System.currentTimeMillis() - h3t0).toString(),
+                        ),
+                    )
+                    return h3
+                }
+                h3Error = "H3 无响应"
+            } catch (e: Exception) {
+                h3Error = e.message?.take(60) ?: "H3 异常"
+            }
+            Log.w(TAG, "H3 失败（${System.currentTimeMillis() - h3t0}ms, $h3Error），回退 H1.1")
+        } else {
+            h3Error = "预算不足 8s，直接 H1.1"
+        }
+
+        // ============ 兜底：H1.1（TCP + ECH），候选逐个试 ============
         val route = EchDohResolver.resolve(
             host = host,
             dohEndpoints = cfg.dohEndpoints,
             addressOverrides = cfg.addressOverrides,
             configHost = cfg.configHost,
         )
-
-        // 用户手配的地址优先且独占；否则用 DoH 给出的全部候选。
-        // 候选顺序 v4 在前（DoH 返回顺序），v6 只作兜底；IPv6 在国内移动网络
-        // 实测可通（用户确认），保留全部候选不丢兜底机会。
         val candidates = if (cfg.addressOverrides.isNotEmpty()) {
             cfg.addressOverrides
         } else {
@@ -59,10 +89,8 @@ object EchEngineClient {
         }
         if (candidates.isEmpty()) throw IOException("DoH 未返回任何地址")
 
-        // perTry 固定 3s：H1.1 ECH 冷握手在移动网络经常瞬时失败（真机日志
-        // totalMs=30033 = 4 候选 × 7.5s 全灭），单地址 7.5s 太慢。3s×4=12s
-        // 一轮出结果，失败立即整轮重试（2 轮 ≤ 24s，不超调用方 30s 预算）。
-        val perTry = 3_000L
+        // H3 已用掉 8s，H1.1 剩余预算内 perTry 2.5s×4×2 轮 ≈ 20s（总计 ≈28s）。
+        val perTry = 2_500L
         var lastError: Exception? = null
         val attemptLog = mutableListOf<String>()
         for (round in 0 until 2) {
@@ -82,8 +110,6 @@ object EchEngineClient {
                         if (idx > 0) {
                             Log.i(TAG, "第 ${idx + 1} 个候选地址可用: $ip（前 ${idx} 个失败）")
                         }
-                        // 诊断：成功路径带实际连接 IP / echAccepted / 状态码 / 耗时，
-                        // 服务器统计才能区分"哪个 IP 行、哪个 IP 不行"。
                         com.co3.Diagnostics.event(
                             "engine_ok",
                             mapOf(
@@ -114,8 +140,6 @@ object EchEngineClient {
             Log.w(TAG, "第 ${round + 1} 轮候选全灭（${candidates.size} 个），立即整轮重试")
         }
 
-        // 诊断：失败路径上报全部候选 IP、逐地址失败明细与最终错误 ——
-        // 定位"是 IP 不可达还是 ECH 被拒、哪些地址失败"。
         com.co3.Diagnostics.event(
             "engine_fail",
             mapOf(
@@ -123,6 +147,7 @@ object EchEngineClient {
                 "url" to url.take(100),
                 "candidates" to candidates.joinToString("|").take(200),
                 "attempts" to attemptLog.joinToString("|").take(300),
+                "h3" to (h3Error ?: ""),
                 "err" to (lastError?.message ?: "所有候选地址都失败"),
                 "totalMs" to (System.currentTimeMillis() - tStart).toString(),
             ),

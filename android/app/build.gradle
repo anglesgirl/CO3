@@ -111,6 +111,9 @@ android {
 
 dependencies {
     implementation "com.facebook.react:react-android"
+    // kathttp3-ech：H3+ECH 原生引擎（QUIC/UDP，移动网络对 H3 放行——
+    // 浏览器 H3 一直正常；H1.1/H2 的 TCP+ECH 被概率性干扰致冷启动超时）
+    implementation project(':kathttp3-ech:kathttp3')
     implementation "androidx.work:work-runtime:2.11.2"
     implementation "androidx.lifecycle:lifecycle-process:2.11.0"
     // FileProvider：诊断日志分享导出用

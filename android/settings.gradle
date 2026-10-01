@@ -3,4 +3,8 @@ plugins { id("com.facebook.react.settings") }
 extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autolinkLibrariesFromCommand() }
 rootProject.name = 'CO3'
 include ':app'
+// kathttp3-ech（H3+ECH 引擎，ngtcp2/nghttp3/BoringSSL）：模块自带
+// settings（独立 root），这里按子目录 include 它的 :kathttp3 模块。
+include ':kathttp3-ech:kathttp3'
+project(':kathttp3-ech:kathttp3').projectDir = file('kathttp3-ech/kathttp3')
 includeBuild('../node_modules/@react-native/gradle-plugin')
