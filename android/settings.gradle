@@ -3,8 +3,7 @@ plugins { id("com.facebook.react.settings") }
 extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autolinkLibrariesFromCommand() }
 rootProject.name = 'CO3'
 include ':app'
-// kathttp3-ech（H3+ECH 引擎，ngtcp2/nghttp3/BoringSSL）：模块自带
-// settings（独立 root），这里按子目录 include 它的 :kathttp3 模块。
-include ':kathttp3-ech:kathttp3'
-project(':kathttp3-ech:kathttp3').projectDir = file('kathttp3-ech/kathttp3')
+// kathttp3-ech（H3+ECH 引擎）不 include 进 RN 工程：RN 的 gradle 插件会给
+// 每个子项目设 react.* 属性，纯 Kotlin 库会报 unknown property。改为 CI
+// 独立构建 AAR 放 app/libs/（见 .github/workflows/android-build.yml）。
 includeBuild('../node_modules/@react-native/gradle-plugin')

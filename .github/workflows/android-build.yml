@@ -157,6 +157,18 @@ jobs:
         run: |
           cd android
           ./gradlew generateCodegenArtifactsFromSchema
+      # kathttp3-ech（H3+ECH 引擎）独立构建 AAR：模块自带 settings（独立
+      # root），不与 RN 工程混编（RN gradle 插件会给子项目设 react.* 属性，
+      # 纯 Kotlin 库会 unknown property）。AAR 放 app/libs/ 由 app 以
+      # files() 引用；CMake 交叉编译 ngtcp2/nghttp3/BoringSSL 较慢。
+      - name: Build kathttp3-ech AAR (H3+ECH 引擎)
+        run: |
+          set -euo pipefail
+          cd android/kathttp3-ech
+          ./gradlew :kathttp3:assembleRelease --no-daemon
+          mkdir -p ../app/libs
+          cp kathttp3/build/outputs/aar/kathttp3-release.aar ../app/libs/
+          ls -lh ../app/libs/
       - name: JS 具名 import 门禁（防止 undefined is not a function 崩启动）
         run: python3 tools/check_js_imports.py
       - name: Build Release APK
