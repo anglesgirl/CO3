@@ -680,11 +680,12 @@ const ChapterReader = ({
   useEffect(() => {
     if (translateProgress && translateProgress.total > 0) {
       Toast.show({
-        type: 'success',
-        text2: `${t('reader_translate_progress')} ${translateProgress.done}/${translateProgress.total}`,
+        type: 'info',
+        text1: `${t('reader_translate_progress')} ${translateProgress.done}/${translateProgress.total}`,
         position: 'top',
         topOffset: 60,
         autoHide: false,
+        visibilityTime: 1500,
       });
     } else {
       Toast.hide();

@@ -155,12 +155,16 @@ export class TranslationOrchestrator {
     const maxTokens = Math.max(512, Math.min(4096,
       withPlaceholders.reduce((s, p) => s + p.text.length, 0) * 2));
 
-    // 3. 调用引擎
+    // 3. 调用引擎（device 加 90 秒超时，防卡死）
     let raw = '';
+    const withTimeout = (p, ms) => Promise.race([
+      p,
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
+    ]);
     try {
       if (this.engine === 'device') {
         const { Hymt } = NativeModules;
-        raw = await Hymt.translateWithPrompt(prompt, maxTokens);
+        raw = await withTimeout(Hymt.translateWithPrompt(prompt, maxTokens), 90000);
       } else {
         const { translateTexts } = require('./freeTranslation');
         const texts = withPlaceholders.map(p => p.original);
