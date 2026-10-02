@@ -10,6 +10,7 @@
  */
 
 import { NativeModules } from 'react-native';
+import { diagEvent } from '../../utils/diag';
 
 // ---------------------------------------------------------------------------
 // 术语表（借鉴 ao3-chinese 的占位符机制 + 沉浸式翻译的按段注入）
@@ -45,14 +46,19 @@ class TermManager {
     const mapping = {};
     let idx = 0;
     let result = text;
+    const hitTerms = [];
     for (const key of this.sortedKeys) {
       if (result.includes(key)) {
+        hitTerms.push(key);
         const ph = `__PH_${idx++}__`;
         // 全局替换（转义正则特殊字符）
         const esc = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         result = result.replace(new RegExp(esc, 'g'), ph);
         mapping[ph] = this.terms[key];
       }
+    }
+    if (hitTerms.length > 0) {
+      diagEvent('trans_term_hit', { terms: hitTerms.join(','), count: hitTerms.length });
     }
     return { text: result, mapping };
   }
@@ -144,6 +150,11 @@ export class TranslationOrchestrator {
   }
 
   async translateBatchWithRetry(batch, depth) {
+    if (depth === 0) {
+      diagEvent('trans_batch_start', { count: batch.length, engine: this.engine });
+    } else {
+      diagEvent('trans_retry_split', { depth, count: batch.length });
+    }
     // 本机小模型：单段简单提示词（复杂格式会复述输入，不翻译）
     // 在线大模型：批量+id 格式
     const isDevice = this.engine === 'device';
@@ -171,7 +182,10 @@ export class TranslationOrchestrator {
     let raw = '';
     const withTimeout = (p, ms) => Promise.race([
       p,
-      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
+      new Promise((_, rej) => setTimeout(() => {
+        diagEvent('trans_timeout', { engine: this.engine });
+        rej(new Error('timeout'));
+      }, ms)),
     ]);
     try {
       if (isDevice) {
