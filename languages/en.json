@@ -623,5 +623,8 @@
   "screen_js_error_close": "Close the app",
   "screen_js_error_recover": "Try recovering",
   "ech_browser_hint_title": "Page notice",
-  "ech_browser_hint_ok": "Got it"
+  "ech_browser_hint_ok": "Got it",
+  "screen_account_center_request_already": "This email is already on the waiting list",
+  "screen_account_center_request_submitted": "Submitted, check your email for the invitation",
+  "screen_account_center_queue_email_hint": "Enter email to request"
 }

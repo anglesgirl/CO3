@@ -615,5 +615,8 @@
   "screen_account_center_query_email": "要查询的邮箱",
   "screen_preferences_translate_hint_ios": "两种方式任选：本机 AI 下载一次，之后永久免费、离线也能用；免费机翻零配置。重进章节生效。",
   "ech_browser_hint_title": "页面提示",
-  "ech_browser_hint_ok": "知道了"
+  "ech_browser_hint_ok": "知道了",
+  "screen_account_center_request_already": "这个邮箱已经在排队中了",
+  "screen_account_center_request_submitted": "已提交，请到邮箱查收邀请邮件",
+  "screen_account_center_queue_email_hint": "输入要申请的邮箱"
 }

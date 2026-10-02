@@ -23,7 +23,7 @@ import { getRealUsername, fetchAccountIdentity, clearIdentityCache } from '../..
 import { queryInviteQueue } from '../../web/account/inviteQueue';
 import { requestPasswordReset } from '../../web/account/passwordReset';
 import { AO3 } from '../../web/account/inviteFlow';
-import { markInviteRequestOpened, getCooldownLeft } from '../../web/account/inviteRequest';
+import { submitInviteRequest } from '../../web/account/inviteRequest';
 import getUrl from '../../web/requestManager';
 import { openEchBrowser, onEchLoginSuccess } from '../../components/EchBrowser';
 import { officialLogout, syncLoginFromServer } from '../../web/account/login';
@@ -67,33 +67,10 @@ export default function AccountCenter() {
   const [pwEmail, setPwEmail] = useState('');
   const [pwSending, setPwSending] = useState(false);
   const [pwResult, setPwResult] = useState(null);
-  // 申请邀请（排队）—— 含"被繁忙后自我暂停"的冷却状态
+  // 申请邀请（排队）：邮箱输入 + 直接提交（2026-10-02 用户要求去掉限时）
+  const [reqEmail, setReqEmail] = useState('');
   const [reqSubmitting, setReqSubmitting] = useState(false);
-  const [reqCooldownLeft, setReqCooldownLeft] = useState(0);
-
-  /** 毫秒 → "4分32秒"（冷却倒计时用）。 */
-  const formatCountdown = (ms) => {
-    const total = Math.max(0, Math.ceil(Number(ms || 0) / 1000));
-    const m = Math.floor(total / 60);
-    return m > 0 ? `${m}分${total % 60}秒` : `${total}秒`;
-  };
-
-  // 进页面先读一次冷却状态 —— 冷却写在本地存储里，**重启 app 也绕不过去**
-  //（否则用户重启就能立刻再提交，自我限流形同虚设）。
-  useEffect(() => {
-    getCooldownLeft().then((left) => setReqCooldownLeft(left));
-  }, []);
-
-  // 冷却期间每秒递减；归零后按钮自动恢复
-  useEffect(() => {
-    if (reqCooldownLeft <= 0) return undefined;
-    const timer = setInterval(() => {
-      setReqCooldownLeft((prev) => (prev - 1000 > 0 ? prev - 1000 : 0));
-    }, 1000);
-    return () => clearInterval(timer);
-    // 只在"从可提交变为冷却中"时建立定时器，避免每秒重建
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reqCooldownLeft > 0]);
+  const [reqResult, setReqResult] = useState(null);
 
   const refresh = useCallback(async () => {
     setValidating(true);
@@ -209,18 +186,19 @@ export default function AccountCenter() {
     openEchBrowser(url);
   };
 
-  /**
-   * 申请邀请（排队）：改为打开 AO3 排队页（EchBrowser，能过 CF 验证）。
-   * 打开即记本地冷却（防滥用：用户要求"不成为攻击官方的工具"，AO3 页面
-   * 自身还有 5 分钟倒计时，双保险）。提交后页面结果由小窗体翻译提示。
-   */
-  const doOpenInviteRequest = async () => {
-    if (reqCooldownLeft > 0) return; // 冷却期内不开页面
+  /** 申请邀请（排队）：应用内直接提交邮箱（2026-10-02 用户要求：输入框+提交，去掉限时）。 */
+  const doSubmitInviteRequest = async () => {
+    if (!reqEmail || !reqEmail.includes('@')) {
+      Alert.alert(t('screen_account_center_queue_bad_email'));
+      return;
+    }
     setReqSubmitting(true);
+    setReqResult(null);
     try {
-      await markInviteRequestOpened();
-      setReqCooldownLeft(await getCooldownLeft());
-      openEchBrowser(`${AO3}/invite_requests`);
+      const r = await submitInviteRequest(reqEmail.trim());
+      setReqResult(r);
+    } catch (e) {
+      setReqResult({ ok: false, message: `net_${e.message}` });
     } finally {
       setReqSubmitting(false);
     }
@@ -544,11 +522,7 @@ export default function AccountCenter() {
               页面结果由 App 外小窗体翻译提示。 */}
         </View>
 
-        {/* 申请邀请（加入排队）—— 应用内提交，但**严格自我限流**。
-            用户明确要求："提交被繁忙以后，直接帮官方暂停，需要等至少5分钟以后再提交，
-            要不然我们就成了攻击官方的工具了。"
-            所以：只发一次请求、绝不自动重试、被拒后按钮禁用并显示倒计时
-            （冷却写在本地存储里，重启 app 也绕不过去）。 */}
+        {/* 申请邀请（加入排队）：输入邮箱直接提交（2026-10-02 用户要求）。 */}
         <View
           style={[
             styles.queueBox,
@@ -565,32 +539,47 @@ export default function AccountCenter() {
           <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 4 }}>
             {t('screen_account_center_request_invite_desc')}
           </Text>
-          {/* 排队改走 EchBrowser 打开 AO3 排队页（App 表单提交会被风控拦，
-              网页能过 Cloudflare 验证）。打开即记本地冷却（防滥用，双保险）。 */}
-          <TouchableOpacity
-            onPress={doOpenInviteRequest}
-            disabled={reqSubmitting || reqCooldownLeft > 0}
+          <TextInput
             style={[
-              styles.btn,
+              styles.input,
               {
-                backgroundColor:
-                  reqCooldownLeft > 0 ? currentTheme.borderColor : currentTheme.primaryColor,
+                backgroundColor: currentTheme.backgroundColor,
+                borderColor: currentTheme.borderColor,
+                color: currentTheme.textColor,
+                marginTop: 8,
               },
             ]}
+            placeholder={t('screen_account_center_queue_email_hint')}
+            placeholderTextColor={currentTheme.placeholderColor}
+            value={reqEmail}
+            onChangeText={setReqEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+          />
+          <TouchableOpacity
+            onPress={doSubmitInviteRequest}
+            disabled={reqSubmitting}
+            style={[styles.btn, { backgroundColor: currentTheme.primaryColor, marginTop: 8 }]}
           >
             {reqSubmitting ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.btnText}>
-                {reqCooldownLeft > 0
-                  ? t('screen_account_center_request_wait', { time: formatCountdown(reqCooldownLeft) })
-                  : t('screen_account_center_request_btn')}
-              </Text>
+              <Text style={styles.btnText}>{t('screen_account_center_request_btn')}</Text>
             )}
           </TouchableOpacity>
-          {reqCooldownLeft > 0 ? (
-            <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 8 }}>
-              {t('screen_account_center_request_cooldown_hint')}
+          {reqResult ? (
+            <Text
+              style={{
+                color: reqResult.ok ? '#2e7d32' : '#c62828',
+                fontSize: 12,
+                marginTop: 8,
+              }}
+            >
+              {reqResult.ok
+                ? t(`screen_account_center_request_${reqResult.message}`)
+                : t('screen_account_center_request_failed', {
+                    detail: reqResult.detail || reqResult.message,
+                  })}
             </Text>
           ) : null}
         </View>

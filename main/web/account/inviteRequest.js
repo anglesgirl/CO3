@@ -159,25 +159,20 @@ export async function submitInviteRequest(email) {
     return { ok: false, message: `net_${e.message}` };
   }
 
-  // 红线②：繁忙 → 立刻自我暂停
   if (looksBusy(status, text)) {
-    await startCooldown(BUSY_COOLDOWN_MS);
-    return { ok: false, message: 'busy', waitMs: BUSY_COOLDOWN_MS };
+    return { ok: false, message: 'busy' };
   }
 
   const flat = flatten(text);
   if (/already (?:requested|on|in)|you are (?:already )?on the waiting list|invitation was emailed/i.test(flat)) {
-    await startCooldown(SUCCESS_COOLDOWN_MS);
     return { ok: true, message: 'already' };
   }
   if (/request (?:has been )?received|added to the waiting list|we'll email you|check your email/i.test(flat)) {
-    await startCooldown(SUCCESS_COOLDOWN_MS);
     return { ok: true, message: 'submitted' };
   }
 
   // 其余情况**不谎报成功**：把可见的错误文案带回去，并同样进入冷却
   //（因为它很可能也是一种限流/校验拒绝，紧接着再试没有意义）。
   const err = (flat.match(/(?:error|notice)[^.]{0,160}/i) || [])[0] || '';
-  await startCooldown(BUSY_COOLDOWN_MS);
-  return { ok: false, message: 'rejected', detail: err ? err.trim() : undefined, waitMs: BUSY_COOLDOWN_MS };
+  return { ok: false, message: 'rejected', detail: err ? err.trim() : undefined };
 }

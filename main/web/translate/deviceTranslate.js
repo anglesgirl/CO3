@@ -183,7 +183,7 @@ async function translateOneVerified(Hymt, text, alive) {
 
 /**
  * 本机批量翻译（段落数组→译文数组）。
- * onProgress(done,total) 每段完成回调；坏段经重试仍不可信则留空（不显示垃圾）。
+ * onProgress(done,total) 每段完成回调；坏段经重试仍不可信则保留原文（不留空）。
  */
 export async function translateDevice(texts, onProgress) {
   await ensureInit();
@@ -231,7 +231,8 @@ export async function translateDevice(texts, onProgress) {
         // 批量结果可信 → 直接采用（快路径）
         out[idx[k]] = cand;
       } else {
-        // 批量结果不可信（或缺段）→ 单段重试；仍不可信则留空，保留原文
+        // 批量结果不可信（或缺段）→ 单段重试；仍不可信则保留原文，
+        // 绝不留空（2026-10-02 用户反馈：段落突然消失比显示原文更糟）。
         if (cand) {
           diagEvent('hymt_quality', {
             attempt: -1,
@@ -240,7 +241,8 @@ export async function translateDevice(texts, onProgress) {
             out_tail: cand.slice(-30),
           });
         }
-        out[idx[k]] = await translateOneVerified(Hymt, src, alive);
+        const verified = await translateOneVerified(Hymt, src, alive);
+        out[idx[k]] = verified || src;
       }
       tick();
     }
