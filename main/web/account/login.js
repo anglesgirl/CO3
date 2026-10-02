@@ -95,6 +95,66 @@ export const handleLogin = async (username, password) => {
 };
 
 /**
+ * 去 AO3 官方检查登录态：已登录就直接把 Cookie 会话认进 App。
+ *
+ * 判据（按可靠度排序）：
+ *   1. GET /users/login 返回 "You are already logged in" → Cookie 有效，直接认。
+ *   2. 首页含 "Log Out" / "/users/logout" → 已登录。
+ * 认下后同步真实用户名进存储与界面。返回 true=已登录，false=未登录。
+ */
+export async function syncLoginFromServer() {
+  // 1) 登录页探针：已登录时 AO3 直接告诉你，不用猜
+  try {
+    const html = await ao3Request('https://archiveofourown.org/users/login', {
+      method: 'GET',
+      credentials: 'include',
+      throwHttpErrors: false,
+      headers: {
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      },
+    }).then((r) => (typeof r === 'string' ? r : r.text()));
+    if (html && html.includes('You are already logged in')) {
+      await adoptServerSession();
+      return true;
+    }
+    // 登录页有表单 = 未登录（顺手排除 CF 挑战页：没表单也不算未登录）
+    if (html && html.includes('id="new_user"')) return false;
+  } catch (e) {
+    console.error('syncLoginFromServer login-page probe failed:', e);
+  }
+  // 2) 首页兜底：看有没有登出链接
+  try {
+    clearIdentityCache();
+    const identity = await fetchAccountIdentity(true);
+    if (identity && identity.username) {
+      await adoptServerSession(identity);
+      return true;
+    }
+  } catch (e) {
+    console.error('syncLoginFromServer identity probe failed:', e);
+  }
+  return false;
+}
+
+/** 把服务端已确认的会话同步进 App（用户名/时间戳/界面缓存）。 */
+async function adoptServerSession(identity) {
+  let id = identity;
+  if (!id) {
+    try {
+      clearIdentityCache();
+      id = await fetchAccountIdentity(true);
+    } catch (e) {}
+  }
+  const storedName = (id && id.username) || '';
+  if (storedName) await setUsernameOnly(storedName);
+  if (id && id.pseud) await setPseudOnly(id.pseud).catch(() => {});
+  await setLastLogin();
+}
+
+/**
  * 官方登出：请求 AO3 的 /users/logout 让服务端作废会话，
  * 再清本地。只清本地 Cookie 不稳定（服务端会话还在）。
  * 失败也不阻塞本地清理。

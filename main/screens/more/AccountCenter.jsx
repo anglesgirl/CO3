@@ -26,7 +26,7 @@ import { AO3 } from '../../web/account/inviteFlow';
 import { markInviteRequestOpened, getCooldownLeft } from '../../web/account/inviteRequest';
 import getUrl from '../../web/requestManager';
 import { openEchBrowser, onEchLoginSuccess } from '../../components/EchBrowser';
-import { officialLogout } from '../../web/account/login';
+import { officialLogout, syncLoginFromServer } from '../../web/account/login';
 
 /**
  * 账号中心。
@@ -325,6 +325,28 @@ export default function AccountCenter() {
               style={[styles.btn, { backgroundColor: currentTheme.primaryColor }]}
             >
               <Text style={styles.btnText}>{t('screen_account_center_go_login')}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={async () => {
+                setValidating(true);
+                try {
+                  // 去 AO3 官方检查：已登录就直接把 Cookie 会话认进 App
+                  const ok = await syncLoginFromServer();
+                  if (ok) {
+                    await refresh();
+                  } else {
+                    setLogged(false);
+                    setUser('');
+                  }
+                } catch {
+                  setLogged(false);
+                } finally {
+                  setValidating(false);
+                }
+              }}
+              style={[styles.btn, { backgroundColor: currentTheme.cardBackground, borderWidth: 1, borderColor: currentTheme.borderColor, marginTop: 8 }]}
+            >
+              <Text style={[styles.btnText, { color: currentTheme.textColor }]}>{t('screen_account_center_refresh_state')}</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -664,11 +686,6 @@ export default function AccountCenter() {
           </>
         )}
 
-        <TouchableOpacity onPress={refresh} style={{ marginTop: 20, alignItems: 'center' }}>
-          <Text style={{ color: currentTheme.primaryColor }}>
-            {t('screen_account_center_refresh_state')}
-          </Text>
-        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
