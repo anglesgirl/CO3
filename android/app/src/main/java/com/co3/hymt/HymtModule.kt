@@ -237,7 +237,7 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                     mapOf(
                         "ok" to (out.isNotEmpty() && refusal == null).toString(),
                         "ms" to (System.currentTimeMillis() - t0),
-                        "in_len" to text.length,
+                        "in_len" to prompt.length,
                         "out_len" to out.length,
                         "tokens" to guard,
                         "refusal" to (refusal ?: "-"),
