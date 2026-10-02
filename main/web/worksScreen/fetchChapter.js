@@ -143,6 +143,12 @@ async function createCompleteHtml(chapterHtml, cssStyles, currentTheme, settings
         opacity: 0.45;
         font-style: italic;
     }
+    /* 翻译失败：淡红底色提示可点按重试（2026-10-02） */
+    .co3-failed {
+        opacity: 0.85;
+        background-color: rgba(200, 60, 60, 0.08);
+        border-left-color: #c62828;
+    }
     ${settings.useCustomFont ? `@font-face {font-family: '${settings.fontFamily}'; src: url('${settings.font}')}` : ""}
     
     .landmark {

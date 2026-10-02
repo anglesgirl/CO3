@@ -77,6 +77,26 @@ const removeTransJs = (i) => `
   if (t && t.parentNode) t.parentNode.removeChild(t);
 })();`;
 
+// 失败标记：保留元素，加失败样式，点按可重试单段（2026-10-02 用户反馈：失败段无标记分不清）。
+const markFailedJs = (i) => `
+(function(){
+  var el = document.querySelector('[data-co3seg="${i}"]');
+  if (!el || !el.parentNode) return;
+  var t = el.parentNode.querySelector('.co3-trans[data-for="${i}"]');
+  if (!t) {
+    t = document.createElement('p');
+    t.className = 'co3-trans';
+    t.setAttribute('data-for', '${i}');
+    el.parentNode.insertBefore(t, el.nextSibling);
+  }
+  t.className = 'co3-trans co3-failed';
+  t.textContent = '\u26a0\ufe0f ' + '翻译失败，点击重试';
+  t.style.cursor = 'pointer';
+  t.onclick = function() {
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'retry-translation', idx: ${i} }));
+  };
+})();`;
+
 // 【不再按长度切块（2026-09-11 用户明确要求）】
 // 原先为了"避免长时间静默"会把长段落按句读切成 <=320 字符的块分别翻译。
 // 但切块会**切断上下文**（指代、语气、承接关系都断），用户原话：
@@ -259,6 +279,8 @@ const ChapterReader = ({
   const translateCancelledRef = useRef(false);
   // 分块翻译时的前缀累积：{ DOM序号: 已翻完的块 }，使同一段的后续块接在已有译文后面
   const segmentPrefixRef = useRef({});
+  // 上次全文翻译的段落原文（domIdx -> text），供失败单段重试用
+  const lastSegsRef = useRef({});
   const pendingSegsRef = useRef(null);
   const progressSaveTimeoutRef = useRef(null);
   const lastSavedProgressRef = useRef(0);
@@ -434,6 +456,39 @@ const ChapterReader = ({
     };
   }, [chapterID]);
 
+  /**
+   * 单段重试：失败段落点按后只翻这一段（2026-10-02）。
+   * 用上次提取的原文调本机引擎，成功写回译文，失败保持标记。
+   */
+  const retrySingleParagraph = useCallback(async (domIdx) => {
+    if (!webViewRef.current || translatingRef.current) return;
+    const src = lastSegsRef.current[domIdx];
+    if (!src) return;
+    const { Hymt } = NativeModules;
+    if (!Hymt) return;
+    translatingRef.current = true;
+    try {
+      // 先回到 pending 态
+      webViewRef.current.injectJavaScript(
+        `${updateTransJs(domIdx, '', true)}\ntrue;`,
+      );
+      const maxTok = Math.max(512, Math.min(2048, Math.round(String(src).length * 1.2)));
+      let zh = String((await streamWithTimeout(Hymt.translate(src, maxTok))) || '').trim();
+      if (looksBrokenZh(zh, src)) {
+        // 标记失败
+        webViewRef.current.injectJavaScript(`${markFailedJs(domIdx)}\ntrue;`);
+      } else {
+        webViewRef.current.injectJavaScript(
+          `${updateTransJs(domIdx, zh, false)}\ntrue;`,
+        );
+      }
+    } catch (e) {
+      webViewRef.current.injectJavaScript(`${markFailedJs(domIdx)}\ntrue;`);
+    } finally {
+      translatingRef.current = false;
+    }
+  }, []);
+
   const handleTranslate = useCallback(async () => {
     if (!webViewRef.current || translatingRef.current) return;
     translatingRef.current = true;
@@ -459,6 +514,11 @@ const ChapterReader = ({
       });
       const texts = seg && Array.isArray(seg.items) ? seg.items : [];
       const idxs = seg && Array.isArray(seg.idxs) ? seg.idxs : [];
+      // 存下来供失败单段重试用
+      lastSegsRef.current = {};
+      for (let si = 0; si < idxs.length; si += 1) {
+        lastSegsRef.current[idxs[si]] = texts[si];
+      }
       if (!texts.length || idxs.length !== texts.length) {
         Toast.show({
           type: 'error',
@@ -527,6 +587,11 @@ const ChapterReader = ({
                   out_len: String(part || '').length,
                   out_tail: String(part || '').slice(-30),
                 });
+                // 重试前先把坏的流式结果从屏幕上撤下来，回到上一个好状态，
+                // 避免用户在重试期间看到一闪而过的坏字（2026-10-02 优化）。
+                webViewRef.current.injectJavaScript(
+                  `${updateTransJs(domIdx, segmentPrefixRef.current[domIdx] || '', true)}\ntrue;`,
+                );
                 part = String(
                   (await streamWithTimeout(Hymt.translate(chunk, maxTok))) || '',
                 );
@@ -551,7 +616,8 @@ const ChapterReader = ({
           if (!alive()) break;
           if (!segOk) {
             failed += 1;
-            webViewRef.current.injectJavaScript(`${removeTransJs(domIdx)}\ntrue;`);
+            // 标记失败（可点按重试），而不是直接删掉让用户摸不着头脑
+            webViewRef.current.injectJavaScript(`${markFailedJs(domIdx)}\ntrue;`);
           } else {
             // 本段（含所有分块）全部完成：去掉 pending 样式，⌛/弱化样式 → 正式译文
             webViewRef.current.injectJavaScript(
@@ -749,6 +815,14 @@ const ChapterReader = ({
                 items: Array.isArray(data.items) ? data.items : [],
                 idxs: Array.isArray(data.idxs) ? data.idxs : [],
               });
+            }
+            break;
+          }
+          case 'retry-translation': {
+            // 失败段落点按重试：只翻这一段（2026-10-02）
+            const ridx = Number(data.idx);
+            if (!Number.isNaN(ridx)) {
+              retrySingleParagraph(ridx);
             }
             break;
           }
