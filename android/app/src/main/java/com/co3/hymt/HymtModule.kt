@@ -183,8 +183,12 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    /**
+     * 自定义提示词透传（2026-10-02）：JS 编排层借鉴沉浸式翻译/ao3-chinese，
+     * 在 JS 侧拼好完整提示词（含术语占位符、批量 id 等），原生只负责推理。
+     */
     @ReactMethod
-    fun translate(text: String, maxTokens: Int, promise: Promise) {
+    fun translateWithPrompt(prompt: String, maxTokens: Int, promise: Promise) {
         io.execute {
             try {
                 val e = engine
@@ -193,9 +197,7 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                     return@execute
                 }
                 val t0 = System.currentTimeMillis()
-                // 官方 README 的 ZH<=>XX 权威模板（注意 target_language 要用完整语言名，
-                // 如"中文"，不能填语言代码 zh，否则模型行为漂移、输出拒答文本）。
-                val prompt = "将以下同人小说文本翻译为$TARGET_LANG_NAME，用自然流畅的同人文风格，对话口语化，人名按常见译法，注意只需要输出翻译后的结果，不要额外解释： $text"
+                // prompt 由 JS 侧直接传入，不再内部拼接
                 val mt = if (maxTokens > 0) maxTokens else 1024
                 val rc = e.sendUserPrompt(prompt, mt)
                 if (rc != 0) {
