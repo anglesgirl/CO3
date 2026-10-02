@@ -151,6 +151,22 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                         .replace("\\n", " ")
                         .replace("\\t", " ")
                     if (text.isNotBlank()) {
+                        // "已登录" 直接认 Cookie：/users/login 页显示 "You are already
+                        // logged in" 说明 CookieManager 里的会话有效，直接发登录成功，
+                        // 不用用户再填一遍表单（2026-10-02 用户反馈）。
+                        if (text.contains("You are already logged in", true) &&
+                            (url ?: "").contains("/users/login")
+                        ) {
+                            try {
+                                val cm = android.webkit.CookieManager.getInstance()
+                                val cookie = cm.getCookie("https://archiveofourown.org/") ?: ""
+                                if (cookie.contains("user_credentials")) {
+                                    reactContext?.getJSModule(com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                                        ?.emit("LoginSuccess", com.facebook.react.bridge.Arguments.createMap())
+                                    com.co3.Diagnostics.event("login_already_logged_in", mapOf("url" to (url ?: "").take(80)))
+                                }
+                            } catch (_: Exception) {}
+                        }
                         reactContext?.getJSModule(com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                             ?.emit(
                                 "EchPageText",

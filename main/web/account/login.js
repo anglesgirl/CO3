@@ -65,8 +65,55 @@ export const handleLogin = async (username, password) => {
       throw t('screen_account_login_failed_invalid_server_error');
     }
   } catch (error) {
+    // 已登录：AO3 认 Cookie 不认表单。/users/login 返回 "already logged in"
+    // 说明 CookieManager 里的会话有效，直接同步进 App 即可，不用再走一遍表单。
+    const msg = String(error && error.message ? error.message : error);
+    if (msg.includes('already logged in')) {
+      let storedName = username;
+      try {
+        clearIdentityCache();
+        const identity = await fetchAccountIdentity(true);
+        if (identity && identity.username) {
+          storedName = identity.username;
+          if (identity.pseud) await setPseudOnly(identity.pseud);
+        }
+      } catch (e) {
+        console.error('resolve real username failed:', e);
+      }
+      await setUsernameOnly(storedName);
+      await setLastLogin();
+      Toast.show({
+        type: 'success',
+        text1: t('general_success'),
+        text2: t('screen_account_login_success'),
+      });
+      return;
+    }
     console.error('Login error:', error);
     throw t('screen_account_login_failed_generic');
+  }
+};
+
+/**
+ * 官方登出：请求 AO3 的 /users/logout 让服务端作废会话，
+ * 再清本地。只清本地 Cookie 不稳定（服务端会话还在）。
+ * 失败也不阻塞本地清理。
+ */
+export async function officialLogout() {
+  try {
+    await ao3Request('https://archiveofourown.org/users/logout', {
+      method: 'GET',
+      credentials: 'include',
+      throwHttpErrors: false,
+      headers: {
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      },
+    });
+  } catch (e) {
+    console.error('official logout failed (non-blocking):', e);
   }
 };
 

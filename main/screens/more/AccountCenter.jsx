@@ -26,6 +26,7 @@ import { AO3 } from '../../web/account/inviteFlow';
 import { markInviteRequestOpened, getCooldownLeft } from '../../web/account/inviteRequest';
 import getUrl from '../../web/requestManager';
 import { openEchBrowser, onEchLoginSuccess } from '../../components/EchBrowser';
+import { officialLogout } from '../../web/account/login';
 
 /**
  * 账号中心。
@@ -340,6 +341,8 @@ export default function AccountCenter() {
                     text: t('screen_account_center_logout'),
                     style: 'destructive',
                     onPress: async () => {
+                      // 先走 AO3 官方登出（服务端作废会话），再清本地 —— 只清本地不稳定
+                      await officialLogout().catch(() => {});
                       await deleteCredsToken().catch(() => {});
                       await deleteCredsPasswd().catch(() => {});
                       await deletePseudOnly().catch(() => {});
