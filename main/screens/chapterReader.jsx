@@ -665,8 +665,8 @@ const ChapterReader = ({
       Toast.show({
         type: 'success',
         text2: `${t('reader_translate_progress')} ${translateProgress.done}/${translateProgress.total}`,
-        position: 'bottom',
-        bottomOffset: 80,
+        position: 'top',
+        topOffset: 60,
         autoHide: false,
       });
     } else {
