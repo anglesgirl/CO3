@@ -559,6 +559,14 @@ const ChapterReader = ({
           // 也不要让后半程的失败被当成"翻译失败"。
           if (!alive()) break;
           const domIdx = idxs[k];
+          // 超短文本（<20 字符）跳过不翻：标题/标签类短语模型翻不好
+          //（如 "Sukuna x Reader" → "《宿傩x读器》），保留原文更干净。
+          //（2026-10-02 用户确认）
+          if (String(texts[k] || '').trim().length < 20) {
+            doneN += 1;
+            setTranslateProgress({ done: doneN, total: texts.length });
+            continue;
+          }
           // 该段开始翻译：占位显示 ⌛（已完成段落不受影响）。
           // 严格串行：本段（含其所有分块）翻完才进入下一段。
           webViewRef.current.injectJavaScript(`${setSegmentPendingJs(domIdx)}\ntrue;`);

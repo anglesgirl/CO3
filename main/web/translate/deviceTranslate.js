@@ -207,13 +207,19 @@ export async function translateDevice(texts, onProgress) {
     // 被新翻译取代了：停发原生请求，直接返回已有部分（调用方照常用）
     if (!alive()) return out;
     // 收集本批非空段落（空段直接占位，不能进批，否则会打乱段数对应）
+    // 超短文本（<20 字符）跳过不翻，保留原文（2026-10-02 用户确认）
     const idx = [];
     const txt = [];
     for (let k = 0; k < BATCH && i + k < total; k += 1) {
       const t = texts[i + k];
       if (t && t.trim()) {
-        idx.push(i + k);
-        txt.push(t);
+        if (t.trim().length < 20) {
+          out[i + k] = t;
+          tick();
+        } else {
+          idx.push(i + k);
+          txt.push(t);
+        }
       } else {
         out[i + k] = '';
         tick();
