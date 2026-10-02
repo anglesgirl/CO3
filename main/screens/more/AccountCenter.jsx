@@ -23,7 +23,6 @@ import { getRealUsername, fetchAccountIdentity, clearIdentityCache } from '../..
 import { queryInviteQueue } from '../../web/account/inviteQueue';
 import { requestPasswordReset } from '../../web/account/passwordReset';
 import { AO3 } from '../../web/account/inviteFlow';
-import { submitInviteRequest } from '../../web/account/inviteRequest';
 import getUrl from '../../web/requestManager';
 import { openEchBrowser, onEchLoginSuccess } from '../../components/EchBrowser';
 import { officialLogout, syncLoginFromServer } from '../../web/account/login';
@@ -67,10 +66,8 @@ export default function AccountCenter() {
   const [pwEmail, setPwEmail] = useState('');
   const [pwSending, setPwSending] = useState(false);
   const [pwResult, setPwResult] = useState(null);
-  // 申请邀请（排队）：邮箱输入 + 直接提交（2026-10-02 用户要求去掉限时）
+  // 申请邀请（排队）：App 输入邮箱，浏览器提交（2026-10-02 用户要求）
   const [reqEmail, setReqEmail] = useState('');
-  const [reqSubmitting, setReqSubmitting] = useState(false);
-  const [reqResult, setReqResult] = useState(null);
 
   const refresh = useCallback(async () => {
     setValidating(true);
@@ -186,22 +183,14 @@ export default function AccountCenter() {
     openEchBrowser(url);
   };
 
-  /** 申请邀请（排队）：应用内直接提交邮箱（2026-10-02 用户要求：输入框+提交，去掉限时）。 */
-  const doSubmitInviteRequest = async () => {
+  /** 申请邀请（排队）：App 输入邮箱，浏览器打开排队页并自动填入（2026-10-02 用户要求）。
+   * 直接 App 提交大概率被风控拦，所以提交动作走浏览器；输入框留在 App 里。 */
+  const doSubmitInviteRequest = () => {
     if (!reqEmail || !reqEmail.includes('@')) {
       Alert.alert(t('screen_account_center_queue_bad_email'));
       return;
     }
-    setReqSubmitting(true);
-    setReqResult(null);
-    try {
-      const r = await submitInviteRequest(reqEmail.trim());
-      setReqResult(r);
-    } catch (e) {
-      setReqResult({ ok: false, message: `net_${e.message}` });
-    } finally {
-      setReqSubmitting(false);
-    }
+    openEchBrowser(`${AO3}/invite_requests`, { prefillEmail: reqEmail.trim() });
   };
 
   /**
@@ -558,30 +547,13 @@ export default function AccountCenter() {
           />
           <TouchableOpacity
             onPress={doSubmitInviteRequest}
-            disabled={reqSubmitting}
             style={[styles.btn, { backgroundColor: currentTheme.primaryColor, marginTop: 8 }]}
           >
-            {reqSubmitting ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.btnText}>{t('screen_account_center_request_btn')}</Text>
-            )}
+            <Text style={styles.btnText}>{t('screen_account_center_request_btn')}</Text>
           </TouchableOpacity>
-          {reqResult ? (
-            <Text
-              style={{
-                color: reqResult.ok ? '#2e7d32' : '#c62828',
-                fontSize: 12,
-                marginTop: 8,
-              }}
-            >
-              {reqResult.ok
-                ? t(`screen_account_center_request_${reqResult.message}`)
-                : t('screen_account_center_request_failed', {
-                    detail: reqResult.detail || reqResult.message,
-                  })}
-            </Text>
-          ) : null}
+          <Text style={{ color: currentTheme.placeholderColor, fontSize: 12, marginTop: 8 }}>
+            {t('screen_account_center_request_browser_hint')}
+          </Text>
         </View>
 
         <Text style={[styles.section, { color: currentTheme.textColor }]}>

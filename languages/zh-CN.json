@@ -618,5 +618,6 @@
   "ech_browser_hint_ok": "知道了",
   "screen_account_center_request_already": "这个邮箱已经在排队中了",
   "screen_account_center_request_submitted": "已提交，请到邮箱查收邀请邮件",
-  "screen_account_center_queue_email_hint": "输入要申请的邮箱"
+  "screen_account_center_queue_email_hint": "输入要申请的邮箱",
+  "screen_account_center_request_browser_hint": "点提交会在浏览器里打开排队页，邮箱已自动填好，点页面里的提交即可"
 }

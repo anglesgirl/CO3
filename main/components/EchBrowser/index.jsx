@@ -84,13 +84,22 @@ export function onEchLoginSuccess(handler) {
  *
  * 注意：ECH 域名**没有** fallback 分支，拿不到宿主就拒绝。
  */
-export function openEchBrowser(url, fallbackOpen) {
+export function openEchBrowser(url, fallbackOpenOrOpts) {
   // 统一返回 Promise：调用方有的 `await`、有的 `.catch()`，
   // 返回值不是 Promise 的话后者会直接抛 TypeError（真机上就是这么炸的）。
   if (!url) return Promise.resolve();
+  // 第二个参数可以是 fallbackOpen 函数，也可以是 { fallbackOpen, prefillEmail }
+  let fallbackOpen = null;
+  let prefillEmail = null;
+  if (typeof fallbackOpenOrOpts === 'function') {
+    fallbackOpen = fallbackOpenOrOpts;
+  } else if (fallbackOpenOrOpts && typeof fallbackOpenOrOpts === 'object') {
+    fallbackOpen = fallbackOpenOrOpts.fallbackOpen || null;
+    prefillEmail = fallbackOpenOrOpts.prefillEmail || null;
+  }
   if (isEchProtectedUrl(url)) {
     if (openHostFn) {
-      openHostFn(url);
+      openHostFn(url, prefillEmail);
       return Promise.resolve();
     }
     // fail-closed：宁可不打开，也不把这个域名的请求交给系统浏览器
@@ -148,6 +157,7 @@ export function EchBrowserHost() {
   const currentTheme = (appCtx && appCtx.currentTheme) || {};
   const { t } = useTranslation();
   const [url, setUrl] = useState(null);
+  const [prefillEmail, setPrefillEmail] = useState(null);
   const [reloadKey, setReloadKey] = useState(0);
   // 账号流程页提交后的小窗体翻译提示（原生回传页面文本 → 翻译）
   const [hint, setHint] = useState(null);
@@ -175,8 +185,9 @@ export function EchBrowserHost() {
   }, []);
 
   // 打开新页面时清掉上一个页面的翻译提示
-  const openPage = useCallback((u) => {
+  const openPage = useCallback((u, email) => {
     setHint(null);
+    setPrefillEmail(email || null);
     setUrl(u);
   }, []);
   useEffect(() => {
@@ -252,7 +263,7 @@ export function EchBrowserHost() {
 
         {NativeEchWebView ? (
           // key 变化即重建，用于"刷新"
-          <NativeEchWebView key={reloadKey} sourceUrl={url} style={styles.web} />
+          <NativeEchWebView key={reloadKey} sourceUrl={url} prefillEmail={prefillEmail} style={styles.web} />
         ) : (
           // fail-closed：平台/组件不可用时明确拒绝，不偷偷改用系统浏览器
           <View style={styles.center}>

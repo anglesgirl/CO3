@@ -76,6 +76,16 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                             }
                         } catch (_: Exception) {}
                     }
+                    // 排队页：App 输入框填的邮箱自动填进表单（2026-10-02 用户要求：
+                    // App 提供输入框，提交走浏览器）。
+                    if ((url ?: "").contains("/invite_requests") && !prefillEmail.isNullOrEmpty()) {
+                        val em = prefillEmail!!.replace("\\", "\\\\").replace("'", "\\'")
+                        view.evaluateJavascript(
+                            "(function(){var i=document.querySelector('input[type=email],input[name*=email i]');" +
+                            "if(i){i.value='" + em + "';i.dispatchEvent(new Event('input',{bubbles:true}));}})()",
+                            null
+                        )
+                    }
                     // 页面文本回传：注册/激活/排队等账号流程页提交后，页面返回结果，
                     // App 外小窗体做翻译提示（RN 侧按 URL 过滤，浏览作品页不打扰）。
                     extractPageText(view, url)
@@ -338,6 +348,13 @@ class EchWebViewManager : SimpleViewManager<WebView>() {
                 }
             }.start()
         }
+    }
+
+    private var prefillEmail: String? = null
+
+    @ReactProp(name = "prefillEmail")
+    fun setPrefillEmail(view: WebView, email: String?) {
+        prefillEmail = email?.take(120)
     }
 
     @ReactProp(name = "sourceUrl")

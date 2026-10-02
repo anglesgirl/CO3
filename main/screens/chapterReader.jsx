@@ -542,7 +542,8 @@ const ChapterReader = ({
                 `${updateTransJs(domIdx, segmentPrefixRef.current[domIdx], true)}\ntrue;`,
               );
             } catch (e) {
-              segmentPrefixRef.current[domIdx] = '';
+              // 保留已成功的块：前面 chunk 的译文已经写进 DOM，
+              // 清空会导致"翻译到一半被吃掉"（2026-10-02 用户反馈）。
               break;
             }
           }

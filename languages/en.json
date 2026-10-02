@@ -626,5 +626,6 @@
   "ech_browser_hint_ok": "Got it",
   "screen_account_center_request_already": "This email is already on the waiting list",
   "screen_account_center_request_submitted": "Submitted, check your email for the invitation",
-  "screen_account_center_queue_email_hint": "Enter email to request"
+  "screen_account_center_queue_email_hint": "Enter email to request",
+  "screen_account_center_request_browser_hint": "Tap submit to open the waiting list page in the browser with your email pre-filled"
 }
