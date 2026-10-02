@@ -472,23 +472,21 @@ const ChapterReader = ({
       webViewRef.current.injectJavaScript(
         `${updateTransJs(domIdx, '', true)}\ntrue;`,
       );
-      const maxTok = Math.max(512, Math.min(2048, Math.round(String(src).length * 1.2)));
-      let zh = String((await streamWithTimeout(Hymt.translate(src, maxTok))) || '').trim();
-      if (looksBrokenZh(zh, src)) {
-        // 设备不行，自动试在线（2026-10-02 换思路）
-        try {
-          const { translateTexts } = require('../web/translate/freeTranslation');
-          const r = await translateTexts([src], 'en', 'zh-CN');
-          if (r && r[0] && String(r[0]).trim()) zh = String(r[0]).trim();
-        } catch (e) {}
-      }
-      if (looksBrokenZh(zh, src)) {
-        // 在线也不行才标记失败
-        webViewRef.current.injectJavaScript(`${markFailedJs(domIdx)}\ntrue;`);
-      } else {
+      // 2026-10-02：单段重试也走编排器（术语占位符+二分重试）
+      const { TranslationOrchestrator } = require('../web/translate/translationOrchestrator');
+      const { getTranslateEngine } = require('../web/translate/settings');
+      const engine = await getTranslateEngine();
+      const orchestrator = new TranslationOrchestrator({
+        engine: (engine === 'device' && Hymt) ? 'device' : 'online',
+      });
+      const results = await orchestrator.translateParagraphs([{ id: String(domIdx), text: src }]);
+      const zh = results[String(domIdx)];
+      if (zh && String(zh).trim()) {
         webViewRef.current.injectJavaScript(
           `${updateTransJs(domIdx, zh, false)}\ntrue;`,
         );
+      } else {
+        webViewRef.current.injectJavaScript(`${markFailedJs(domIdx)}\ntrue;`);
       }
     } catch (e) {
       webViewRef.current.injectJavaScript(`${markFailedJs(domIdx)}\ntrue;`);
@@ -552,7 +550,37 @@ const ChapterReader = ({
       let doneN = 0;
       let failed = 0;
 
-      if (engine === 'device' && Hymt) {
+      // 2026-10-02：统一走 TranslationOrchestrator（借鉴沉浸式翻译+ao3-chinese）
+      // 原生只提供推理接口，术语占位符、提示词、批量、重试全在 JS 侧
+      const { TranslationOrchestrator } = require('../web/translate/translationOrchestrator');
+      const { Hymt } = NativeModules;
+
+      // 1. 过滤超短文本（<20 字符跳过，保留原文）
+      const validParas = [];
+      for (let k = 0; k < texts.length; k += 1) {
+        const t = String(texts[k] || '').trim();
+        if (t.length < 20) {
+          // 清掉占位符
+          webViewRef.current.injectJavaScript(`${removeTransJs(idxs[k])}\ntrue;`);
+          doneN += 1;
+          setTranslateProgress({ done: doneN, total: texts.length });
+        } else {
+          validParas.push({ id: String(idxs[k]), text: texts[k] });
+          // 占位显示 ⌛
+          webViewRef.current.injectJavaScript(`${setSegmentPendingJs(idxs[k])}\ntrue;`);
+        }
+      }
+
+      // 2. 编排器翻译（4段一批，带术语占位符、二分重试）
+      const orchestrator = new TranslationOrchestrator({
+        engine: (engine === 'device' && Hymt) ? 'device' : 'online',
+        onProgress: (done, total) => {
+          setTranslateProgress({ done: doneN + done, total: texts.length });
+        },
+      });
+
+      // 检查设备是否就绪（device 模式）
+      if (orchestrator.engine === 'device') {
         let initOk = false;
         try {
           initOk = await Hymt.isReady();
@@ -560,136 +588,29 @@ const ChapterReader = ({
         } catch (e) {
           initOk = false;
         }
-        if (!initOk) throw new Error(t('reader_translate_failed'));
+        if (!initOk) {
+          // 设备不可用，切在线
+          orchestrator.engine = 'online';
+        }
+      }
 
-        for (let k = 0; k < texts.length; k += 1) {
-          // 用户已返回 / 切章 / 被新翻译取代 —— 立即停止，别再往（可能已卸载的）WebView 注入译文，
-          // 也不要让后半程的失败被当成"翻译失败"。
-          if (!alive()) break;
-          const domIdx = idxs[k];
-          // 超短文本（<20 字符）跳过不翻：标题/标签类短语模型翻不好
-          //（如 "Sukuna x Reader" → "《宿傩x读器》），保留原文更干净。
-          //（2026-10-02 用户确认）
-          if (String(texts[k] || '').trim().length < 20) {
-            doneN += 1;
-            setTranslateProgress({ done: doneN, total: texts.length });
-            // 清掉占位符，否则 ⌛ 会一直卡着
-            webViewRef.current.injectJavaScript(`${removeTransJs(domIdx)}\ntrue;`);
-            continue;
-          }
-          // 该段开始翻译：占位显示 ⌛（已完成段落不受影响）。
-          // 严格串行：本段（含其所有分块）翻完才进入下一段。
-          webViewRef.current.injectJavaScript(`${setSegmentPendingJs(domIdx)}\ntrue;`);
-          // 长段落切块：每块单独流式翻译，已完成的块作为前缀累积到同一条译文里
-          const chunks = splitLongText(texts[k]);
-          segmentPrefixRef.current[domIdx] = '';
-          let segOk = false;
-          for (const chunk of chunks) {
-            // 块之间也查代际：被取代就停，不再往原生队列里加活
-            if (!alive()) break;
-            try {
-              // translateStream 的 resolve 值即该块译文；把它累积下来，
-              // 下一块的流式输出就会接在这段已经写好的文字后面。
-              // 整段不再切块，maxTokens 必须按长度给足，否则长段会被截断（hit_limit）
-              const maxTok = Math.max(512, Math.min(2048, Math.round(String(chunk).length * 1.2)));
-              let part = await streamWithTimeout(
-                Hymt.translateStream(chunk, domIdx, maxTok),
-              );
-              // 质量门禁：本机 2bit 模型实测会吐截断/混入他语/重复垃圾。
-              // 坏块用单段接口重试一次，仍坏就放弃该段并移除占位 —— 宁可留原文，
-              // 也绝不把垃圾译文显示给用户（fail-closed）。
-              if (looksBrokenZh(part, chunk)) {
-                diagEvent('hymt_quality', {
-                  attempt: -2,
-                  in_len: chunk.length,
-                  out_len: String(part || '').length,
-                  out_tail: String(part || '').slice(-30),
-                });
-                // 重试前先把坏的流式结果从屏幕上撤下来，回到上一个好状态，
-                // 避免用户在重试期间看到一闪而过的坏字（2026-10-02 优化）。
-                webViewRef.current.injectJavaScript(
-                  `${updateTransJs(domIdx, segmentPrefixRef.current[domIdx] || '', true)}\ntrue;`,
-                );
-                part = String(
-                  (await streamWithTimeout(Hymt.translate(chunk, maxTok))) || '',
-                );
-                if (looksBrokenZh(part, chunk)) throw new Error('broken translation');
-              }
-              segmentPrefixRef.current[domIdx] =
-                String(segmentPrefixRef.current[domIdx] || '') + String(part || '');
-              segOk = true;
-              // 把「通过质量门禁的正式译文」写回 DOM：
-              // 流式过程中写入的是模型原始输出，门禁重试后的结果才是最终版 ——
-              // 不写回来就会把坏译文（截断/混语）留在屏幕上。
-              webViewRef.current.injectJavaScript(
-                `${updateTransJs(domIdx, segmentPrefixRef.current[domIdx], true)}\ntrue;`,
-              );
-            } catch (e) {
-              // 保留已成功的块：前面 chunk 的译文已经写进 DOM，
-              // 清空会导致"翻译到一半被吃掉"（2026-10-02 用户反馈）。
-              break;
-            }
-          }
-          // 被取代了：本段没跑完也不记失败，直接停（不污染失败数和提示）
-          if (!alive()) break;
-          if (!segOk) {
-            // 设备翻坏了：自动 fallback 在线翻译，不打扰用户（2026-10-02 换思路）
-            let onlineZh = '';
-            try {
-              const { translateTexts } = require('../web/translate/freeTranslation');
-              const r = await translateTexts([texts[k]], 'en', 'zh-CN');
-              if (r && r[0] && String(r[0]).trim()) onlineZh = String(r[0]).trim();
-            } catch (e) {}
-            if (onlineZh) {
-              webViewRef.current.injectJavaScript(
-                `${updateTransJs(domIdx, onlineZh, false)}\ntrue;`,
-              );
-            } else {
-              failed += 1;
-              // 在线也不行才标记失败（可点按重试）
-              webViewRef.current.injectJavaScript(`${markFailedJs(domIdx)}\ntrue;`);
-            }
-          } else {
-            // 本段（含所有分块）全部完成：去掉 pending 样式，⌛/弱化样式 → 正式译文
-            webViewRef.current.injectJavaScript(
-              `${updateTransJs(domIdx, segmentPrefixRef.current[domIdx] || '', false)}\ntrue;`,
-            );
-          }
-          delete segmentPrefixRef.current[domIdx];
-          doneN += 1;
-          setTranslateProgress({ done: doneN, total: texts.length });
+      const results = await orchestrator.translateParagraphs(validParas);
+
+      // 3. 写回 DOM
+      for (const { id } of validParas) {
+        if (!alive()) break;
+        const zh = results[id];
+        const domIdx = id; // id 就是 domIdx 的字符串形式
+        if (zh && String(zh).trim()) {
+          webViewRef.current.injectJavaScript(
+            `${updateTransJs(domIdx, zh, false)}\ntrue;`,
+          );
+        } else {
+          failed += 1;
+          webViewRef.current.injectJavaScript(`${markFailedJs(domIdx)}\ntrue;`);
         }
-      } else {
-        const { translateTextsSmart } = require('../web/translate/bilingual');
-        const BATCH = 6;
-        for (let s0 = 0; s0 < texts.length; s0 += BATCH) {
-          if (!alive()) break;
-          const tchunk = texts.slice(s0, s0 + BATCH);
-          const ichunk = idxs.slice(s0, s0 + BATCH);
-          let zh = null;
-          try {
-            zh = await translateTextsSmart(tchunk);
-          } catch (e) {
-            zh = null;
-          }
-          if (zh && zh.length === tchunk.length) {
-            const js = tchunk
-              .map((_, j) =>
-                String(zh[j] || '').trim()
-                  ? updateTransJs(ichunk[j], zh[j], false)
-                  : removeTransJs(ichunk[j]),
-              )
-              .join('\n');
-            webViewRef.current.injectJavaScript(`${js}\ntrue;`);
-          } else {
-            failed += tchunk.length;
-            ichunk.forEach((di) => {
-              webViewRef.current.injectJavaScript(`${removeTransJs(di)}\ntrue;`);
-            });
-          }
-          doneN += tchunk.length;
-          setTranslateProgress({ done: doneN, total: texts.length });
-        }
+        doneN += 1;
+        setTranslateProgress({ done: doneN, total: texts.length });
       }
 
       setTranslated(true);
