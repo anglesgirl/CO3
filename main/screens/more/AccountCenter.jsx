@@ -330,10 +330,15 @@ export default function AccountCenter() {
               onPress={async () => {
                 setValidating(true);
                 try {
-                  // 去 AO3 官方检查：已登录就直接把 Cookie 会话认进 App
+                  // 去 AO3 官方检查：已登录就直接把 Cookie 会话认进 App。
+                  // 注意：不要再调 refresh() —— 它读本地 CookieManager，
+                  // Cookie 同步有延迟时会把刚认下的登录态翻盘。
                   const ok = await syncLoginFromServer();
                   if (ok) {
-                    await refresh();
+                    clearIdentityCache();
+                    const identity = await fetchAccountIdentity(true).catch(() => null);
+                    setLogged(true);
+                    setUser((identity && identity.username) || '');
                   } else {
                     setLogged(false);
                     setUser('');

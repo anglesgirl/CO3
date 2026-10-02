@@ -1,6 +1,5 @@
 package com.co3.ech
 
-import com.facebook.react.modules.network.ReactCookieJarContainer
 import okhttp3.OkHttpClient
 import java.io.IOException
 import java.net.Proxy
@@ -60,7 +59,7 @@ object EchHttp {
             })
             .sslSocketFactory(ConscryptEch.socketFactory, ConscryptEch.trustManager)
             .dns(EchDns())
-            .cookieJar(ReactCookieJarContainer())
+            .cookieJar(WebViewCookieJar())
             .addInterceptor(EchRetryInterceptor())
             // 不跟随重定向：调用方手动处理 3xx（登录流程要读 302 的 Location + Set-Cookie）
             .followRedirects(false)
