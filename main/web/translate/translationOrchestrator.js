@@ -18,7 +18,7 @@ import { diagEvent } from '../../utils/diag';
 
 // 内置同人圈常用术语（可扩展）
 const BUILTIN_TERMS = {
-  // 咒术回战
+  // 咒术回战·人物
   'Sukuna': '宿傩',
   'Itadori Yuji': '虎杖悠仁',
   'Yuji Itadori': '虎杖悠仁',
@@ -26,6 +26,16 @@ const BUILTIN_TERMS = {
   'Nobara Kugisaki': '钉崎野蔷薇',
   'Satoru Gojo': '五条悟',
   'Kenjaku': '羂索',
+  'Uraume': '里梅',
+  // 咒术回战·术语
+  'sorcerer': '咒术师',
+  'sorcerers': '咒术师',
+  'cursed energy': '咒力',
+  'cursed technique': '术式',
+  'binding vow': '束缚',
+  'Heian Era': '平安时代',
+  'vessel': '容器',
+  'Domain Expansion': '领域展开',
   // 通用同人术语
   'slow burn': '慢热',
   'slow-burn': '慢热',
