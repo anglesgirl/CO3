@@ -674,6 +674,15 @@ const ChapterReader = ({
     }
   }, [translateProgress, t]);
 
+  // 退出页面时清掉进度条：Toast 是全局的，组件卸载不会自动藏
+  //（2026-10-02 用户反馈：退出页面后"翻译中"还停留）。
+  // 单独一个空依赖的 effect，只在卸载时跑，避免每次进度更新都闪。
+  useEffect(() => {
+    return () => {
+      Toast.hide();
+    };
+  }, []);
+
   // Reset state when chapter changes
   useEffect(() => {
     setScrollProgress(0);
