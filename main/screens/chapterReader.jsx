@@ -553,7 +553,6 @@ const ChapterReader = ({
       // 2026-10-02：统一走 TranslationOrchestrator（借鉴沉浸式翻译+ao3-chinese）
       // 原生只提供推理接口，术语占位符、提示词、批量、重试全在 JS 侧
       const { TranslationOrchestrator } = require('../web/translate/translationOrchestrator');
-      const { Hymt } = NativeModules;
 
       // 1. 过滤超短文本（<20 字符跳过，保留原文）
       const validParas = [];
