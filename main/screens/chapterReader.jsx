@@ -475,7 +475,15 @@ const ChapterReader = ({
       const maxTok = Math.max(512, Math.min(2048, Math.round(String(src).length * 1.2)));
       let zh = String((await streamWithTimeout(Hymt.translate(src, maxTok))) || '').trim();
       if (looksBrokenZh(zh, src)) {
-        // 标记失败
+        // 设备不行，自动试在线（2026-10-02 换思路）
+        try {
+          const { translateTexts } = require('../web/translate/freeTranslation');
+          const r = await translateTexts([src], 'en', 'zh-CN');
+          if (r && r[0] && String(r[0]).trim()) zh = String(r[0]).trim();
+        } catch (e) {}
+      }
+      if (looksBrokenZh(zh, src)) {
+        // 在线也不行才标记失败
         webViewRef.current.injectJavaScript(`${markFailedJs(domIdx)}\ntrue;`);
       } else {
         webViewRef.current.injectJavaScript(
@@ -565,6 +573,8 @@ const ChapterReader = ({
           if (String(texts[k] || '').trim().length < 20) {
             doneN += 1;
             setTranslateProgress({ done: doneN, total: texts.length });
+            // 清掉占位符，否则 ⌛ 会一直卡着
+            webViewRef.current.injectJavaScript(`${removeTransJs(domIdx)}\ntrue;`);
             continue;
           }
           // 该段开始翻译：占位显示 ⌛（已完成段落不受影响）。
@@ -623,9 +633,22 @@ const ChapterReader = ({
           // 被取代了：本段没跑完也不记失败，直接停（不污染失败数和提示）
           if (!alive()) break;
           if (!segOk) {
-            failed += 1;
-            // 标记失败（可点按重试），而不是直接删掉让用户摸不着头脑
-            webViewRef.current.injectJavaScript(`${markFailedJs(domIdx)}\ntrue;`);
+            // 设备翻坏了：自动 fallback 在线翻译，不打扰用户（2026-10-02 换思路）
+            let onlineZh = '';
+            try {
+              const { translateTexts } = require('../web/translate/freeTranslation');
+              const r = await translateTexts([texts[k]], 'en', 'zh-CN');
+              if (r && r[0] && String(r[0]).trim()) onlineZh = String(r[0]).trim();
+            } catch (e) {}
+            if (onlineZh) {
+              webViewRef.current.injectJavaScript(
+                `${updateTransJs(domIdx, onlineZh, false)}\ntrue;`,
+              );
+            } else {
+              failed += 1;
+              // 在线也不行才标记失败（可点按重试）
+              webViewRef.current.injectJavaScript(`${markFailedJs(domIdx)}\ntrue;`);
+            }
           } else {
             // 本段（含所有分块）全部完成：去掉 pending 样式，⌛/弱化样式 → 正式译文
             webViewRef.current.injectJavaScript(
