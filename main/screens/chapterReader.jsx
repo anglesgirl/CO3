@@ -46,6 +46,25 @@ const PROGRESS_SAVE_DEBOUNCE = 1000;
 const EXTRACT_SEGS_JS = `
 (function(){
   try {
+    // 【2026-10-02】预处理：AO3 有些章节一个 <p> 里用 <br><br> 藏多个逻辑段落，
+    // 不拆开会导致多段挤成一段翻译。先把它们拆成独立的 <p>。
+    var allP = document.querySelectorAll('p:not(.co3-trans)');
+    for (var k = 0; k < allP.length; k++) {
+      var pEl = allP[k];
+      var html = pEl.innerHTML || '';
+      if (/<br\s*\/?>\s*<br\s*\/?>/i.test(html)) {
+        var parts = html.split(/<br\s*\/?>\s*<br\s*\/?>/i);
+        var frag = document.createDocumentFragment();
+        for (var m = 0; m < parts.length; m++) {
+          var newP = document.createElement('p');
+          newP.innerHTML = parts[m];
+          // 继承原 <p> 的样式类
+          if (pEl.className) newP.className = pEl.className;
+          frag.appendChild(newP);
+        }
+        pEl.parentNode.replaceChild(frag, pEl);
+      }
+    }
     // 【关键修复】排除我们自己注入的译文节点：重进/重翻时它们还在 DOM 里，
     // 不排除就会被当成原文抓去翻译——中文当源文再翻一次，又写回错位，
     // 就是截图里那种中法混杂、原文重复。排除后多次提取结果完全一致。
