@@ -195,7 +195,7 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                 val t0 = System.currentTimeMillis()
                 // 官方 README 的 ZH<=>XX 权威模板（注意 target_language 要用完整语言名，
                 // 如"中文"，不能填语言代码 zh，否则模型行为漂移、输出拒答文本）。
-                val prompt = "将以下文本翻译为$TARGET_LANG_NAME，注意只需要输出翻译后的结果，不要额外解释： $text"
+                val prompt = "将以下同人小说文本翻译为$TARGET_LANG_NAME，用自然流畅的同人文风格，对话口语化，人名按常见译法，注意只需要输出翻译后的结果，不要额外解释： $text"
                 val mt = if (maxTokens > 0) maxTokens else 1024
                 val rc = e.sendUserPrompt(prompt, mt)
                 if (rc != 0) {
@@ -280,7 +280,7 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                 val t0 = System.currentTimeMillis()
                 val joined = items.joinToString(SEP)
                 val prompt =
-                    "将以下文本翻译为$TARGET_LANG_NAME，注意只需要输出翻译后的结果，不要额外解释： $joined"
+                    "将以下同人小说文本翻译为$TARGET_LANG_NAME，用自然流畅的同人文风格，对话口语化，人名按常见译法，注意只需要输出翻译后的结果，不要额外解释： $joined"
                 val mt = if (maxTokens > 0) maxTokens else 1024
                 val rc = e.sendUserPrompt(prompt, mt)
                 if (rc != 0) {
@@ -379,7 +379,7 @@ class HymtModule(private val reactContext: ReactApplicationContext) :
                     mapOf("idx" to index, "in_len" to text.length),
                 )
                 val prompt =
-                    "将以下文本翻译为$TARGET_LANG_NAME，注意只需要输出翻译后的结果，不要额外解释： $text"
+                    "将以下同人小说文本翻译为$TARGET_LANG_NAME，用自然流畅的同人文风格，对话口语化，人名按常见译法，注意只需要输出翻译后的结果，不要额外解释： $text"
                 val mt = if (maxTokens > 0) maxTokens else 512
                 val rc = e.sendUserPrompt(prompt, mt)
                 if (rc != 0) {
