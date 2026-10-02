@@ -148,6 +148,11 @@ export function looksBrokenZh(zh, src) {
   const zhEnds = /[。！？…”’"')）】》\]]\s*$/.test(t);
   if (srcEnds && !zhEnds && t.length < 10) return true;
 
+  // ⑥ 严重截断：译文长度不到原文 15%（如 "Sukuna x Reader" → "宿"）。
+  // 标题/短句没有句末标点，走不到规则⑤，这里按长度比兜底。
+  const srcLen = String(src || '').trim().length;
+  if (srcLen >= 8 && t.length < srcLen * 0.15) return true;
+
   return false;
 }
 
