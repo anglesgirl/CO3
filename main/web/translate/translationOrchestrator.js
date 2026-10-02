@@ -207,9 +207,8 @@ export class TranslationOrchestrator {
     try {
       if (isDevice) {
         const { Hymt } = NativeModules;
-        // 2026-10-03：改用 translateStream，原生层 emit hymt_token 事件，
-        // chapterReader.jsx 的监听器会实时把 token 注入 WebView，用户看到逐字输出。
-        raw = await withTimeout(Hymt.translateStream(batch[0].text, 0, maxTokens), 90000);
+        // 2026-10-03 02:30 回退：translateStream 切流后持续失败，先用回 translateWithPrompt 保可用。
+        raw = await withTimeout(Hymt.translateWithPrompt(prompt, maxTokens), 90000);
         // 单段：直接取结果
         const p = withPlaceholders[0];
         const trans = this.termManager.postReplaceTerms(String(raw || '').trim());
