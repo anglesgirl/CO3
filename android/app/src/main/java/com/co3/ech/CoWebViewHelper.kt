@@ -124,32 +124,74 @@ object CoWebViewHelper {
                 // 3) 引擎请求：原始 https URL（不改写），ECH 在进程内完成。
                 //    EchEngineClient 内部做 DoH 选路并**逐个尝试**候选地址 ——
                 //    国内到不同 CF IP 段可达性差异极大，只试第一个会时不时全挂。
-                val resp = EchEngineClient.request(
-                    host = host,
-                    url = url,
-                    method = "GET",
-                    headers = hb.toString(),
-                    body = null,
-                    totalTimeoutMs = 30_000L,
-                )
+                //
+                //    3xx 手动跟随（最多 5 跳）：WebResourceResponse 不允许 3xx 状态码，
+                //    直接返回会抛 "statusCode can't be in the [300, 399] range"；包装成
+                //    200 后 WebView 又不会自动跳转 → 白屏。必须在这里跟完再返回。
+                //    注意 h2 下响应头名全小写，Location 必须大小写不敏感地找
+                //    （2026-10-02 真机：/users/login 302 的 location 取不到 → 登录白屏）。
+                var fetchUrl = url
+                var fetchHost = host
+                var resp: com.co3.ech.EchEngineClient.Response? = null
+                var redirects = 0
+                while (true) {
+                    val r = EchEngineClient.request(
+                        host = fetchHost,
+                        url = fetchUrl,
+                        method = "GET",
+                        headers = hb.toString(),
+                        body = null,
+                        totalTimeoutMs = 30_000L,
+                    )
+                    // 每跳都处理 Set-Cookie（登录态可能在重定向链上更新）
+                    processSetCookies(fetchUrl, r.headers)
+                    if (r.status !in 300..399 || redirects >= 5) {
+                        resp = r
+                        break
+                    }
+                    val loc = extractLocation(r.headers) ?: break
+                    val next = resolveUrl(fetchUrl, loc)
+                    val nextHost = runCatching { java.net.URI(next).host }.getOrNull()
+                    // 只跟同保护域的重定向，跨站交回 WebView 处理
+                    if (nextHost == null || !EchHosts.isProtected(nextHost)) break
+                    Diagnostics.event(
+                        "webview_redirect_follow",
+                        mapOf("from" to fetchUrl.take(80), "to" to next.take(80)),
+                    )
+                    fetchUrl = next
+                    fetchHost = nextHost
+                    redirects++
+                    // 下一跳重新读 Cookie（上面已落盘）
+                    val freshCookie = runCatching {
+                        android.webkit.CookieManager.getInstance().getCookie(fetchUrl)
+                    }.getOrNull().orEmpty()
+                    // 重建请求头里的 Cookie 行
+                    val lines = hb.toString().lines().filterNot {
+                        it.startsWith("Cookie:", true)
+                    }.toMutableList()
+                    if (freshCookie.isNotEmpty()) lines.add("Cookie: $freshCookie")
+                    hb.setLength(0)
+                    lines.forEach { hb.append(it).append("\r\n") }
+                }
+                val finalResp = resp ?: throw java.io.IOException("重定向跟随失败")
 
                 // 4.4) 5xx 当成可重试失败处理（丢给下面的 catch 走重试），
                 //      否则会把错误页当正常内容渲染，用户看到的是 CF 的错误页。
-                if (resp.status in retryableStatuses) {
-                    throw IOException("上游 ${resp.status}（可重试）")
+                if (finalResp.status in retryableStatuses) {
+                    throw IOException("上游 ${finalResp.status}（可重试）")
                 }
 
                 // 4.5) 4xx 打不出原因就只能靠猜。把状态码和响应体前缀落进诊断 ——
                 //      CF 的拦截理由通常就写在 body 里，真机排查全靠它。
-                if (resp.status >= 400) {
+                if (finalResp.status >= 400) {
                     Diagnostics.trace(
                         "webview.httpError",
                         mapOf(
                             "host" to host,
                             "path" to url.removePrefix("https://$host"),
-                            "code" to resp.status.toString(),
-                            "echAccepted" to resp.echAccepted.toString(),
-                            "body" to String(resp.body, Charsets.UTF_8).take(300).replace("\n", " "),
+                            "code" to finalResp.status.toString(),
+                            "echAccepted" to finalResp.echAccepted.toString(),
+                            "body" to String(finalResp.body, Charsets.UTF_8).take(300).replace("\n", " "),
                         ),
                     )
                 }
@@ -157,14 +199,14 @@ object CoWebViewHelper {
                 // 5) 拆响应头。Set-Cookie 不能用 map 承载（同名多值会互相覆盖），
                 //    单独提出来写进 CookieManager。
                 val responseHeaders = LinkedHashMap<String, String>()
-                val setCookies = ArrayList<String>()
-                resp.headers.split("\r\n", "\n").forEach { line ->
+                finalResp.headers.split("\r\n", "\n").forEach { line ->
                     val idx = line.indexOf(':')
                     if (idx <= 0) return@forEach
                     val name = line.substring(0, idx).trim()
                     val value = line.substring(idx + 1).trim()
                     when {
-                        name.equals("Set-Cookie", true) -> setCookies.add(value)
+                        // Set-Cookie 已在 processSetCookies 处理（重定向每跳都处理），这里跳过
+                        name.equals("Set-Cookie", true) -> Unit
                         // 交给 WebView 自己按 body 长度算，免得长度对不上导致截断。
                         name.equals("Content-Length", true) -> Unit
                         name.equals("Transfer-Encoding", true) -> Unit
@@ -172,33 +214,7 @@ object CoWebViewHelper {
                     }
                 }
 
-                // 6) Set-Cookie → CookieManager。沿用旧路线的属性改写：WebView 对
-                //    Secure / SameSite=None 的接受度差，不改写会直接丢 cookie。
-                runCatching {
-                    val cm = CookieManager.getInstance()
-                    var sessionRecv = false
-                    var credsRecv = false
-                    for (raw in setCookies) {
-                        var fixed = raw
-                        fixed = fixed.replace(Regex(";\\s*Domain=[^;]+", RegexOption.IGNORE_CASE), "")
-                        fixed = fixed.replace(Regex(";\\s*Secure", RegexOption.IGNORE_CASE), "")
-                        fixed = fixed.replace(Regex(";\\s*SameSite=[^;]+", RegexOption.IGNORE_CASE), "; SameSite=Lax")
-                        cm.setCookie(url, fixed)
-                        runCatching { cm.setCookie("https://archiveofourown.org/", fixed) }
-                        if (raw.contains("_otwarchive_session")) sessionRecv = true
-                        if (raw.contains("user_credentials")) credsRecv = true
-                    }
-                    cm.flush()
-                    if (sessionRecv) Diagnostics.event("webview_cookie_recv_session", mapOf("host" to host))
-                    if (credsRecv) Diagnostics.event("webview_cookie_recv_creds", mapOf("host" to host))
-                }.onFailure {
-                    Diagnostics.event(
-                        "webview_cookie_recv_err",
-                        mapOf("host" to host, "err" to (it.message ?: "")),
-                    )
-                }
-
-                // 7) 包装成 WebResourceResponse
+// 7) 包装成 WebResourceResponse
                 val contentType = responseHeaders.entries
                     .firstOrNull { it.key.equals("Content-Type", true) }?.value ?: "text/html"
                 var mimeType = "text/html"
@@ -215,36 +231,35 @@ object CoWebViewHelper {
                     "webview_ok",
                     mapOf(
                         "host" to host,
-                        "code" to resp.status.toString(),
-                        "len" to resp.body.size.toString(),
-                        "ech" to resp.echAccepted.toString(),
-                        "echRetries" to resp.echRetries.toString(),
+                        "code" to finalResp.status.toString(),
+                        "len" to finalResp.body.size.toString(),
+                        "ech" to finalResp.echAccepted.toString(),
+                        "echRetries" to finalResp.echRetries.toString(),
                         "attempt" to (attempt + 1).toString(),
                     ),
                 )
 
                 // WebResourceResponse 的 statusCode **不允许落在 [300,399]**，
-                // 否则 Android 直接抛 "statusCode can't be in the [300, 399] range"
-                // —— 真机诊断里 AO3 的 302 全部因此失败（登录跳转、权限检查…）。
-                // 做法：用 200 包装真实状态码，并把 Location 等跳转头原样透传，
-                // 由 WebView 自己决定是否跟随重定向。
-                val wrapped = resp.status in 300..399
+                // 否则 Android 直接抛 "statusCode can't be in the [300, 399] range"。
+                // 3xx 已在上面手动跟随（最多 5 跳），到这里的 3xx 只有两种可能：
+                // 跳数用完、或无 Location 头。仍包装成 200 避免崩溃。
+                val wrapped = finalResp.status in 300..399
                 val finalHeaders = LinkedHashMap(responseHeaders)
                 if (wrapped) {
-                    finalHeaders["X-Ech-Real-Status"] = resp.status.toString()
+                    finalHeaders["X-Ech-Real-Status"] = finalResp.status.toString()
                     Diagnostics.event(
                         "webview_redirect_wrapped",
-                        mapOf("host" to host, "code" to resp.status.toString(),
-                              "location" to (finalHeaders["Location"] ?: "").take(120)),
+                        mapOf("host" to host, "code" to finalResp.status.toString(),
+                              "location" to (extractLocation(finalResp.headers) ?: "").take(120)),
                     )
                 }
                 return WebResourceResponse(
                     mimeType,
                     encoding,
-                    if (wrapped) 200 else resp.status,
+                    if (wrapped) 200 else finalResp.status,
                     if (wrapped) "OK" else "OK",
                     finalHeaders,
-                    ByteArrayInputStream(resp.body),
+                    ByteArrayInputStream(finalResp.body),
                 )
             } catch (e: Exception) {
                 lastError = e.message ?: e.javaClass.simpleName
@@ -291,5 +306,56 @@ object CoWebViewHelper {
             mapOf("Cache-Control" to "no-store"),
             ByteArrayInputStream(page.toByteArray()),
         )
+    }
+
+    /** 重定向循环每跳调用：解析 Set-Cookie 并写入 CookieManager（带属性改写）。 */
+    private fun processSetCookies(url: String, headerStr: String) {
+        val setCookies = ArrayList<String>()
+        headerStr.split("\r\n", "\n").forEach { line ->
+            val i = line.indexOf(':')
+            if (i <= 0) return@forEach
+            if (line.substring(0, i).trim().equals("Set-Cookie", true)) {
+                setCookies.add(line.substring(i + 1).trim())
+            }
+        }
+        if (setCookies.isEmpty()) return
+        runCatching {
+            val cm = android.webkit.CookieManager.getInstance()
+            var sessionRecv = false
+            var credsRecv = false
+            for (raw in setCookies) {
+                var fixed = raw
+                fixed = fixed.replace(Regex(";\\s*Domain=[^;]+", RegexOption.IGNORE_CASE), "")
+                fixed = fixed.replace(Regex(";\\s*Secure", RegexOption.IGNORE_CASE), "")
+                fixed = fixed.replace(Regex(";\\s*SameSite=[^;]+", RegexOption.IGNORE_CASE), "; SameSite=Lax")
+                cm.setCookie(url, fixed)
+                runCatching { cm.setCookie("https://archiveofourown.org/", fixed) }
+                if (raw.contains("_otwarchive_session")) sessionRecv = true
+                if (raw.contains("user_credentials")) credsRecv = true
+            }
+            cm.flush()
+            if (sessionRecv) Diagnostics.event("webview_cookie_recv_session", mapOf("host" to "archiveofourown.org"))
+            if (credsRecv) Diagnostics.event("webview_cookie_recv_creds", mapOf("host" to "archiveofourown.org"))
+        }.onFailure {
+            Diagnostics.event("webview_cookie_recv_err", mapOf("err" to (it.message ?: "")))
+        }
+    }
+
+    /** 大小写不敏感地从响应头字符串中提取 Location（h2 下头名全小写）。 */
+    private fun extractLocation(headerStr: String): String? {
+        headerStr.split("\r\n", "\n").forEach { line ->
+            val i = line.indexOf(':')
+            if (i <= 0) return@forEach
+            if (line.substring(0, i).trim().equals("Location", true)) {
+                return line.substring(i + 1).trim().ifEmpty { null }
+            }
+        }
+        return null
+    }
+
+    /** 解析重定向目标（处理相对路径）。 */
+    private fun resolveUrl(base: String, location: String): String {
+        return runCatching { java.net.URI(base).resolve(location).toString() }
+            .getOrNull() ?: location
     }
 }

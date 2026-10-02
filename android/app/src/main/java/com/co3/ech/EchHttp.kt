@@ -67,7 +67,9 @@ object EchHttp {
             .followSslRedirects(false)
             // 优化（2026-10-02）：15s → 8s。DoH 已经 fail-fast，ECH 握手到 CF 边缘
             // 不该超过 8s；超了就是被干扰，快速失败比傻等强。
-            .connectTimeout(8, TimeUnit.SECONDS)
+            // 4s 而非 8s：EchDoh 给 4 个 IP（v4x2+v6x2），OkHttp 逐个试，单个 8s
+            // 挂 3 个就 24s，直接撞 30s 总超时。4s 单个，4 个全挂也才 16s。
+            .connectTimeout(4, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .build()
