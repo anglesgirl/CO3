@@ -121,8 +121,11 @@ const BAD_CHAR = /[\u0b80-\u0bff\u0400-\u04ff\u0530-\u058f\u0590-\u05ff\u0600-\u
  * 这些规则都来自真机上实际观察到的坏输出形态，不是凭空设想的。
  */
 export function looksBrokenZh(zh, src) {
+  // 2026-10-03 用户要求：去掉质量拦截。有译文就显示，再差也能猜；拦截后直接消失更迷惑。
+  // 只拦完全空的。
   const t = String(zh == null ? '' : zh).trim();
   if (!t) return true;
+  return false;
 
   // ① 乱码字符超标：混入泰米尔文/西里尔/控制字符等（真机截图里出现过整段泰米尔文）
   //    用黑名单 BAD_CHAR，不能用白名单 —— 白名单会把正常的中文标点判成"非法"（见上方注释）。
