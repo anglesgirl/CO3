@@ -144,16 +144,28 @@ export class TranslationOrchestrator {
   }
 
   async translateBatchWithRetry(batch, depth) {
+    // 本机小模型：单段简单提示词（复杂格式会复述输入，不翻译）
+    // 在线大模型：批量+id 格式
+    const isDevice = this.engine === 'device';
+    const effectiveBatch = isDevice ? batch.slice(0, 1) : batch;
+
     // 1. 术语占位符
-    const withPlaceholders = batch.map(({ id, text }) => {
+    const withPlaceholders = effectiveBatch.map(({ id, text }) => {
       const { text: phText, mapping } = this.termManager.applyPlaceholders(text);
       return { id, text: phText, mapping, original: text };
     });
 
-    // 2. 构建提示词
-    const prompt = buildPrompt(withPlaceholders.map(({ id, text }) => ({ id, text })));
-    const maxTokens = Math.max(512, Math.min(4096,
-      withPlaceholders.reduce((s, p) => s + p.text.length, 0) * 2));
+    // 2. 构建提示词（device 用简单版）
+    let prompt, maxTokens;
+    if (isDevice) {
+      const p = withPlaceholders[0];
+      prompt = `将以下同人小说段落翻译为中文，用自然流畅的同人文风格，对话口语化，只输出译文不要解释：\n${p.text}`;
+      maxTokens = Math.max(512, Math.min(2048, Math.round(p.text.length * 1.5)));
+    } else {
+      prompt = buildPrompt(withPlaceholders.map(({ id, text }) => ({ id, text })));
+      maxTokens = Math.max(512, Math.min(4096,
+        withPlaceholders.reduce((s, p) => s + p.text.length, 0) * 2));
+    }
 
     // 3. 调用引擎（device 加 90 秒超时，防卡死）
     let raw = '';
@@ -162,9 +174,20 @@ export class TranslationOrchestrator {
       new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
     ]);
     try {
-      if (this.engine === 'device') {
+      if (isDevice) {
         const { Hymt } = NativeModules;
         raw = await withTimeout(Hymt.translateWithPrompt(prompt, maxTokens), 90000);
+        // 单段：直接取结果
+        const p = withPlaceholders[0];
+        const trans = this.termManager.restorePlaceholders(String(raw || '').trim(), p.mapping);
+        const res = {};
+        res[p.id] = trans;
+        // 本机还有剩余段落，递归处理
+        if (batch.length > 1) {
+          const rest = await this.translateBatchWithRetry(batch.slice(1), depth);
+          return { ...res, ...rest };
+        }
+        return res;
       } else {
         const { translateTexts } = require('./freeTranslation');
         const texts = withPlaceholders.map(p => p.original);
