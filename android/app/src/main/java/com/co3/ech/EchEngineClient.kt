@@ -86,13 +86,34 @@ object EchEngineClient {
             call.execute().use { resp ->
                 val status = resp.code
                 val headerStr = buildString {
-                    // 逐个追加：同名多值（如 Set-Cookie）全部保留，不合并
+                    // 逐个追加：同名多值（如 Set-Cookie）全部保留，不合并。
+                    // Content-Encoding/Content-Length 不返回：body 已按前者解开，
+                    // 后者随之失效，留着只会误导调用方。
                     for (i in 0 until resp.headers.size) {
-                        append(resp.headers.name(i)).append(": ")
+                        val hn = resp.headers.name(i)
+                        if (hn.equals("Content-Encoding", true) ||
+                            hn.equals("Content-Length", true)
+                        ) continue
+                        append(hn).append(": ")
                             .append(resp.headers.value(i)).append("\r\n")
                     }
                 }
-                val respBody = readBounded(resp.body?.byteStream(), MAX_BODY_BYTES)
+                // 手动声明的 Accept-Encoding（见 EchEngineInterceptor，Cloudflare 要求，
+                // 缺了会 525）会关闭 OkHttp 的透明解压 —— 此时 body 是 gzip/deflate
+                // 二进制，必须按 Content-Encoding 自行解开，否则调用方（HTML 解析）
+                // 拿到的是压缩数据。curl 时代引擎自带 auto_uncompress，迁移到 OkHttp
+                // 后这条假设已失效（2026-10-02 真机：/works 200 但 0 篇）。
+                val rawStream = resp.body?.byteStream()
+                val contentEncoding = resp.header("Content-Encoding")?.lowercase()
+                val decodedStream = when {
+                    rawStream == null -> null
+                    contentEncoding?.contains("gzip") == true ->
+                        java.util.zip.GZIPInputStream(rawStream)
+                    contentEncoding?.contains("deflate") == true ->
+                        java.util.zip.InflaterInputStream(rawStream)
+                    else -> rawStream
+                }
+                val respBody = readBounded(decodedStream, MAX_BODY_BYTES)
                 val totalMs = System.currentTimeMillis() - tStart
                 Diagnostics.event(
                     "engine_ok",
