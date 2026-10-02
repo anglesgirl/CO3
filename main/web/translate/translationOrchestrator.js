@@ -131,6 +131,7 @@ export class TranslationOrchestrator {
     this.termManager = new TermManager(options.customTerms);
     this.engine = options.engine || 'device'; // 'device' | 'online'
     this.onProgress = options.onProgress || null;
+    this.onParagraph = options.onParagraph || null;
   }
 
   async translateParagraphs(paragraphs) {
@@ -142,6 +143,11 @@ export class TranslationOrchestrator {
       const batch = paragraphs.slice(i, i + BATCH_SIZE);
       const batchResult = await this.translateBatchWithRetry(batch, 0);
       Object.assign(results, batchResult);
+      if (this.onParagraph) {
+        for (const [id, text] of Object.entries(batchResult)) {
+          try { this.onParagraph(id, text); } catch (e) {}
+        }
+      }
       if (this.onProgress) {
         this.onProgress(Math.min(i + BATCH_SIZE, paragraphs.length), paragraphs.length);
       }
@@ -160,8 +166,9 @@ export class TranslationOrchestrator {
     const isDevice = this.engine === 'device';
     const effectiveBatch = isDevice ? batch.slice(0, 1) : batch;
 
-    // 1. 术语占位符
+    // 1. 术语处理：本机跳过占位符（小模型保不住），翻完后替换；在线用占位符
     const withPlaceholders = effectiveBatch.map(({ id, text }) => {
+      if (isDevice) return { id, text, mapping: {}, original: text };
       const { text: phText, mapping } = this.termManager.applyPlaceholders(text);
       return { id, text: phText, mapping, original: text };
     });
@@ -193,7 +200,7 @@ export class TranslationOrchestrator {
         raw = await withTimeout(Hymt.translateWithPrompt(prompt, maxTokens), 90000);
         // 单段：直接取结果
         const p = withPlaceholders[0];
-        const trans = this.termManager.restorePlaceholders(String(raw || '').trim(), p.mapping);
+        const trans = this.termManager.postReplaceTerms(String(raw || '').trim());
         const res = {};
         res[p.id] = trans;
         // 本机还有剩余段落，递归处理

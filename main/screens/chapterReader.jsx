@@ -571,10 +571,21 @@ const ChapterReader = ({
       }
 
       // 2. 编排器翻译（4段一批，带术语占位符、二分重试）
+      // onParagraph：每段完成立即写回 DOM，流式显示（2026-10-03 用户反馈之前是全翻完才显示）
       const orchestrator = new TranslationOrchestrator({
         engine: (engine === 'device' && Hymt) ? 'device' : 'online',
         onProgress: (done, total) => {
           setTranslateProgress({ done: doneN + done, total: texts.length });
+        },
+        onParagraph: (id, zh) => {
+          if (!alive()) return;
+          if (zh && String(zh).trim()) {
+            webViewRef.current.injectJavaScript(
+              `${updateTransJs(id, zh, false)}\ntrue;`,
+            );
+          } else {
+            webViewRef.current.injectJavaScript(`${markFailedJs(id)}\ntrue;`);
+          }
         },
       });
 
@@ -595,22 +606,13 @@ const ChapterReader = ({
 
       const results = await orchestrator.translateParagraphs(validParas);
 
-      // 3. 写回 DOM
+      // 3. 统计（写回已在 onParagraph 流式完成）
       for (const { id } of validParas) {
-        if (!alive()) break;
         const zh = results[id];
-        const domIdx = id; // id 就是 domIdx 的字符串形式
-        if (zh && String(zh).trim()) {
-          webViewRef.current.injectJavaScript(
-            `${updateTransJs(domIdx, zh, false)}\ntrue;`,
-          );
-        } else {
-          failed += 1;
-          webViewRef.current.injectJavaScript(`${markFailedJs(domIdx)}\ntrue;`);
-        }
+        if (!zh || !String(zh).trim()) failed += 1;
         doneN += 1;
-        setTranslateProgress({ done: doneN, total: texts.length });
       }
+      setTranslateProgress(null);
 
       setTranslated(true);
       // 被取代/已离开的不弹失败提示（进行中的是别人的，不要污染当前页）
@@ -675,22 +677,8 @@ const ChapterReader = ({
     };
   }, []);
 
-  // 翻译进度提示：由 state 统一驱动（不再每段都调 Toast.show，避免动画堆积）。
-  // 这是**唯一的**翻译进度来源 —— 底栏不重复显示，两个进度条就不会打架。
-  useEffect(() => {
-    if (translateProgress && translateProgress.total > 0) {
-      Toast.show({
-        type: 'info',
-        text1: `${t('reader_translate_progress')} ${translateProgress.done}/${translateProgress.total}`,
-        position: 'top',
-        topOffset: 60,
-        autoHide: false,
-        visibilityTime: 1500,
-      });
-    } else {
-      Toast.hide();
-    }
-  }, [translateProgress, t]);
+  // 翻译进度：右上角小浮标（2026-10-03 用户反馈 Toast 太宽）
+  // render 里根据 translateProgress 条件渲染，见底部
 
   // 退出页面时清掉进度条：Toast 是全局的，组件卸载不会自动藏
   //（2026-10-02 用户反馈：退出页面后"翻译中"还停留）。
@@ -1305,6 +1293,18 @@ const ChapterReader = ({
         {renderBottomBar()}
         {renderCommentsButton()}
 
+        {/* 翻译进度小浮标（2026-10-03：替代全宽 Toast） */}
+        {translateProgress && translateProgress.total > 0 && (
+          <View style={{
+            position: 'absolute', top: 50, right: 12, zIndex: 999,
+            backgroundColor: 'rgba(0,0,0,0.7)', borderRadius: 12,
+            paddingHorizontal: 10, paddingVertical: 5,
+          }}>
+            <Text style={{ color: '#fff', fontSize: 12 }}>
+              {t('reader_translate_progress')} {translateProgress.done}/{translateProgress.total}
+            </Text>
+          </View>
+        )}
         <Modal
           transparent={false}
           visible={commentsVisible}
