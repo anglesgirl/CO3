@@ -228,8 +228,10 @@ export class TranslationOrchestrator {
         // 输出 < 输入30% 且输入>50字符 → 重试一次。不是质量拦截，是完整性重试。
         let rawStr = String(raw || '').trim();
         const srcLen = withPlaceholders[0].text.length;
-        if (srcLen > 50 && rawStr.length < srcLen * 0.3) {
-          diagEvent('trans_truncated_retry', { src_len: srcLen, out_len: rawStr.length });
+        // 截断检测（本地模型实测）：长度<30% 或 无句末标点 → 重试一次
+        const hasEndPunct = /[。！？…\."'”’）】》\]]\s*$/.test(rawStr);
+        if (srcLen > 50 && (rawStr.length < srcLen * 0.3 || !hasEndPunct)) {
+          diagEvent('trans_truncated_retry', { src_len: srcLen, out_len: rawStr.length, no_punct: !hasEndPunct });
           raw = await withTimeout(Hymt.translateWithPrompt(prompt, maxTokens), 90000);
           rawStr = String(raw || '').trim();
         }
