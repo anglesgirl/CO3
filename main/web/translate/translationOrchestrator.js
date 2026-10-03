@@ -73,6 +73,21 @@ class TermManager {
     return { text: result, mapping };
   }
 
+  /**
+   * 后替换：在译文里把英文术语直接换成中文（本机路径用，不走占位符）。
+   * 2026-10-03 补：之前调用了但没定义，导致 TypeError 翻译失败。
+   */
+  postReplaceTerms(text) {
+    let result = String(text || '');
+    for (const key of this.sortedKeys) {
+      if (result.includes(key)) {
+        const esc = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        result = result.replace(new RegExp(esc, 'g'), this.terms[key]);
+      }
+    }
+    return result;
+  }
+
   /** 还原占位符（模糊匹配：模型可能轻微改写格式） */
   restorePlaceholders(translated, mapping) {
     let result = translated;
