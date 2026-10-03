@@ -224,9 +224,18 @@ export class TranslationOrchestrator {
         const { Hymt } = NativeModules;
         // 2026-10-03 02:30 回退：translateStream 切流后持续失败，先用回 translateWithPrompt 保可用。
         raw = await withTimeout(Hymt.translateWithPrompt(prompt, maxTokens), 90000);
+        // 截断检测：1.8B 小模型有时生成到一半就停（如 "现在，宿"）。
+        // 输出 < 输入30% 且输入>50字符 → 重试一次。不是质量拦截，是完整性重试。
+        let rawStr = String(raw || '').trim();
+        const srcLen = withPlaceholders[0].text.length;
+        if (srcLen > 50 && rawStr.length < srcLen * 0.3) {
+          diagEvent('trans_truncated_retry', { src_len: srcLen, out_len: rawStr.length });
+          raw = await withTimeout(Hymt.translateWithPrompt(prompt, maxTokens), 90000);
+          rawStr = String(raw || '').trim();
+        }
         // 单段：直接取结果
         const p = withPlaceholders[0];
-        const trans = this.termManager.postReplaceTerms(String(raw || '').trim());
+        const trans = this.termManager.postReplaceTerms(rawStr);
         const res = {};
         res[p.id] = trans;
         // 本机还有剩余段落，递归处理
