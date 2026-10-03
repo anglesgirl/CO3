@@ -13,11 +13,13 @@ import { diagEvent } from '../utils/diag';
  * 静态资源拦截器单独使用，待统一响应模型完成后再切成 H3 主路。
  */
 // Android 与 iOS 统一走 echKy（唯一业务传输门面）：
-//   Android → ech_http 引擎（进程内 ECH，无本地端口）
-//   iOS     → 本地 Go 代理
+//   Android → ech_http 引擎（进程内 ECH，无本地端口），见 ./echKy.js
+//   iOS     → 本地 Go 代理（gomobile），见 ./echKy.ios.js
 // 此前 Android 分支用的是**裸 ky**（走全局 fetch → OkHttp），那条路没有 ECH，
 // 明文出去即被阻断 —— 真机表现就是「快速自检 8s 超时、页面打不开」。
-const nativeKy = require('./echKy').default;
+const nativeKy = Platform.OS === 'ios'
+  ? require('./echKy.ios').default
+  : require('./echKy').default;
 
 const AO3_HOSTS = new Set([
   'archiveofourown.org',
