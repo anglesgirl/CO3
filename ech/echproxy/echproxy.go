@@ -13,6 +13,7 @@
 package echproxy
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -1650,4 +1651,193 @@ func tlsVersionName(v uint16) string {
 	default:
 		return fmt.Sprintf("0x%04x", v)
 	}
+}
+
+// Init 初始化 ECH 引擎（进程内直调用，不起代理端口）。
+// 与 Start 共享同一套初始化逻辑（DoH、ECH 配置、IP 优选、cookie jar），
+// 但不启动 HTTP 代理服务器。iOS 用此函数 + Fetch 做进程内直调，
+// 避免代理进程被后台杀掉后没网的问题。
+//
+// 参数与 Start 一致（去掉 listen/target）：
+//   doh: DoH 端点（如 https://.../dns-query）
+//   ipList: 逗号分隔的优选 IP 列表
+//   echB64: base64 编码的 fallback ECHConfigList（可空）
+//   cachePath: ECH 配置磁盘缓存路径
+//   insecure: 是否跳过证书校验（调试用）
+func Init(doh, ipList, echB64, cachePath string, insecure bool) error {
+	return initEngine(doh, ipList, echB64, cachePath, insecure)
+}
+
+// initEngine 是 Start 和 Init 共享的初始化逻辑（不含代理服务器启动）。
+func initEngine(doh, ipList, echB64, cpArg string, insecure bool) error {
+	cachePathMu.Lock()
+	cachePath = cpArg
+	cachePathMu.Unlock()
+	fallback := []byte(nil)
+	if strings.TrimSpace(echB64) != "" {
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(echB64))
+		if err != nil || len(decoded) == 0 {
+			return fmt.Errorf("invalid fallback ECHConfigList: %w", err)
+		}
+		fallback = decoded
+	}
+
+	custom := make([]string, 0)
+	seenIP := make(map[string]bool)
+	for _, ip := range parseIPList(ipList) {
+		if isCloudflareAS13335(ip) {
+			seenIP[ip] = true
+			custom = append(custom, ip)
+		}
+	}
+	mu.Lock()
+	customIPs = custom
+	fallbackECH = fallback
+	upstreamIPs = nil
+	mu.Unlock()
+	if len(custom) > 0 {
+		setDNSInfo("per-host DoH; ECH only for AS13335-qualified hosts; %d official-segment edge IP(s)", len(custom))
+	} else {
+		setDNSInfo("per-host DoH; ECH only for AS13335-qualified hosts")
+	}
+
+	fastStart := time.Now()
+	mu.Lock()
+	officialIPs := append([]string(nil), customIPs...)
+	mu.Unlock()
+	fastIPs := optimizeFastIPs(cpArg, officialIPs)
+	if len(fastIPs) > 0 {
+		mu.Lock()
+		seen := make(map[string]bool, len(customIPs)+len(fastIPs))
+		fresh := make([]string, 0, len(customIPs)+len(fastIPs))
+		for _, ip := range customIPs {
+			if !seen[ip] {
+				seen[ip] = true
+				fresh = append(fresh, ip)
+			}
+		}
+		for _, ip := range fastIPs {
+			if !seen[ip] && isCloudflareAS13335(ip) {
+				seen[ip] = true
+				fresh = append(fresh, ip)
+			}
+		}
+		customIPs = fresh
+		mu.Unlock()
+		setDNSInfo("preferred IP scan: %d fallback edge IPs appended (took %v)", len(fastIPs), time.Since(fastStart))
+		noteLog("preferred IP scan done in %v", time.Since(fastStart))
+	} else {
+		noteLog("preferred IP scan: none (took %v)", time.Since(fastStart))
+	}
+
+	hostsMu.Lock()
+	activeDoH, activeInse = doh, insecure
+	hostConfs = map[string]*hostConf{}
+	hostsMu.Unlock()
+
+	jar := newCookieJar()
+	client := &http.Client{
+		Transport: &hostRouter{},
+		Jar:       jar,
+		Timeout:   60 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	cookieJarMu.Lock()
+	proxyClient = client
+	cookieJarMu.Unlock()
+
+	setStatus("ECH engine initialized (in-process, no proxy port)")
+	return nil
+}
+
+// Fetch 进程内直调：发起一次带 ECH 的 HTTPS 请求，不走代理端口。
+//
+// 参数：
+//   url: 完整 URL（如 https://archiveofourown.org/works/123）
+//   method: GET / POST 等
+//   headersJson: JSON 对象字符串，如 {"Cookie":"...","Content-Type":"..."}
+//   bodyB64: base64 编码的请求体（GET 时传空字符串）
+//
+// 返回：JSON 字符串 {"status":200,"headers":{...},"bodyB64":"..."}，
+// bodyB64 为 base64 编码的响应体。出错时返回 error。
+//
+// 调用前必须先调 Init()。线程安全，可并发调用。
+func Fetch(url, method, headersJson, bodyB64 string) (string, error) {
+	cookieJarMu.Lock()
+	client := proxyClient
+	cookieJarMu.Unlock()
+	if client == nil {
+		return "", errors.New("echproxy: not initialized, call Init first")
+	}
+
+	var bodyReader io.Reader
+	if bodyB64 != "" {
+		bodyBytes, err := base64.StdEncoding.DecodeString(bodyB64)
+		if err != nil {
+			return "", fmt.Errorf("echproxy: invalid bodyB64: %w", err)
+		}
+		bodyReader = bytes.NewReader(bodyBytes)
+	}
+
+	req, err := http.NewRequest(method, url, bodyReader)
+	if err != nil {
+		return "", fmt.Errorf("echproxy: bad request: %w", err)
+	}
+
+	// 解析请求头
+	if strings.TrimSpace(headersJson) != "" && strings.TrimSpace(headersJson) != "{}" {
+		var headers map[string]string
+		if err := json.Unmarshal([]byte(headersJson), &headers); err != nil {
+			return "", fmt.Errorf("echproxy: invalid headersJson: %w", err)
+		}
+		for k, v := range headers {
+			// Host 由 URL 决定，不允许覆盖；跳过 hop-by-hop 头
+			lk := strings.ToLower(k)
+			if lk == "host" || hopByHop[http.CanonicalHeaderKey(k)] {
+				continue
+			}
+			req.Header.Set(k, v)
+		}
+	}
+
+	// 与代理模式一致：删掉 Accept-Encoding（由 Transport 自动处理），
+	// 强制 Chrome UA 过 CF Bot Fight。
+	req.Header.Del("Accept-Encoding")
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent",
+			"Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 "+
+				"(KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36")
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("echproxy: fetch error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("echproxy: read body: %w", err)
+	}
+
+	// 响应头转 map（多值用第一个，与 RN 侧约定一致）
+	respHeaders := make(map[string]string, len(resp.Header))
+	for k, vv := range resp.Header {
+		if len(vv) > 0 {
+			respHeaders[k] = vv[0]
+		}
+	}
+
+	out := map[string]interface{}{
+		"status":  resp.StatusCode,
+		"headers": respHeaders,
+		"bodyB64": base64.StdEncoding.EncodeToString(respBody),
+	}
+	outJson, err := json.Marshal(out)
+	if err != nil {
+		return "", fmt.Errorf("echproxy: marshal response: %w", err)
+	}
+	return string(outJson), nil
 }

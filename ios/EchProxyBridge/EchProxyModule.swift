@@ -15,6 +15,11 @@
 //         (on failure: empty string + NSError set — NOT nullable!)
 //    LastStatus() string                          -> NSString* _Nonnull EchproxyLastStatus()
 //    DrainLogs() []string                         -> NSArray<NSString*>* _Nonnull EchproxyDrainLogs()
+//    Init(doh, ipList, echB64, cachePath string, insecure bool) error
+//      -> BOOL EchproxyInit(NSString*, ..., BOOL insecure, NSError** _Nullable error)
+//    Fetch(url, method, headersJson, bodyB64 string) (string, error)
+//      -> NSString* _Nonnull EchproxyFetch(NSString*, ..., NSError** _Nullable error)
+//         返回 JSON: {"status":200,"headers":{...},"bodyB64":"..."}
 //
 //  JS usage (identical to Android):
 //    import { NativeModules } from 'react-native';
@@ -205,6 +210,80 @@ class EchProxyModule: NSObject, RCTBridgeModule {
   ) {
     let s = EchproxyLastStatus()
     resolve(s)
+  }
+
+  /// 进程内直调初始化（不起代理端口）。与 start() 互斥：调了 init 就不要调 start。
+  @objc(initEngine:withIpList:withEchB64:withResolver:withRejecter:)
+  func initEngine(
+    doh: String,
+    ipList: String,
+    echB64: String,
+    resolve: @escaping RCTPromiseResolveBlock,
+    reject: @escaping RCTPromiseRejectBlock
+  ) {
+    ioQueue.async {
+      let cachePath = Self.cachePath()
+      var err: NSError?
+      let ok = EchproxyInit(doh, ipList, echB64, cachePath, false, &err)
+      if ok {
+        resolve(true)
+      } else {
+        reject("ECH_INIT_FAILED", err?.localizedDescription ?? "unknown error", err)
+      }
+    }
+  }
+
+  /// 进程内直调：发起一次带 ECH 的 HTTPS 请求。
+  /// 参数：url（完整 URL）、method（GET/POST）、headers（NSDictionary）、body（NSData，可空）
+  /// 返回：{status: Int, headers: NSDictionary, body: NSData}
+  @objc(fetch:withMethod:withHeaders:withBody:withResolver:withRejecter:)
+  func fetch(
+    url: String,
+    method: String,
+    headers: NSDictionary,
+    body: NSData?,
+    resolve: @escaping RCTPromiseResolveBlock,
+    reject: @escaping RCTPromiseRejectBlock
+  ) {
+    ioQueue.async {
+      // headers 转 JSON
+      var headersJson = "{}"
+      if headers.count > 0 {
+        if let data = try? JSONSerialization.data(withJSONObject: headers, options: []),
+           let json = String(data: data, encoding: .utf8) {
+          headersJson = json
+        }
+      }
+      // body 转 base64
+      var bodyB64 = ""
+      if let b = body as Data?, b.count > 0 {
+        bodyB64 = b.base64EncodedString()
+      }
+
+      var err: NSError?
+      let resultJson = EchproxyFetch(url, method, headersJson, bodyB64, &err)
+      if let e = err {
+        reject("ECH_FETCH_FAILED", e.localizedDescription, e)
+        return
+      }
+
+      // 解析返回的 JSON
+      guard let data = resultJson.data(using: .utf8),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let status = obj["status"] as? Int,
+            let respHeaders = obj["headers"] as? [String: String],
+            let respBodyB64 = obj["bodyB64"] as? String else {
+        reject("ECH_FETCH_PARSE_FAILED", "invalid response JSON", nil)
+        return
+      }
+
+      let respBody = Data(base64Encoded: respBodyB64) ?? Data()
+      resolve([
+        "status": status,
+        "headers": respHeaders,
+        "body": respBody,
+      ])
+    }
   }
 
   // 取走原生侧缓冲的关键日志（Go 的 DrainLogs() -> EchproxyDrainLogs()）。
