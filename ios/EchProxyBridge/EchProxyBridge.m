@@ -41,4 +41,31 @@ RCT_EXTERN_METHOD(fetchTxt:(NSString *)doh
 RCT_EXTERN_METHOD(statusWithResolver:(RCTPromiseResolveBlock)resolve
                   withRejecter:(RCTPromiseRejectBlock)reject)
 
+// @objc(clearSessionCookiesWithResolver:withRejecter:)
+RCT_EXTERN_METHOD(clearSessionCookiesWithResolver:(RCTPromiseResolveBlock)resolve
+                  withRejecter:(RCTPromiseRejectBlock)reject)
+
+// @objc(jarInfoWithResolver:withRejecter:)
+RCT_EXTERN_METHOD(jarInfoWithResolver:(RCTPromiseResolveBlock)resolve
+                  withRejecter:(RCTPromiseRejectBlock)reject)
+
+// @objc(initEngine:withIpList:withEchB64:withResolver:withRejecter:)
+RCT_EXTERN_METHOD(initEngine:(NSString *)doh
+                  withIpList:(NSString *)ipList
+                  withEchB64:(NSString *)echB64
+                  withResolver:(RCTPromiseResolveBlock)resolve
+                  withRejecter:(RCTPromiseRejectBlock)reject)
+
+// @objc(fetch:withMethod:withHeaders:withBody:withResolver:withRejecter:)
+RCT_EXTERN_METHOD(fetch:(NSString *)url
+                  withMethod:(NSString *)method
+                  withHeaders:(NSDictionary *)headers
+                  withBody:(NSData *)body
+                  withResolver:(RCTPromiseResolveBlock)resolve
+                  withRejecter:(RCTPromiseRejectBlock)reject)
+
+// @objc(drainLogsWithResolver:withRejecter:)
+RCT_EXTERN_METHOD(drainLogsWithResolver:(RCTPromiseResolveBlock)resolve
+                  withRejecter:(RCTPromiseRejectBlock)reject)
+
 @end
