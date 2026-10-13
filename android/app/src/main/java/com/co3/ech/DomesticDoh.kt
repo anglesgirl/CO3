@@ -34,16 +34,15 @@ object DomesticDoh {
     /** ECH 缓存 1 小时 */
     private const val ECH_CACHE_MS = 60 * 60 * 1000L
 
-    /** 国内纯 IP DoH（按优先级排序） */
+    /** 国内纯 IP DoH（按优先级排序）
+     * 2026-10-13 拨测结论：腾讯 119.29.29.29 已死，百度 180.76.76.76 已死，
+     * 360 不支持 H3（但普通 HTTPS 可用）。只保留实测可用的。
+     */
     private val DOH_ENDPOINTS = listOf(
-        // 阿里云
+        // 阿里云（实测可用）
         "https://223.5.5.5/dns-query",
         "https://223.6.6.6/dns-query",
-        // 腾讯云
-        "https://119.29.29.29/dns-query",
-        // 百度
-        "https://180.76.76.76/dns-query",
-        // 360
+        // 360（普通 HTTPS 可用，无 H3）
         "https://101.226.4.6/dns-query",
         "https://123.125.81.6/dns-query",
     )
@@ -51,8 +50,6 @@ object DomesticDoh {
     /** 纯 IP 白名单：跳过主机名校验 */
     private val IP_WHITELIST = setOf(
         "223.5.5.5", "223.6.6.6",
-        "119.29.29.29",
-        "180.76.76.76",
         "101.226.4.6", "123.125.81.6",
     )
 
