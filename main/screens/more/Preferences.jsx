@@ -42,6 +42,15 @@ import {
   modelExists,
   downloadModel,
 } from '../../web/translate/deviceModel';
+import {
+  scanCfIps,
+  getCfIps,
+  setCustomIp,
+  getCustomIp,
+  networkDiagnostics,
+  showNetworkDiagnosticsAlert,
+} from '../../web/echKy';
+import { TextInput } from 'react-native';
 
 const PreferencesScreen = ({ route }) => {
   const {
@@ -86,6 +95,12 @@ const PreferencesScreen = ({ route }) => {
   const [updateRestriction, setUpdateRestriction] = useState(3);
   const [categories, setCategories] = useState();
 
+  // 网络/ECH IP 管理（2026-10-13 新架构）
+  const [cfIps, setCfIps] = useState([]);
+  const [customIp, setCustomIpState] = useState('');
+  const [customIpInput, setCustomIpInput] = useState('');
+  const [scanning, setScanning] = useState(false);
+
   const activeTheme = themes[theme] || currentTheme;
 
   const { t, i18n } = useTranslation(); // i18n is reactive
@@ -93,7 +108,54 @@ const PreferencesScreen = ({ route }) => {
   useEffect(() => {
     loadSettings();
     loadCategories();
+    loadCfIpState();
   }, []);
+
+  const loadCfIpState = async () => {
+    try {
+      setCfIps(await getCfIps());
+      const cip = await getCustomIp();
+      setCustomIpState(cip);
+      setCustomIpInput(cip);
+    } catch (_) {}
+  };
+
+  const handleScanCfIps = async () => {
+    if (scanning) return;
+    setScanning(true);
+    try {
+      const ips = await scanCfIps();
+      setCfIps(ips);
+      Alert.alert('扫描完成', `找到 ${ips.length} 个可用 IP，已保存。`);
+    } catch (e) {
+      Alert.alert('扫描失败', String(e?.message ?? e));
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const handleSetCustomIp = async () => {
+    const ip = customIpInput.trim();
+    if (ip && !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
+      Alert.alert('格式不对', '请输入正确的 IPv4 地址');
+      return;
+    }
+    try {
+      await setCustomIp(ip);
+      setCustomIpState(ip);
+      Alert.alert('已保存', ip ? `手动 IP：${ip}` : '已清除手动 IP，恢复用扫描池');
+    } catch (e) {
+      Alert.alert('保存失败', String(e?.message ?? e));
+    }
+  };
+
+  const handleNetworkDiag = async () => {
+    await showNetworkDiagnosticsAlert(
+      Alert,
+      () => handleScanCfIps(),
+      () => setCustomIpInput(customIpState),
+    );
+  };
 
   const loadSettings = async () => {
     try {
@@ -1287,6 +1349,108 @@ const PreferencesScreen = ({ route }) => {
               color={activeTheme.placeholderColor}
             />
           </TouchableOpacity>
+        </View>
+
+        {/* 网络/ECH（2026-10-13 新架构：IP 池 + 国内 DoH 取 ECH） */}
+        <View style={[styles.section, { borderBottomWidth: 0 }]}>
+          <View style={styles.sectionHeader}>
+            <Icon name="network-check" size={20} color={activeTheme.iconColor} />
+            <Text
+              style={[{ color: activeTheme.textColor }, styles.sectionTitle]}
+            >
+              网络 / ECH
+            </Text>
+          </View>
+
+          <View
+            style={[
+              styles.settingItem,
+              { borderBottomColor: activeTheme.borderColor },
+            ]}
+          >
+            <Text
+              style={[{ color: activeTheme.textColor }, styles.settingText]}
+            >
+              可用 IP（{cfIps.length} 个{customIp ? '，手动优先' : ''}）
+            </Text>
+            <Text
+              style={{ fontSize: 12, color: activeTheme.secondaryTextColor, marginTop: 4 }}
+            >
+              {customIp
+                ? `手动：${customIp}`
+                : cfIps.length > 0
+                  ? cfIps.slice(0, 3).join(', ') + (cfIps.length > 3 ? '…' : '')
+                  : '首次启动自动扫描，无结果时点下面按钮'}
+            </Text>
+            <View style={{ flexDirection: 'row', marginTop: 8 }}>
+              <TouchableOpacity
+                onPress={handleScanCfIps}
+                disabled={scanning}
+                style={{
+                  backgroundColor: activeTheme.primaryColor,
+                  paddingHorizontal: 16,
+                  paddingVertical: 8,
+                  borderRadius: 6,
+                  marginRight: 8,
+                  opacity: scanning ? 0.5 : 1,
+                }}
+              >
+                <Text style={{ color: '#fff' }}>
+                  {scanning ? '扫描中…' : '扫描可用 IP'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleNetworkDiag}
+                style={{
+                  borderColor: activeTheme.primaryColor,
+                  borderWidth: 1,
+                  paddingHorizontal: 16,
+                  paddingVertical: 8,
+                  borderRadius: 6,
+                }}
+              >
+                <Text style={{ color: activeTheme.primaryColor }}>网络诊断</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <View style={[styles.settingItem, { borderBottomWidth: 0 }]}>
+            <Text
+              style={[{ color: activeTheme.textColor }, styles.settingText]}
+            >
+              手动指定 IP（留空=用扫描池）
+            </Text>
+            <View style={{ flexDirection: 'row', marginTop: 8, alignItems: 'center' }}>
+              <TextInput
+                value={customIpInput}
+                onChangeText={setCustomIpInput}
+                placeholder="例如 104.21.5.6"
+                placeholderTextColor={activeTheme.placeholderColor}
+                keyboardType="numeric"
+                style={{
+                  flex: 1,
+                  borderColor: activeTheme.borderColor,
+                  borderWidth: 1,
+                  borderRadius: 6,
+                  paddingHorizontal: 12,
+                  paddingVertical: 8,
+                  color: activeTheme.textColor,
+                  marginRight: 8,
+                }}
+              />
+              <TouchableOpacity
+                onPress={handleSetCustomIp}
+                style={{
+                  backgroundColor: activeTheme.primaryColor,
+                  paddingHorizontal: 16,
+                  paddingVertical: 8,
+                  borderRadius: 6,
+                }}
+              >
+                <Text style={{ color: '#fff' }}>保存</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
       </ScrollView>
     </SafeAreaView>
