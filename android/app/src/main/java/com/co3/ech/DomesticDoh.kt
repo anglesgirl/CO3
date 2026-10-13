@@ -4,8 +4,6 @@ import android.util.Base64
 import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.json.JSONObject
-import java.net.URLEncoder
 import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.*
@@ -108,17 +106,7 @@ object DomesticDoh {
     private fun fetchEch(host: String): ByteArray? {
         for (ep in DOH_ENDPOINTS) {
             try {
-                val json = dnsJson(ep, host, 65) ?: continue
-                val answers = json.optJSONArray("Answer") ?: continue
-                for (i in 0 until answers.length()) {
-                    val a = answers.optJSONObject(i) ?: continue
-                    if (a.optInt("type") != 65) continue
-                    val data = a.optString("data").orEmpty()
-                    paramValue(data, "ech=")?.let { b64 ->
-                        runCatching { Base64.decode(b64, Base64.DEFAULT) }.getOrNull()
-                            ?.takeIf { it.size > 2 }?.let { return it }
-                    }
-                }
+                dnsWire(ep, host, 65)?.let { return it }
             } catch (e: Exception) {
                 Log.d(TAG, "DoH $ep 查 $host 失败: ${e.message}")
             }
@@ -126,28 +114,87 @@ object DomesticDoh {
         return null
     }
 
-    private fun dnsJson(endpoint: String, host: String, type: Int): JSONObject? {
-        val url = "$endpoint?name=${URLEncoder.encode(host, "UTF-8")}&type=$type"
+    /**
+     * DoH wire 格式查询（RFC 8484），返回解析出的 ECHConfigList。
+     * 注意：阿里 DoH 不支持 JSON 格式（?name=&type=），只支持 wire（?dns=）。
+     */
+    private fun dnsWire(endpoint: String, host: String, qtype: Int): ByteArray? {
+        val query = buildDnsQuery(host, qtype)
+        val b64 = Base64.encodeToString(query, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        val url = "$endpoint?dns=$b64"
         val req = Request.Builder()
             .url(url)
-            .header("accept", "application/dns-json")
+            .header("accept", "application/dns-message")
             .build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) return null
-            val body = resp.body?.string().orEmpty()
+            val body = resp.body?.bytes() ?: return null
             if (body.isEmpty()) return null
-            val json = JSONObject(body)
-            if (json.optInt("Status", -1) != 0) return null
-            return json
+            return parseEchFromWire(body)
         }
     }
 
-    private fun paramValue(data: String, key: String): String? {
-        val idx = data.indexOf(key)
-        if (idx < 0) return null
-        var v = data.substring(idx + key.length)
-        val sp = v.indexOf(' ')
-        if (sp >= 0) v = v.substring(0, sp)
-        return v.trim().trim('"').ifEmpty { null }
+    /** 构造 DNS 查询包 */
+    private fun buildDnsQuery(host: String, qtype: Int): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        fun w16(v: Int) { out.write(v shr 8); out.write(v and 0xFF) }
+        w16(0x1234) // ID
+        w16(0x0100) // flags: recursion desired
+        w16(1); w16(0); w16(0); w16(0) // counts
+        host.split('.').forEach { part ->
+            out.write(part.length)
+            out.write(part.toByteArray())
+        }
+        out.write(0)
+        w16(qtype); w16(1) // QTYPE, QCLASS=IN
+        return out.toByteArray()
     }
+
+    /** 从 DNS wire 响应中解析 HTTPS 记录的 ech 参数 */
+    private fun parseEchFromWire(data: ByteArray): ByteArray? {
+        try {
+            var pos = 12 // 跳过 header
+            // 跳过 question
+            while (pos < data.size && data[pos] != 0.toByte()) {
+                pos += (data[pos].toInt() and 0xFF) + 1
+            }
+            pos += 5 // null + QTYPE(2) + QCLASS(2)
+            val ancount = ((data[4].toInt() and 0xFF) shl 8) or (data[5].toInt() and 0xFF)
+            repeat(ancount) {
+                if (pos + 10 > data.size) return null
+                // 跳过 name（可能是压缩指针）
+                if ((data[pos].toInt() and 0xC0) == 0xC0) pos += 2
+                else { while (pos < data.size && data[pos] != 0.toByte()) pos += (data[pos].toInt() and 0xFF) + 1; pos++ }
+                val type = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos + 1].toInt() and 0xFF)
+                val rdlen = ((data[pos + 8].toInt() and 0xFF) shl 8) or (data[pos + 9].toInt() and 0xFF)
+                pos += 10
+                if (type == 65 && pos + rdlen <= data.size) {
+                    parseHttpsRdata(data, pos, rdlen)?.let { return it }
+                }
+                pos += rdlen
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "解析 DNS 响应失败: ${e.message}")
+        }
+        return null
+    }
+
+    /** 从 HTTPS RDATA 中提取 ech 参数（key=5） */
+    private fun parseHttpsRdata(data: ByteArray, off: Int, len: Int): ByteArray? {
+        var pos = off + 3 // 跳过 SvcPriority(2) + TargetName(root=1)
+        val end = off + len
+        while (pos + 4 <= end) {
+            val key = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos + 1].toInt() and 0xFF)
+            val vlen = ((data[pos + 2].toInt() and 0xFF) shl 8) or (data[pos + 3].toInt() and 0xFF)
+            pos += 4
+            if (key == 5 && pos + vlen <= end) { // ech= 参数
+                return data.copyOfRange(pos, pos + vlen)
+            }
+            pos += vlen
+        }
+        return null
+    }
+
+    @Deprecated("阿里不支持 JSON，改用 dnsWire")
+    private fun dnsJson(endpoint: String, host: String, type: Int): JSONObject? = null
 }
