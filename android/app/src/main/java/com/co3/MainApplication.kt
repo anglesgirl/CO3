@@ -70,6 +70,30 @@ class MainApplication : Application(), ReactApplication {
     // 预热在 loadReactNative 之后（SoLoader 已就绪）。不设延迟 —— 真机日志实证：
     // 预热设 3s 延迟时用户点击抢在预热前，预热形同虚设。
     com.co3.ech.EchDoh.prefetch("archiveofourown.org")
+
+    // 2026-10-13 新架构：首次启动扫描可用 CF IP（DoH 被封后不再依赖 DoH 解析）。
+    // 有缓存则跳过；无缓存时后台静默扫描，不阻塞启动。
+    Thread {
+        runCatching {
+            val ctx = applicationContext
+            if (com.co3.ech.CfIpScanner.loadIps(ctx).isEmpty()) {
+                android.util.Log.i("CO-ECH", "首次启动：开始扫描可用 CF IP")
+                com.co3.Diagnostics.trace("boot.cfscan.begin", emptyMap())
+                val ips = kotlinx.coroutines.runBlocking {
+                    com.co3.ech.CfIpScanner.scanAndSave(ctx)
+                }
+                com.co3.Diagnostics.trace("boot.cfscan.done", mapOf("count" to ips.size))
+                android.util.Log.i("CO-ECH", "CF IP 扫描完成：${ips.size} 个可用")
+            }
+            // 预热 ECH（国内 DoH 取 cloudflare-ech.com，缓存 1 小时）
+            com.co3.ech.DomesticDoh.echConfigList()
+        }.onFailure {
+            android.util.Log.w("CO-ECH", "CF IP 扫描失败: ${it.message}")
+        }
+    }.apply {
+        priority = Thread.MIN_PRIORITY
+        start()
+    }
     Thread {
         try {
             val ok = com.co3.ech.ConscryptEch.install()

@@ -108,17 +108,38 @@ object EchDoh {
         }
     }
 
-    /** 给 EchSocketFactory：拿 ECHConfigList（wire 格式）。拿不到返回 null → 上层 fail-closed。 */
-    fun echConfigList(host: String): ByteArray? = record(host)?.ech
+    /** 给 EchSocketFactory：拿 ECHConfigList（wire 格式）。拿不到返回 null → 上层 fail-closed。
+     *
+     * 2026-10-13 新架构：不再查目标域名自己的 HTTPS 记录（被墙域名在国内查不到），
+     * 改从 cloudflare-ech.com 经国内纯 IP DoH 取 CF 官方 ECH 公钥，缓存 1 小时。
+     * 旧网关 DoH 路径保留做兜底（DoH 未被封的地区仍可用）。
+     */
+    fun echConfigList(host: String): ByteArray? {
+        // 新路径：国内 DoH 取 CF 官方 ECH
+        DomesticDoh.echConfigList()?.let { return it }
+        // 兜底：旧网关 DoH 路径
+        return record(host)?.ech
+    }
 
     /**
-     * 给 EchDns：拿连接地址。**v4 在前、v6 在后**。
+     * 给 EchDns：拿连接地址。
      *
-     * 为什么不直接过滤 v6：kathttp3 时代过滤 v6 是因为 QUIC/UDP 上 v6 握手失败；
-     * Conscrypt 走 TCP，按 2026-09 的实测移动网 SNI 封锁只针对 v4，v6 可能是旁路。
-     * v4 排前面保证优先走最稳的路，又保留 v6 做备选。
+     * 2026-10-13 新架构：不再走 DoH 解析被墙域名（查不到/被污染），改用
+     * CfIpScanner 首次启动时扫出来的可用 IP 池，随机取一个。
+     * 旧 DoH 路径保留做兜底（IP 池为空时）。
      */
     fun resolve(host: String): List<InetAddress> {
+        // 新路径：扫描 IP 池随机取一个
+        val ctx = EchDohConfig.appContext
+        if (ctx != null) {
+            CfIpScanner.pickRandomIp(ctx)?.let { ip ->
+                runCatching { InetAddress.getByName(ip) }.getOrNull()?.let {
+                    Log.i(TAG, "IP 池随机选中 $ip 用于 $host")
+                    return listOf(it)
+                }
+            }
+        }
+        // 兜底：旧 DoH 路径
         val rec = record(host) ?: return emptyList()
         var ips = (rec.v4 + rec.v6).distinct()
         if (ips.isEmpty()) {
@@ -129,10 +150,13 @@ object EchDoh {
     }
 
     /**
-     * 给重试拦截器：清掉内存 + 落盘缓存，强制从网关取新值。
-     * 拿不到返回 null → 上层 fail-closed。
+     * 给重试拦截器：清掉缓存，强制取新 ECH。
+     * 2026-10-13：优先走国内 DoH 刷新，拿不到返回 null → 上层 fail-closed。
      */
     fun refetchNow(host: String): ByteArray? {
+        // 新路径：国内 DoH 强制刷新
+        DomesticDoh.refetch()?.let { return it }
+        // 兜底：旧网关路径
         synchronized(fetchLock) {
             memCache.remove(host)
             EchState.drop(host)
