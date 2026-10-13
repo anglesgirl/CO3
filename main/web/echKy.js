@@ -6,7 +6,7 @@
 // On Android, protected requests must not fall back to the system resolver.
 
 import ky from 'ky';
-import { NativeModules, Platform } from 'react-native';
+import { NativeModules, Platform, DeviceEventEmitter } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { isEchProtectedUrl } from './WebviewFetcher';
 import { trackEvent } from '../utils/analytics';
@@ -655,11 +655,20 @@ function getEchHttpMod() {
   return mod;
 }
 
-/** 扫描可用 CF IP（耗时，native 后台执行），返回 IP 数组 */
-export async function scanCfIps() {
+/** 扫描可用 CF IP（耗时，native 后台执行），返回 IP 数组。
+ * @param onProgress 进度回调 ({tested, total, percent})，可选 */
+export async function scanCfIps(onProgress) {
   const mod = getEchHttpMod();
   if (typeof mod.scanCfIps !== 'function') throw new Error('当前版本不支持 IP 扫描');
-  return await mod.scanCfIps();
+  let sub = null;
+  if (typeof onProgress === 'function') {
+    sub = DeviceEventEmitter.addListener('CfScanProgress', onProgress);
+  }
+  try {
+    return await mod.scanCfIps();
+  } finally {
+    if (sub) sub.remove();
+  }
 }
 
 /** 读取已保存的扫描 IP 列表 */

@@ -4,6 +4,7 @@ import android.util.Base64
 import android.util.Log
 import com.co3.Diagnostics
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.IOException
@@ -60,6 +61,7 @@ object EchDoh {
     private val fetchLock = Any()
 
     private val bootstrapClient: OkHttpClient = OkHttpClient.Builder()
+        .protocols(listOf(Protocol.HTTP_1_1)) // 大佬建议：不稳定网络下 H2 易出错，只用 H1.1
         // 保护域本就不该走代理；DoH 查询更不能走（代理卡死不报错，2026-09-22 教训）
         .proxy(java.net.Proxy.NO_PROXY)
         // 关掉自动重试：一次超时就是一次超时，不放大
@@ -69,6 +71,19 @@ object EchDoh {
         // 总时限兜底
         .callTimeout(8, TimeUnit.SECONDS)
         .build()
+
+    /**
+     * Bootstrap Cloudflare IP（2026-10-14 大佬方案）。
+     * 我们自己的 DoH 用 bootstrap 引导：默认从 172.64.229 段随机抽。
+     * 用户扫描出 IP 后，优先用用户扫出来的。
+     */
+    private val bootstrapCfIps = listOf(
+        "172.64.229.1", "172.64.229.2", "172.64.229.3", "172.64.229.4",
+        "172.64.229.5", "172.64.229.6", "172.64.229.7", "172.64.229.8"
+    )
+
+    /** 随机取一个 bootstrap IP */
+    fun randomBootstrapIp(): String = bootstrapCfIps.random()
 
     // ---------------- 对外 API ----------------
 

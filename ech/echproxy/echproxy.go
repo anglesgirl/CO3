@@ -34,6 +34,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"math/rand"
 )
 
 var androidCertPool *x509.CertPool
@@ -1074,7 +1075,9 @@ func parseIPList(s string) []string {
 }
 
 // resolveDoHHostIPs 解析 DoH 端点域名(如 pieqllv9i7.cloudflare-gateway.com)
-// 的 IP 列表,用于自动并入 ECH 握手候选。系统 DNS 解析失败时回退内置快照。
+// 的 IP 列表,用于自动并入 ECH 握手候选。
+// 2026-10-14：去掉系统 DNS 解析（大佬要求：只保留 IP 的 DoH）。
+// 如果端点本身就是 IP，直接用；如果是域名，只用内置快照。
 // doh 参数可能是逗号分隔的多个端点,取第一个能解析的即可。
 func resolveDoHHostIPs(doh string) []string {
 	for _, part := range strings.Split(doh, ",") {
@@ -1085,29 +1088,9 @@ func resolveDoHHostIPs(doh string) []string {
 		}
 		host := u.Hostname()
 		var ips []string
-		// ⚠️ net.LookupHost 无超时：移动宽带被污染的系统 DNS 能卡 30s+
-		// （2026-08-15 实测：第二次冷启动 Start() 卡 30s，works 请求在
-		// beforeRequest 等 getEchBase 干等）。3s 超时，失败走内置快照。
-		type lookupRes struct {
-			addrs []string
-			err   error
-		}
-		lch := make(chan lookupRes, 1)
-		go func() {
-			addrs, err := net.LookupHost(host)
-			lch <- lookupRes{addrs, err}
-		}()
-		select {
-		case r := <-lch:
-			if r.err == nil {
-				for _, a := range r.addrs {
-					if net.ParseIP(a) != nil {
-						ips = append(ips, a)
-					}
-				}
-			}
-		case <-time.After(3 * time.Second):
-			// 超时：跳过系统 DNS，直接用内置快照
+		// 如果 host 本身就是 IP，直接用（不走系统 DNS）
+		if net.ParseIP(host) != nil {
+			ips = append(ips, host)
 		}
 		// 内置快照兜底(系统 DNS 被污染时仍能用)。
 		for _, b := range builtinDoHHostIPs {
@@ -1130,7 +1113,8 @@ func resolveDoHHostIPs(doh string) []string {
 }
 
 // dialCandidates returns the addresses to try, in order:
-// user-supplied IPs, then DoH-resolved (IPv4 first), then system DNS.
+// user-supplied IPs, then DoH-resolved (IPv4 first).
+// 2026-10-14：去掉系统 DNS 兜底（大佬要求：只保留 IP 的 DoH）。
 func dialCandidates(addr string) []string {
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil || port == "" {
@@ -1141,14 +1125,14 @@ func dialCandidates(addr string) []string {
 	ips := append([]string(nil), upstreamIPs...)
 	mu.Unlock()
 
-	out := make([]string, 0, len(custom)+len(ips)+1)
+	out := make([]string, 0, len(custom)+len(ips))
 	for _, ip := range custom {
 		out = append(out, net.JoinHostPort(ip, port))
 	}
 	for _, ip := range ips {
 		out = append(out, net.JoinHostPort(ip, port))
 	}
-	return append(out, addr) // last resort: system DNS
+	return out // 无系统 DNS 兜底：没 IP 就直接失败（fail-closed）
 }
 
 // echDialContext dials the upstream and performs a TLS 1.3 handshake with ECH.
@@ -1561,6 +1545,19 @@ const builtinCFECHConfigB64 = "AEX+DQBBNAAgACCyup0GYiVj1Iph45mjgzNuuKu0qMra6LGPb
 // 属于 AS13335;部分区域(福建)封禁目标站点 CF 边缘 IP 时 DoH 端点 IP 仍可达。
 // 作为 DoH 端点 IP 自动并入 ECH 候选的兜底(系统 DNS 被污染时仍能用)。
 var builtinDoHHostIPs = []string{"162.159.36.5", "162.159.36.20"}
+
+// bootstrapCfIPs：DoH bootstrap 用的 Cloudflare 可用 IP。
+// 2026-10-14（大佬方案）：我们自己的 DoH 用 bootstrap 引导，默认从
+// 172.64.229 段随机抽一个。用户扫描出 IP 后，优先用用户扫出来的。
+var bootstrapCfIPs = []string{
+	"172.64.229.1", "172.64.229.2", "172.64.229.3", "172.64.229.4",
+	"172.64.229.5", "172.64.229.6", "172.64.229.7", "172.64.229.8",
+}
+
+// randomBootstrapIP 从 bootstrap 段随机抽一个 IP。
+func randomBootstrapIP() string {
+	return bootstrapCfIPs[rand.Intn(len(bootstrapCfIPs))]
+}
 
 // loadECHConfigWithFallbacks returns the ECHConfigList for an AS13335 host,
 // trying in order:

@@ -101,6 +101,7 @@ const PreferencesScreen = ({ route }) => {
   const [customIp, setCustomIpState] = useState('');
   const [customIpInput, setCustomIpInput] = useState('');
   const [scanning, setScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState(null); // {tested, total, percent}
 
   const activeTheme = themes[theme] || currentTheme;
 
@@ -126,11 +127,15 @@ const PreferencesScreen = ({ route }) => {
       // 正在扫：点一下就是取消
       try { await cancelCfScan(); } catch (_) {}
       setScanning(false);
+      setScanProgress(null);
       return;
     }
     setScanning(true);
+    setScanProgress({ tested: 0, total: 0, percent: 0 });
     try {
-      const ips = await scanCfIps();
+      const ips = await scanCfIps((p) => {
+        setScanProgress(p);
+      });
       setCfIps(ips);
       Alert.alert('扫描完成', `找到 ${ips.length} 个可用 IP，已保存。`);
     } catch (e) {
@@ -141,6 +146,7 @@ const PreferencesScreen = ({ route }) => {
       }
     } finally {
       setScanning(false);
+      setScanProgress(null);
     }
   };
 
@@ -1404,7 +1410,9 @@ const PreferencesScreen = ({ route }) => {
                 }}
               >
                 <Text style={{ color: '#fff' }}>
-                  {scanning ? '取消扫描' : '扫描可用 IP'}
+                  {scanning
+                    ? (scanProgress ? `取消 (${scanProgress.percent}%)` : '取消扫描')
+                    : '扫描可用 IP'}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -1420,6 +1428,11 @@ const PreferencesScreen = ({ route }) => {
                 <Text style={{ color: activeTheme.primaryColor }}>网络诊断</Text>
               </TouchableOpacity>
             </View>
+            {scanning && scanProgress && (
+              <Text style={{ color: activeTheme.secondaryTextColor, fontSize: 12, marginTop: 4 }}>
+                已测 {scanProgress.tested}/{scanProgress.total}（{scanProgress.percent}%）
+              </Text>
+            )}
           </View>
 
           <View style={[styles.settingItem, { borderBottomWidth: 0 }]}>

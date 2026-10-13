@@ -6,6 +6,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.modules.core.DeviceEventManagerModule
 import java.net.URL
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -259,7 +260,17 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
         io.execute {
             try {
                 val results = kotlinx.coroutines.runBlocking {
-                    CfIpScanner.scanAndSave(ctx.applicationContext)
+                    CfIpScanner.scanAndSave(ctx.applicationContext) { tested, total ->
+                        // 发进度事件给 JS（百分比 + 详情）
+                        val pct = if (total > 0) (tested * 100 / total) else 0
+                        val params = Arguments.createMap().apply {
+                            putInt("tested", tested)
+                            putInt("total", total)
+                            putInt("percent", pct)
+                        }
+                        ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                            .emit("CfScanProgress", params)
+                    }
                 }
                 val arr = Arguments.createArray()
                 results.forEach { arr.pushString(it) }

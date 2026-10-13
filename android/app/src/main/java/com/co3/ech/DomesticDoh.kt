@@ -3,6 +3,7 @@ package com.co3.ech
 import android.util.Base64
 import android.util.Log
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
@@ -67,6 +68,7 @@ object DomesticDoh {
             init(null, trustAll, java.security.SecureRandom())
         }
         OkHttpClient.Builder()
+            .protocols(listOf(Protocol.HTTP_1_1)) // 大佬建议：不稳定网络下 H2 易出错，只用 H1.1
             .sslSocketFactory(sslCtx.socketFactory, trustAll[0] as X509TrustManager)
             .hostnameVerifier { _, _ -> true }
             .proxy(java.net.Proxy.NO_PROXY)

@@ -1,6 +1,7 @@
 package com.co3.ech
 
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import java.io.IOException
 import java.net.Proxy
 import java.net.ProxySelector
@@ -41,6 +42,7 @@ object EchHttp {
         // 首次真正需要网络时再初始化 Conscrypt（那时 SoLoader/Fresco 都已就绪）
         ConscryptEch.install()
         OkHttpClient.Builder()
+            .protocols(listOf(Protocol.HTTP_1_1)) // 大佬建议：不稳定网络下 H2 易出错，只用 H1.1
             // proxy(null)：清掉可能存在的固定代理，统一交给下面的 proxySelector 决定
             .proxy(null)
             .proxySelector(object : ProxySelector() {
