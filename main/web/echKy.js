@@ -647,6 +647,86 @@ export async function echSelfTest() {
   }
 }
 
+// ============ 2026-10-13 新架构：IP 扫描 / 手动 IP / 网络诊断 ============
+
+function getEchHttpMod() {
+  const mod = NativeModules.EchHttp;
+  if (!mod) throw new Error('EchHttp 原生模块不可用');
+  return mod;
+}
+
+/** 扫描可用 CF IP（耗时，native 后台执行），返回 IP 数组 */
+export async function scanCfIps() {
+  const mod = getEchHttpMod();
+  if (typeof mod.scanCfIps !== 'function') throw new Error('当前版本不支持 IP 扫描');
+  return await mod.scanCfIps();
+}
+
+/** 读取已保存的扫描 IP 列表 */
+export async function getCfIps() {
+  const mod = getEchHttpMod();
+  if (typeof mod.getCfIps !== 'function') return [];
+  return await mod.getCfIps();
+}
+
+/** 手动设置 IP（空字符串 = 清除，恢复用扫描池） */
+export async function setCustomIp(ip) {
+  const mod = getEchHttpMod();
+  if (typeof mod.setCustomIp !== 'function') throw new Error('当前版本不支持手动 IP');
+  return await mod.setCustomIp(ip ?? '');
+}
+
+/** 读取手动设置的 IP */
+export async function getCustomIp() {
+  const mod = getEchHttpMod();
+  if (typeof mod.getCustomIp !== 'function') return '';
+  return await mod.getCustomIp();
+}
+
+/**
+ * 网络诊断：返回 { domesticDoh, ipCount, hasIps, customIp }。
+ * 网络打不开时调用，弹给用户看。
+ */
+export async function networkDiagnostics() {
+  const mod = getEchHttpMod();
+  if (typeof mod.networkDiagnostics !== 'function') throw new Error('当前版本不支持网络诊断');
+  return await mod.networkDiagnostics();
+}
+
+/**
+ * 网络诊断弹窗：网络打不开时调用。
+ * 显示诊断结果，提供"扫描 IP"和"手动填 IP"入口。
+ * 需要调用方传入 Alert（react-native）和导航到设置页的回调。
+ */
+export async function showNetworkDiagnosticsAlert(Alert, onScan, onManualInput) {
+  let diag;
+  try {
+    diag = await networkDiagnostics();
+  } catch (e) {
+    Alert.alert('网络诊断', `诊断失败：${e.message}`);
+    return;
+  }
+
+  const lines = [
+    `国内 DoH：${diag.domesticDoh ? '✅ 通' : '❌ 不通'}`,
+    `IP 池：${diag.hasIps ? `✅ ${diag.ipCount} 个` : '❌ 空'}`,
+    `手动 IP：${diag.customIp || '（未设置）'}`,
+  ];
+  if (!diag.domesticDoh && !diag.hasIps && !diag.customIp) {
+    lines.push('', '建议：先扫描可用 IP，或手动填一个 CF IP。');
+  }
+
+  Alert.alert(
+    '网络诊断',
+    lines.join('\n'),
+    [
+      { text: '扫描 IP', onPress: onScan },
+      { text: '手动填 IP', onPress: onManualInput },
+      { text: '关闭', style: 'cancel' },
+    ],
+  );
+}
+
 // Warm up the proxy as soon as this module is imported (app startup).
 initEch();
 

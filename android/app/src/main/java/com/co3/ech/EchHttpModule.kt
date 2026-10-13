@@ -119,8 +119,7 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
      * 用于把"取不到 ECH 配置"和"ECH 握手失败"这两类问题分开定位。
      */
     @ReactMethod
-    fun probeDoh(host: String, doh: String, configHost: String, promise: Promise) {
-        io.execute {
+    fun probeDoh(host: String, doh: String, configHost: String, promise: Promise) {        io.execute {
             try {
                 val t0 = System.currentTimeMillis()
                 // 诊断工具：直查目标域名自己的 HTTPS 记录（网关），不经过借用逻辑
@@ -245,6 +244,115 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
             } catch (e: Exception) {
                 Log.w(LOG_TAG, "EchHttp.request 失败: ${e.message}")
                 promise.reject("ECH_HTTP_FAILED", e.message ?: "unknown", e)
+            }
+        }
+    }
+
+    // ============ 2026-10-13 新架构：IP 扫描 / 手动 IP / 网络诊断 ============
+
+    /**
+     * 扫描可用 CF IP（耗时，后台执行）。JS 侧显示进度。
+     * 扫完自动保存，返回 IP 列表。
+     */
+    @ReactMethod
+    fun scanCfIps(promise: Promise) {
+        io.execute {
+            try {
+                val results = kotlinx.coroutines.runBlocking {
+                    CfIpScanner.scanAndSave(ctx.applicationContext)
+                }
+                val arr = Arguments.createArray()
+                results.forEach { arr.pushString(it) }
+                promise.resolve(arr)
+            } catch (e: Exception) {
+                promise.reject("CF_SCAN_FAILED", e.message ?: "unknown", e)
+            }
+        }
+    }
+
+    /** 读取已保存的扫描 IP 列表 */
+    @ReactMethod
+    fun getCfIps(promise: Promise) {
+        try {
+            val ips = CfIpScanner.loadIps(ctx.applicationContext)
+            val arr = Arguments.createArray()
+            ips.forEach { arr.pushString(it) }
+            promise.resolve(arr)
+        } catch (e: Exception) {
+            promise.reject("CF_GET_IPS_FAILED", e.message ?: "unknown", e)
+        }
+    }
+
+    /**
+     * 手动设置 IP（用户自己填）。覆盖扫描结果，保存为单个 IP。
+     * 传空字符串则清除手动设置，恢复用扫描池。
+     */
+    @ReactMethod
+    fun setCustomIp(ip: String, promise: Promise) {
+        try {
+            val ctx = ctx.applicationContext
+            if (ip.isBlank()) {
+                // 清除：删除手动 IP，下次 resolve 走扫描池
+                ctx.getSharedPreferences("co3_cf_ips", android.content.Context.MODE_PRIVATE)
+                    .edit().remove("custom_ip").apply()
+            } else {
+                // 简单校验 IPv4 格式
+                if (!ip.matches(Regex("^\\d{1,3}(\\.\\d{1,3}){3}$"))) {
+                    promise.reject("CF_IP_INVALID", "IP 格式不对: $ip")
+                    return
+                }
+                ctx.getSharedPreferences("co3_cf_ips", android.content.Context.MODE_PRIVATE)
+                    .edit().putString("custom_ip", ip.trim()).apply()
+            }
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("CF_SET_IP_FAILED", e.message ?: "unknown", e)
+        }
+    }
+
+    /** 读取手动设置的 IP（空表示没设） */
+    @ReactMethod
+    fun getCustomIp(promise: Promise) {
+        try {
+            val ip = ctx.applicationContext
+                .getSharedPreferences("co3_cf_ips", android.content.Context.MODE_PRIVATE)
+                .getString("custom_ip", "") ?: ""
+            promise.resolve(ip)
+        } catch (e: Exception) {
+            promise.reject("CF_GET_CUSTOM_IP_FAILED", e.message ?: "unknown", e)
+        }
+    }
+
+    /**
+     * 网络诊断：检查各关键链路是否通。
+     * 返回 { domesticDoh, cfIps, ech } 三项状态。
+     */
+    @ReactMethod
+    fun networkDiagnostics(promise: Promise) {
+        io.execute {
+            try {
+                val map = Arguments.createMap()
+
+                // 1. 国内 DoH 是否通
+                val dohOk = try {
+                    DomesticDoh.echConfigList() != null
+                } catch (_: Exception) { false }
+                map.putBoolean("domesticDoh", dohOk)
+
+                // 2. IP 池是否有可用 IP
+                val ips = CfIpScanner.loadIps(ctx.applicationContext)
+                map.putInt("ipCount", ips.size)
+                map.putBoolean("hasIps", ips.isNotEmpty())
+
+                // 3. 手动 IP
+                val customIp = ctx.applicationContext
+                    .getSharedPreferences("co3_cf_ips", android.content.Context.MODE_PRIVATE)
+                    .getString("custom_ip", "") ?: ""
+                map.putString("customIp", customIp)
+
+                promise.resolve(map)
+            } catch (e: Exception) {
+                promise.reject("CF_DIAG_FAILED", e.message ?: "unknown", e)
             }
         }
     }

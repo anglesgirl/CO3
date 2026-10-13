@@ -104,8 +104,12 @@ object CfIpScanner {
         return raw.split(',').map { it.trim() }.filter { it.isNotEmpty() }
     }
 
-    /** 随机取一个可用 IP，没有则返回 null */
+    /** 随机取一个可用 IP，没有则返回 null。手动设置的 IP 优先。 */
     fun pickRandomIp(context: Context): String? {
+        // 手动 IP 优先
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString("custom_ip", "")?.trim()?.takeIf { it.isNotEmpty() }
+            ?.let { return it }
         val ips = loadIps(context)
         return if (ips.isEmpty()) null else ips.random()
     }
