@@ -283,6 +283,17 @@ class EchHttpModule(private val ctx: ReactApplicationContext) : ReactContextBase
         }
     }
 
+    /** 取消正在进行的 IP 扫描 */
+    @ReactMethod
+    fun cancelCfScan(promise: Promise) {
+        try {
+            CfIpScanner.cancelScan()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("CF_CANCEL_FAILED", e.message ?: "unknown", e)
+        }
+    }
+
     /**
      * 手动设置 IP（用户自己填）。覆盖扫描结果，保存为单个 IP。
      * 传空字符串则清除手动设置，恢复用扫描池。

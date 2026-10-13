@@ -47,6 +47,7 @@ import {
   getCfIps,
   setCustomIp,
   getCustomIp,
+  cancelCfScan,
   networkDiagnostics,
   showNetworkDiagnosticsAlert,
 } from '../../web/echKy';
@@ -121,14 +122,23 @@ const PreferencesScreen = ({ route }) => {
   };
 
   const handleScanCfIps = async () => {
-    if (scanning) return;
+    if (scanning) {
+      // 正在扫：点一下就是取消
+      try { await cancelCfScan(); } catch (_) {}
+      setScanning(false);
+      return;
+    }
     setScanning(true);
     try {
       const ips = await scanCfIps();
       setCfIps(ips);
       Alert.alert('扫描完成', `找到 ${ips.length} 个可用 IP，已保存。`);
     } catch (e) {
-      Alert.alert('扫描失败', String(e?.message ?? e));
+      if (String(e?.message ?? '').includes('cancel')) {
+        // 用户取消，不弹框
+      } else {
+        Alert.alert('扫描失败', String(e?.message ?? e));
+      }
     } finally {
       setScanning(false);
     }
@@ -1385,18 +1395,16 @@ const PreferencesScreen = ({ route }) => {
             <View style={{ flexDirection: 'row', marginTop: 8 }}>
               <TouchableOpacity
                 onPress={handleScanCfIps}
-                disabled={scanning}
                 style={{
-                  backgroundColor: activeTheme.primaryColor,
+                  backgroundColor: scanning ? '#999' : activeTheme.primaryColor,
                   paddingHorizontal: 16,
                   paddingVertical: 8,
                   borderRadius: 6,
                   marginRight: 8,
-                  opacity: scanning ? 0.5 : 1,
                 }}
               >
                 <Text style={{ color: '#fff' }}>
-                  {scanning ? '扫描中…' : '扫描可用 IP'}
+                  {scanning ? '取消扫描' : '扫描可用 IP'}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity

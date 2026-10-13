@@ -32,16 +32,31 @@ object CfIpScanner {
     private const val IP_LIST_URL = "https://www.baipiao.eu.org/cloudflare/ips-v4"
 
     /** 单个 IP 测试超时（毫秒） */
-    private const val CONNECT_TIMEOUT = 3000
+    private const val CONNECT_TIMEOUT = 1500
 
     /** 延迟上限（毫秒），超过的不保留 */
     private const val MAX_LATENCY = 800
 
     /** 每个 /24 段抽样测试的 IP 数量 */
-    private const val SAMPLE_PER_RANGE = 3
+    private const val SAMPLE_PER_RANGE = 2
 
     /** 目标保留的可用 IP 数量 */
     private const val TARGET_COUNT = 20
+
+    /** 每次扫描最多测试的 IP 总数（控制总耗时） */
+    private const val MAX_CANDIDATES = 400
+
+    /** 当前扫描任务（支持取消） */
+    @Volatile private var currentJob: Job? = null
+
+    /** 取消正在进行的扫描 */
+    fun cancelScan() {
+        currentJob?.cancel()
+        currentJob = null
+    }
+
+    /** 是否正在扫描 */
+    fun isScanning(): Boolean = currentJob?.isActive == true
 
     data class ScanResult(
         val ip: String,
@@ -53,38 +68,50 @@ object CfIpScanner {
      * @param onProgress 进度回调 (已测试数, 总数)
      * @return 可用 IP 列表（按延迟排序）
      */
-    suspend fun scan(onProgress: ((tested: Int, total: Int) -> Unit)? = null): List<ScanResult> =
-        withContext(Dispatchers.IO) {
-            val ranges = fetchIpRanges()
-            if (ranges.isEmpty()) {
-                Log.w(TAG, "IP 段列表下载失败")
-                return@withContext emptyList()
-            }
+    suspend fun scan(onProgress: ((tested: Int, total: Int) -> Unit)? = null): List<ScanResult> {
+        val job = coroutineScope {
+            async(Dispatchers.IO) {
+                val ranges = fetchIpRanges()
+                if (ranges.isEmpty()) {
+                    Log.w(TAG, "IP 段列表下载失败")
+                    return@async emptyList<ScanResult>()
+                }
 
-            // 每段抽样，生成待测 IP 列表
-            val candidates = ranges.flatMap { sampleIps(it) }.shuffled()
-            Log.i(TAG, "待测 IP 数: ${candidates.size}，来自 ${ranges.size} 个段")
+                // 只取随机子集，控制总数（6534 个段全测太慢了）
+                val sampledRanges = ranges.shuffled().take(MAX_CANDIDATES / SAMPLE_PER_RANGE)
+                val candidates = sampledRanges.flatMap { sampleIps(it) }.shuffled()
+                    .take(MAX_CANDIDATES)
+                Log.i(TAG, "待测 IP 数: ${candidates.size}，来自 ${sampledRanges.size} 个段")
 
-            val results = mutableListOf<ScanResult>()
-            var tested = 0
+                val results = mutableListOf<ScanResult>()
+                var tested = 0
 
-            // 并发测试，每批 50 个
-            candidates.chunked(50).forEach { batch ->
-                val batchResults = batch.map { ip ->
-                    async { testIp(ip) }
-                }.awaitAll().filterNotNull()
-                results.addAll(batchResults)
-                tested += batch.size
-                onProgress?.invoke(tested, candidates.size)
+                // 并发测试，每批 50 个；支持取消
+                for (batch in candidates.chunked(50)) {
+                    ensureActive() // 响应取消
+                    val batchResults = batch.map { ip ->
+                        async { testIp(ip) }
+                    }.awaitAll().filterNotNull()
+                    results.addAll(batchResults)
+                    tested += batch.size
+                    onProgress?.invoke(tested, candidates.size)
 
-                // 够了就停，不用全测完
-                if (results.size >= TARGET_COUNT * 2) return@forEach
-            }
+                    // 够了就停
+                    if (results.size >= TARGET_COUNT) break
+                }
 
-            results.sortedBy { it.latencyMs }.take(TARGET_COUNT).also {
-                Log.i(TAG, "扫描完成，可用 IP: ${it.size}")
+                results.sortedBy { it.latencyMs }.take(TARGET_COUNT).also {
+                    Log.i(TAG, "扫描完成，可用 IP: ${it.size}")
+                }
             }
         }
+        currentJob = job
+        try {
+            return job.await()
+        } finally {
+            currentJob = null
+        }
+    }
 
     /**
      * 扫描并保存结果。供首次启动调用。

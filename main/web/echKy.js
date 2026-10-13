@@ -676,6 +676,13 @@ export async function setCustomIp(ip) {
   return await mod.setCustomIp(ip ?? '');
 }
 
+/** 取消正在进行的 IP 扫描 */
+export async function cancelCfScan() {
+  const mod = getEchHttpMod();
+  if (typeof mod.cancelCfScan !== 'function') return;
+  return await mod.cancelCfScan();
+}
+
 /** 读取手动设置的 IP */
 export async function getCustomIp() {
   const mod = getEchHttpMod();
