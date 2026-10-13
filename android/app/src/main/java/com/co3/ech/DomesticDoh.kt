@@ -194,7 +194,4 @@ object DomesticDoh {
         }
         return null
     }
-
-    @Deprecated("阿里不支持 JSON，改用 dnsWire")
-    private fun dnsJson(endpoint: String, host: String, type: Int): JSONObject? = null
 }
