@@ -8,6 +8,7 @@ package com.co3.ech
 object EchHosts {
     fun isProtected(host: String): Boolean {
         val h = host.lowercase()
-        return h == "archiveofourown.org" || h.endsWith(".archiveofourown.org")
+        return h == "archiveofourown.org" || h.endsWith(".archiveofourown.org") ||
+               h == "wsrv.nl" || h.endsWith(".wsrv.nl")
     }
 }
