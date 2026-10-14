@@ -65,11 +65,10 @@ class MainApplication : Application(), ReactApplication {
     // （2026-09-11 真机实测：java.lang.NullPointerException at ReactImageManager.createViewInstance）。
     loadReactNative(this)
 
-    // Conscrypt ECH 冷启动预热：首击冷路径（native 初始化 + 网关 DoH 查 HTTPS 记录）
-    // 会踩业务超时线，启动后立即在后台完成，用户点击时走热路径。
-    // 预热在 loadReactNative 之后（SoLoader 已就绪）。不设延迟 —— 真机日志实证：
-    // 预热设 3s 延迟时用户点击抢在预热前，预热形同虚设。
-    com.co3.ech.EchDoh.prefetch("archiveofourown.org")
+    // ECH 冷启动预热在下面的后台线程里做（DomesticDoh.echConfigList，走国内 DoH）。
+    // 注：2026-10-14 删掉了这里的 EchDoh.prefetch("archiveofourown.org")——那是旧网关
+    // DoH 路径的预热，新架构热路径（ConscryptEch→EchDoh.echConfigList→DomesticDoh）
+    // 根本不读它，白白每次冷启动多一次网关请求；旧网关只在 DomesticDoh 失败时兜底。
 
     // 2026-10-13 新架构：首次启动扫描可用 CF IP（DoH 被封后不再依赖 DoH 解析）。
     // 有缓存则跳过；无缓存时后台静默扫描，不阻塞启动。

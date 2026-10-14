@@ -11,7 +11,6 @@
  */
 import { NativeModules, Platform } from 'react-native';
 import { getDoh, getCustomIPs, getLastStartError, getEchStatus, getJarInfo, getDohCandidates, AO3_UA } from '../web/echKy';
-import { ao3Text } from '../web/ao3Transport';
 import { remoteLogStats } from './remoteLog';
 
 // ---- console 环形缓冲 ----
@@ -85,18 +84,10 @@ export async function buildDiagnosticText() {
   parts.push(await safe(() => getEchStatus(), 'unavailable'));
   parts.push(`CookieJar:\n${await safe(() => getJarInfo(), '(空)')}`);
 
-  // 4. 快速自检：当场发一次 AO3 请求（短超时 8s），复现"加载作品失败"现场
-  parts.push(`\n===== 快速自检（AO3 首页，8s 超时） =====`);
-  const t0 = Date.now();
-  try {
-    const res = await ao3Text('https://archiveofourown.org/', { timeout: 8000 });
-    parts.push(`成功: HTTP ${res && res.status ? res.status : '?'} ${Date.now() - t0}ms`);
-  } catch (e) {
-    parts.push(`失败 ${Date.now() - t0}ms: ${String(e && e.message || e).slice(0, 300)}`);
-  }
-
-  // 5. ech_http 引擎自检：直连 C++ 引擎（不经 Go 代理），把「取 ECH 配置」和
+  // 4. ech_http 引擎自检：直连 C++ 引擎（不经 Go 代理），把「取 ECH 配置」和
   //    「ECH 握手」分开报，卡在哪一步一眼可见。本轮只做体检，不接管任何业务请求。
+  //    注：此前这里还有一次 ao3Text 全栈拉取（与下面的引擎请求拉同一个首页），
+  //    每次导出多一次完整下载，已合并为只保留引擎自检这一次（2026-10-14）。
   parts.push(`\n===== ech_http 引擎自检（C++ 引擎，不经 Go 代理） =====`);
   const eh = NativeModules.EchHttp;
   if (!eh) {

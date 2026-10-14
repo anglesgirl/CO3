@@ -1,4 +1,5 @@
 import {
+  Alert,
   Image,
   Linking,
   ScrollView,
@@ -7,12 +8,18 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { co3Version } from '../../constant';
 import { useTranslation } from 'react-i18next';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import InAppBrowser from 'react-native-inappbrowser-reborn';
+import {
+  isRemoteLogEnabled,
+  refreshRemoteLogEnabled,
+  setRemoteLogEnabled,
+} from '../../utils/remoteLog';
 
 export default function AboutScreen({ route }) {
   const { setScreens, currentTheme, db } = route.params;
@@ -23,6 +30,30 @@ export default function AboutScreen({ route }) {
   }
 
   const { t } = useTranslation();
+
+  // 远程诊断日志开关：连点 7 次版本号切换（3 秒内有效）
+  const [diagOn, setDiagOn] = useState(false);
+  const tapCount = useRef(0);
+  const lastTap = useRef(0);
+  useEffect(() => {
+    refreshRemoteLogEnabled().then((v) => setDiagOn(!!v));
+  }, []);
+  async function onVersionTap() {
+    const now = Date.now();
+    if (now - lastTap.current > 3000) tapCount.current = 0;
+    lastTap.current = now;
+    tapCount.current += 1;
+    if (tapCount.current >= 7) {
+      tapCount.current = 0;
+      const next = !isRemoteLogEnabled();
+      await setRemoteLogEnabled(next);
+      setDiagOn(next);
+      Alert.alert(
+        '远程诊断日志',
+        next ? '已开启：诊断事件将上传到日志服务器' : '已关闭',
+      );
+    }
+  }
 
   return (
     <SafeAreaView
@@ -77,17 +108,19 @@ export default function AboutScreen({ route }) {
             theme={currentTheme}
           />
         </View>
-        <Text
-          style={[
-            {
-              color: currentTheme.secondaryTextColor,
-              width: '100%',
-              textAlign: 'center',
-            },
-          ]}
-        >
-          {t('screen_about_version', { co3Version: co3Version })}
-        </Text>
+        <TouchableOpacity onPress={onVersionTap} activeOpacity={0.6}>
+          <Text
+            style={[
+              {
+                color: currentTheme.secondaryTextColor,
+                width: '100%',
+                textAlign: 'center',
+              },
+            ]}
+          >
+            {t('screen_about_version', { co3Version: co3Version })}
+          </Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );

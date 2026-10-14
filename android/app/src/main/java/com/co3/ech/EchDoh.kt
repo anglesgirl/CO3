@@ -179,23 +179,6 @@ object EchDoh {
         }
     }
 
-    /** 启动预热：后台把记录拉到内存 + 落盘，用户点击时走热路径。 */
-    fun prefetch(host: String) {
-        Thread {
-            runCatching {
-                val rec = fetchFromGateway(host)
-                Diagnostics.trace(
-                    "boot.prewarm.doh",
-                    mapOf(
-                        "host" to host,
-                        "result" to if (rec?.ech != null) "ok" else "fail",
-                        "v4n" to (rec?.v4?.size ?: 0),
-                    )
-                )
-            }
-        }.apply { priority = Thread.MIN_PRIORITY; start() }
-    }
-
     // ---------------- 网关查询 ----------------
 
     private fun endpoints(): List<String> = EchDohConfig.load().dohEndpoints

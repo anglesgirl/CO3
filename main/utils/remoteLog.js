@@ -13,7 +13,7 @@
  * - 限流 120 次/分钟/IP：本地节流到 ~50 次/分钟，超出丢弃（日志不值得拖垮业务）
  * - 失败静默、不重试、绝不 await 阻塞调用方
  */
-import { Platform } from 'react-native';
+import { NativeModules, Platform } from 'react-native';
 
 // ⚠️ 接收端按 app 名分目录落盘：/var/lib/hermes-diagnostics/<app>/<date>.jsonl
 // Android 侧原生上报器（android/app/src/main/java/com/co3/Diagnostics.kt）用的是 'co3'，
@@ -34,6 +34,56 @@ let lastSentAt = 0;
 let draining = false;
 let dropped = 0;
 let sent = 0;
+
+// ---- 远程上报总开关（对齐原生 Diagnostics.isEnabled，正式版默认关） ----
+// 原生侧：SharedPreferences 持久化，默认 false，关于页连点 7 次版本号切换。
+// JS 侧经桥取值是异步的，这里缓存一份：模块加载时拉一次，开关切换时更新。
+// __DEV__ 下默认开（开发期需要日志），正式包严格跟随原生开关。
+let remoteEnabled = typeof __DEV__ !== 'undefined' && __DEV__;
+let enabledLoaded = false;
+
+function nativeDiagModule() {
+  try {
+    const m = NativeModules.CoCookieModule;
+    if (m && typeof m.isDiagnosticsEnabled === 'function') return m;
+  } catch {}
+  return null;
+}
+
+/** 从原生侧刷新开关缓存（启动时调用一次）。 */
+export async function refreshRemoteLogEnabled() {
+  try {
+    const m = nativeDiagModule();
+    if (m) {
+      const v = await m.isDiagnosticsEnabled();
+      remoteEnabled = !!v || (typeof __DEV__ !== 'undefined' && __DEV__);
+      enabledLoaded = true;
+    }
+  } catch {}
+  return remoteEnabled;
+}
+
+/** 开关切换（关于页 7 连点调用）：写原生持久化 + 更新 JS 缓存。 */
+export async function setRemoteLogEnabled(enabled) {
+  const v = !!enabled;
+  try {
+    const m = nativeDiagModule();
+    if (m && typeof m.setDiagnosticsEnabled === 'function') {
+      m.setDiagnosticsEnabled(v);
+    }
+  } catch {}
+  remoteEnabled = v || (typeof __DEV__ !== 'undefined' && __DEV__);
+  enabledLoaded = true;
+  return remoteEnabled;
+}
+
+/** 当前 JS 侧缓存的开关状态（同步）。 */
+export function isRemoteLogEnabled() {
+  return remoteEnabled;
+}
+
+// 模块加载即拉一次原生开关（不等待结果，不阻塞启动）
+refreshRemoteLogEnabled();
 
 export function remoteLogStats() {
   return { queued: queue.length, sent, dropped };
@@ -107,9 +157,10 @@ async function drain() {
   }
 }
 
-/** 记一条诊断事件。同步返回，绝不抛异常。 */
+/** 记一条诊断事件。同步返回，绝不抛异常。正式包下开关关闭时直接丢弃。 */
 export function rlog(event, fields = {}) {
   try {
+    if (!remoteEnabled) return;
     if (queue.length >= QUEUE_LIMIT) {
       queue.shift();
       dropped += 1;

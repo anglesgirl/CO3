@@ -55,6 +55,21 @@ object DomesticDoh {
     private data class EchCache(val config: ByteArray, val expireAt: Long)
     @Volatile private var cache: EchCache? = null
 
+    /**
+     * 上次胜出的 DoH 端点。2026-10-14 优化：每小时例行刷新不需要 4 路全开竞速，
+     * 优先单发上次胜者，命中则省掉 3/4 的请求；失效时回退全量竞速并更新胜者。
+     */
+    @Volatile private var preferredEndpoint: String? = null
+
+    /**
+     * refetch 并发合并。2026-10-14 优化：握手失败风暴时 N 个请求会同时调 refetch，
+     * 原来各打各的 4 路竞速（N×4）。现在串行化：第一个打网络，其余排队进来直接
+     * 读刚刷好的缓存；30 秒内重复调用（含上次失败）不再打网络。
+     */
+    private val refetchLock = Any()
+    @Volatile private var lastRefetchAt = 0L
+    private const val REFETCH_COOLDOWN_MS = 30_000L
+
     private val client: OkHttpClient by lazy {
         val trustAll = arrayOf<TrustManager>(object : X509TrustManager {
             override fun checkClientTrusted(c: Array<X509Certificate>, a: String) {}
@@ -99,21 +114,42 @@ object DomesticDoh {
         return null
     }
 
-    /** 强制刷新（比如握手失败怀疑密钥轮换时） */
+    /** 强制刷新（比如握手失败怀疑密钥轮换时）。并发/高频调用会被合并，见 refetchLock 说明。 */
     fun refetch(): ByteArray? {
-        cache = null
-        return echConfigList()
+        synchronized(refetchLock) {
+            val now = System.currentTimeMillis()
+            // 排队进来时可能已经有人刷好了：缓存新鲜则直接用，不打网络
+            cache?.let { if (it.expireAt > now && now - lastRefetchAt < REFETCH_COOLDOWN_MS) return it.config }
+            // 30 秒内刚尝试过（含失败）：不再打网络，防握手失败风暴
+            if (now - lastRefetchAt < REFETCH_COOLDOWN_MS) {
+                val c = cache
+                return if (c != null && c.expireAt > now) c.config else null
+            }
+            cache = null
+            val cfg = echConfigList()
+            lastRefetchAt = System.currentTimeMillis()
+            return cfg
+        }
     }
 
     private fun fetchEch(host: String): ByteArray? {
-        // 并行查所有 DoH 端点，取最快成功的（冷启动速度关键）
+        // 例行刷新优先单发上次胜出的端点（冷启动首次无胜者，直接走下面的竞速）
+        preferredEndpoint?.let { ep ->
+            try {
+                dnsWire(ep, host, 65)?.let { return it }
+            } catch (e: Exception) {
+                Log.d(TAG, "DoH 胜者端点 $ep 失效，回退竞速")
+            }
+            preferredEndpoint = null
+        }
+        // 回退：并行查所有 DoH 端点，取最快成功的，并记住胜者供下次优先
         // 2026-10-14：串行查 4 个端点太慢，冷启动要等
         val executor = java.util.concurrent.Executors.newFixedThreadPool(DOH_ENDPOINTS.size)
         try {
             val futures = DOH_ENDPOINTS.map { ep ->
-                executor.submit<ByteArray?> {
+                executor.submit<Pair<String, ByteArray?>?> {
                     try {
-                        dnsWire(ep, host, 65)
+                        Pair(ep, dnsWire(ep, host, 65))
                     } catch (e: Exception) {
                         Log.d(TAG, "DoH $ep 查 $host 失败: ${e.message}")
                         null
@@ -122,7 +158,11 @@ object DomesticDoh {
             }
             for (f in futures) {
                 try {
-                    f.get(5, java.util.concurrent.TimeUnit.SECONDS)?.let { return it }
+                    val r = f.get(5, java.util.concurrent.TimeUnit.SECONDS)
+                    if (r?.second != null) {
+                        preferredEndpoint = r.first
+                        return r.second
+                    }
                 } catch (_: Exception) { }
             }
         } finally {
