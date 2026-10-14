@@ -106,12 +106,27 @@ object DomesticDoh {
     }
 
     private fun fetchEch(host: String): ByteArray? {
-        for (ep in DOH_ENDPOINTS) {
-            try {
-                dnsWire(ep, host, 65)?.let { return it }
-            } catch (e: Exception) {
-                Log.d(TAG, "DoH $ep 查 $host 失败: ${e.message}")
+        // 并行查所有 DoH 端点，取最快成功的（冷启动速度关键）
+        // 2026-10-14：串行查 4 个端点太慢，冷启动要等
+        val executor = java.util.concurrent.Executors.newFixedThreadPool(DOH_ENDPOINTS.size)
+        try {
+            val futures = DOH_ENDPOINTS.map { ep ->
+                executor.submit<ByteArray?> {
+                    try {
+                        dnsWire(ep, host, 65)
+                    } catch (e: Exception) {
+                        Log.d(TAG, "DoH $ep 查 $host 失败: ${e.message}")
+                        null
+                    }
+                }
             }
+            for (f in futures) {
+                try {
+                    f.get(5, java.util.concurrent.TimeUnit.SECONDS)?.let { return it }
+                } catch (_: Exception) { }
+            }
+        } finally {
+            executor.shutdownNow()
         }
         return null
     }

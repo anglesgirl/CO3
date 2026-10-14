@@ -154,14 +154,13 @@ object EchDoh {
                 }
             }
         }
-        // 兜底：旧 DoH 路径
-        val rec = record(host) ?: return emptyList()
-        var ips = (rec.v4 + rec.v6).distinct()
-        if (ips.isEmpty()) {
-            // HTTPS 记录没有地址提示：退化为查 A 记录
-            ips = fetchAddresses(host)
+        // IP 池空：直接用 bootstrap IP（172.64.229 段随机），不走 DoH 查 IP
+        // 2026-10-14：冷启动慢的主因——空池时回退 DoH 查 IP 又慢又没必要
+        runCatching { InetAddress.getByName(randomBootstrapIp()) }.getOrNull()?.let {
+            Log.i(TAG, "IP 池空，用 bootstrap IP 用于 $host")
+            return listOf(it)
         }
-        return ips.mapNotNull { runCatching { InetAddress.getByName(it) }.getOrNull() }
+        return emptyList()
     }
 
     /**
